@@ -1,0 +1,67 @@
+{
+ "RAW": {
+  "estimator": "raw"
+ },
+ "ZNE-R": {
+  "estimator": "zne",
+  "scales": [
+   1.0,
+   3.0,
+   5.0
+  ],
+  "folding": "global",
+  "rule": "richardson"
+ },
+ "ZNE-L": {
+  "estimator": "zne",
+  "scales": [
+   1.0,
+   3.0
+  ],
+  "folding": "global",
+  "rule": "linear"
+ },
+ "PEC": {
+  "estimator": "pec",
+  "construction": "inverse",
+  "model": "depolarizing",
+  "scope": "all",
+  "shots_per_circuit": 1
+ },
+ "CDR": {
+  "estimator": "learning",
+  "features": "cdr",
+  "model": "ols",
+  "alpha": 0.0,
+  "n_train": 16,
+  "train_shots": 1024,
+  "strategy": "adaptive",
+  "min_spread": 0.05,
+  "keep": 0
+ },
+ "FR-R": {
+  "estimator": "learning",
+  "features": "fr",
+  "model": "ridge",
+  "alpha": 0.001,
+  "n_train": 16,
+  "train_shots": 1024,
+  "strategy": "adaptive",
+  "min_spread": 0.05,
+  "keep": 0
+ },
+ "NIL-G2": {
+  "estimator": "nil",
+  "neighbors": "pauli",
+  "positions": "2q",
+  "n_neighbors": 8,
+  "include_bare": true,
+  "model": "l1",
+  "l1_bound": 2.0,
+  "intercept": false,
+  "n_train": 16,
+  "ensemble": "design4",
+  "target_split": "optimal",
+  "train_shots": 1024
+ }
+}

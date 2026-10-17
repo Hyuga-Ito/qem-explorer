@@ -1,0 +1,64 @@
+.qx-root { font-family: "IBM Plex Sans", "Source Sans Pro", system-ui, sans-serif; color: var(--st-text-color, #0B1A22);
+  outline: none; user-select: none; -webkit-user-select: none; touch-action: none; }
+.qx-palette { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-start; margin-bottom: 8px; }
+.qx-group { display: flex; flex-direction: column; gap: 4px; }
+.qx-group-title { font-size: 12px; opacity: 0.7; letter-spacing: 0.02em; }
+.qx-tiles { display: flex; flex-wrap: wrap; gap: 5px; max-width: 560px; }
+.qx-tile { min-width: 30px; height: 30px; padding: 0 7px; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; font-weight: 600; font-size: 13px; cursor: grab; box-shadow: 0 1px 2px rgba(0,0,0,0.18); }
+.qx-tile:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.22); }
+.qx-tile.qx-noise { border: 1.5px dashed #B7791F; }
+.qx-tools { display: flex; flex-wrap: wrap; gap: 5px; align-self: flex-end; margin-left: auto; }
+.qx-btn { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid rgba(128,128,128,0.45); background: var(--st-secondary-background-color, #F3F6F8);
+  color: inherit; }
+.qx-btn:disabled { opacity: 0.45; cursor: default; }
+.qx-btn:hover:not(:disabled) { border-color: var(--st-primary-color, #156082); }
+.qx-danger:hover { border-color: #B91C1C !important; color: #B91C1C; }
+.qx-canvas { overflow-x: auto; overflow-y: hidden; border: 1px solid rgba(128,128,128,0.35); border-radius: 8px;
+  background: var(--st-background-color, #fff); }
+.qx-svg { display: block; }
+.qx-wire { stroke: #A2A9B0; stroke-width: 1.4; }
+.qx-gridline { stroke: rgba(128,128,128,0.10); stroke-width: 1; }
+.qx-qlabel { font-size: 13px; fill: var(--st-text-color, #0B1A22); font-style: italic; }
+.qx-input { font-size: 12px; fill: #6F6F6F; }
+.qx-meas { fill: #A2A9B0; stroke: #697077; }
+.qx-meas-t { font-size: 13px; text-anchor: middle; fill: #161616; font-weight: 600; }
+.qx-gate { stroke: rgba(0,0,0,0.15); stroke-width: 1; }
+.qx-noisebox { stroke: #B7791F; stroke-dasharray: 4 3; stroke-width: 1.5; }
+.qx-glabel { font-size: 14px; font-weight: 600; text-anchor: middle; pointer-events: none; }
+.qx-gpar { font-size: 9.5px; text-anchor: middle; pointer-events: none; }
+.qx-link { stroke: #002D9C; stroke-width: 2.4; }
+.qx-ctrl { fill: #002D9C; }
+.qx-targ { fill: #002D9C; }
+.qx-targ-l { stroke: #ffffff; stroke-width: 2.2; }
+.qx-op .qx-targ-l { stroke: #ffffff; }
+.qx-hit { fill: transparent; cursor: grab; }
+.qx-op { cursor: grab; }
+.qx-op:hover .qx-gate, .qx-op:hover .qx-targ { filter: brightness(1.12); }
+.qx-sel .qx-gate, .qx-sel .qx-targ, .qx-sel .qx-ctrl { stroke: #F1C21B; stroke-width: 3.5; }
+.qx-sel .qx-link { stroke: #F1C21B; }
+.qx-handle { fill: #6929C4; stroke: #fff; stroke-width: 1.5; cursor: ns-resize; }
+.qx-barrier { fill: rgba(162,169,176,0.45); cursor: grab; }
+.qx-drop { fill: rgba(21,96,130,0.14); stroke: #156082; stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+.qx-tag-fold-inv .qx-gate { stroke: #6929C4; stroke-width: 2; }
+.qx-foot { display: flex; gap: 14px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.qx-trash { padding: 6px 12px; border: 1.5px dashed rgba(185,28,28,0.55); border-radius: 8px; font-size: 13px;
+  color: #B91C1C; }
+.qx-trash-on { background: rgba(185,28,28,0.12); border-style: solid; }
+.qx-hint { font-size: 12px; opacity: 0.7; flex: 1; min-width: 240px; }
+.qx-inspector { margin-top: 8px; padding: 8px 10px; border-radius: 8px; display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap; background: var(--st-secondary-background-color, #F3F6F8); font-size: 14px; min-height: 38px; }
+.qx-muted { opacity: 0.7; font-size: 13px; }
+.qx-param { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; width: 140px;
+  border: 1px solid rgba(128,128,128,0.5); background: var(--st-background-color, #fff); color: inherit; }
+.qx-msg { margin-top: 6px; font-size: 13px; color: #B91C1C; }
+.qx-dark .qx-meas-t { fill: #161616; }
+.qx-swap { stroke: #002D9C; stroke-width: 2.6; }
+.qx-sel .qx-swap { stroke: #F1C21B; }
+
+.qx-io { fill: #F2F4F8; stroke: #8D8D8D; stroke-dasharray: 3 2; }
+.qx-io-t { font-size: 12px; text-anchor: middle; fill: #393939; font-weight: 600; pointer-events: none; }
+.qx-io-small { font-size: 9px; }
+.qx-dark .qx-io { fill: #262626; stroke: #8D8D8D; }
+.qx-dark .qx-io-t { fill: #E0E0E0; }

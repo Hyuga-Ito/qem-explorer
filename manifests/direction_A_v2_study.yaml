@@ -1,0 +1,68 @@
+# QEM Explorer 1.5 · Main study · SCALABLE simulation study (configure freely; it never touches hardware)
+# The same methods and analysis as direction_A_v2_pilot.yaml over a larger, space-filling design: every (family, n)
+# stratum keeps `per_stratum` cells chosen by a greedy maximin design over its parameters, log noise scale and
+# coherent fraction (qemx.phase.manifest._maximin), instead of the full Cartesian grid. Widen n, add families or
+# raise per_stratum as the compute allows; the confirmatory subset is fixed by its seed before anything runs.
+#   python -m qemx.phase.run plan manifests/direction_A_v2_study.yaml
+#   python -m qemx.phase.run run  manifests/direction_A_v2_study.yaml --out data/dirA_v2 --workers 8
+#   python -m qemx.phase.run collect data/dirA_v2
+#   python -m qemx.study report data/dirA_v2 --manifest manifests/direction_A_v2_study.yaml --out reports/v2
+manifest_version: 1
+study: direction-A-v2-study
+description: >
+  Space-filling equal-budget study of raw, ZNE (two rules), PEC, CDR, FR, NIL and VD over six circuit families,
+  3–8 qubits, noise scales 0.25–4 and coherent fractions 0–0.5 (engine E1), with a 25 % confirmatory subset.
+
+defaults:
+  device: fake_fez
+  opt_level: 1
+  seed_transpiler: 11
+  readout_mit: tensored
+  s_min: 32
+  s_tr_min: 32
+  train_levels: [64, 256, 1024, 4096, 16384]
+  train_reps: 2000
+  train_reps_other: 500
+
+budgets:
+  grid: {log10_min: 3, log10_max: 8, points: 51}
+  epsilons: [0.005, 0.01, 0.02, 0.05]
+
+methods:
+  RAW:    {estimator: raw}
+  ZNE-R:  {estimator: zne, scales: [1.0, 3.0, 5.0], folding: global, rule: richardson}
+  ZNE-L:  {estimator: zne, scales: [1.0, 3.0], folding: global, rule: linear}
+  PEC:    {estimator: pec, construction: inverse, model: depolarizing, scope: all, shots_per_circuit: 1}
+  CDR:    {estimator: learning, features: cdr, model: ols, alpha: 0.0, n_train: 16, train_shots: 1024,
+           strategy: adaptive, min_spread: 0.05, keep: 0}
+  FR-R:   {estimator: learning, features: fr, model: ridge, alpha: 1.0e-3, n_train: 16, train_shots: 1024,
+           strategy: adaptive, min_spread: 0.05, keep: 0}
+  FR-L:   {estimator: learning, features: fr, model: lasso, alpha: 1.0e-4, n_train: 16, train_shots: 1024,
+           strategy: adaptive, min_spread: 0.05, keep: 0}
+  NIL-G2: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+           l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal, train_shots: 1024}
+  VD:     {estimator: vd, M: 2}
+
+method_sets:
+  core: [RAW, ZNE-R, ZNE-L, PEC, CDR, FR-R, FR-L, NIL-G2, VD]
+
+circuits:
+  study:
+    - {family: qft, n: [3, 4, 5, 6, 8], m: [null, 2], s: 1}
+    - {family: ghz, n: [3, 4, 5, 6, 8], theta: [0.5235987755982988, 1.0471975511965976, 1.3089969389957472], basis: X}
+    - {family: ising, n: [3, 4, 5, 6, 8], steps: [1, 2, 4, 6], T: 1.0, J: 1.0, h: [0.5, 1.0, 2.0]}
+    - {family: brickwork, n: [4, 5, 6, 8], layers: [2, 4, 8, 12], seed: [0, 1, 2]}
+    - {family: grover, n: [3, 4], k: [1, 2]}
+    - {family: bv, n: [3, 4, 5, 6]}
+
+stages:
+  - name: V2-main
+    engine: E1
+    circuits: study
+    methods: core
+    scales: [0.25, 0.5, 1.0, 2.0, 4.0]
+    readout: "on"
+    coherent_fraction: [0.0, 0.25, 0.5]
+    design: {kind: maximin, per_stratum: 12, seed: 7}
+    confirmatory: {fraction: 0.25, seed: 2026}
+    validate: {fraction: 0.1, budgets: [1.0e+4, 1.0e+6], reps: 1000, policies: [fixed]}

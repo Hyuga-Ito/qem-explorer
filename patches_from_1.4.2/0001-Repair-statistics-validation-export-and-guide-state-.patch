@@ -1,0 +1,2506 @@
+From 38107caffa40011d4700e7559a4aeee20613349f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 17 Oct 2026 13:16:12 +0000
+Subject: [PATCH 1/4] Repair statistics, validation, export and guide-state
+ defects of the 1.4.2 QA report
+
+- statistical result contract (qemx/stats.py): protocol moments for learning methods, exact fit kept as reference
+- readout inverse norm, singular/negative-determinant calibrations, PEC and NIL input validation
+- FR id migration (features='nil' -> 'fr'), record schema /3 with mixed-schema guard
+- budget preflight (insufficient_budget) and a budget-scaled NIL teaching preset
+- bounded, subprocess-based image export; data never waits on rendering
+- atomic guide setups with replace/merge; saved custom recipes never deleted
+- tests/test_qa_v15.py
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MXEKrsCo9uyAPKEqvGJ4mi
+---
+ pages/1_Playground.py                |  19 +-
+ pages/2_Cost_vs_Precision.py         |   3 +-
+ pages/3_Bias_Variance.py             |   3 +-
+ pages/4_Model_Mismatch.py            |   5 +-
+ pages/5_Head_to_Head.py              |   3 +-
+ pages/8_Batch_Run.py                 |   5 +-
+ pages/9_Learn.py                     |  14 +-
+ qemx/analysis.py                     |   5 +-
+ qemx/batch.py                        |   3 +-
+ qemx/bundle.py                       | 114 ++++++---
+ qemx/hamiltonian.py                  |  16 ++
+ qemx/hardware.py                     |   8 +-
+ qemx/methods/base.py                 | 103 ++++++++-
+ qemx/methods/compose.py              |  49 +++-
+ qemx/methods/learning.py             |  38 ++-
+ qemx/methods/nil.py                  |  53 ++++-
+ qemx/methods/pec.py                  |  39 +++-
+ qemx/phase/cell.py                   |  15 +-
+ qemx/phase/manifest.py               |  26 +++
+ qemx/phase/run.py                    |  14 +-
+ qemx/phase/store.py                  |   9 +-
+ qemx/recipes.py                      | 101 ++++++--
+ qemx/render_worker.py                | 104 +++++++++
+ qemx/stats.py                        | 195 ++++++++++++++++
+ scripts/validate_learning_moments.py | 122 ++++++++++
+ tests/test_compose.py                |   3 +-
+ tests/test_nil.py                    |  26 ++-
+ tests/test_qa_v15.py                 | 330 +++++++++++++++++++++++++++
+ ui/cache.py                          |   2 +-
+ ui/metrics.py                        |  23 +-
+ ui/results.py                        |  21 +-
+ ui/sidebar.py                        |   5 +
+ ui/state.py                          | 126 ++++++++--
+ ui/widgets.py                        |   5 +-
+ 34 files changed, 1464 insertions(+), 143 deletions(-)
+ create mode 100644 qemx/render_worker.py
+ create mode 100644 qemx/stats.py
+ create mode 100644 scripts/validate_learning_moments.py
+ create mode 100644 tests/test_qa_v15.py
+
+diff --git a/pages/1_Playground.py b/pages/1_Playground.py
+index 88d1d57..96a9423 100644
+--- a/pages/1_Playground.py
++++ b/pages/1_Playground.py
+@@ -1164,14 +1164,27 @@ with tabs[4]:
+         with st.expander("Build a custom contender", icon=":material/tune:", key="rc_builder"):
+             W.recipe_builder(ss.noise, int(ss.n), ss.symmetry)
+         if ss.custom_recipes:
+-            st.markdown("**Custom contenders**")
++            st.markdown("**Saved custom recipes**")
++            st.caption("Ticked recipes are contenders in the next run. A guide that sets up the Playground replaces "
++                       "the contenders (or adds to them, if chosen on the Learn page) but never deletes a saved recipe.")
+ 
+             def rm(i):
++                key = Recipe.from_json(ss.custom_recipes[i]).key()
+                 ss.custom_recipes = [x for j, x in enumerate(ss.custom_recipes) if j != i]
++                ss.custom_active = [k for k in S.custom_active_keys() if k != key]
++
++            def toggle(key, wkey):
++                act = [k for k in S.custom_active_keys() if k != key]
++                ss.custom_active = act + ([key] if ss.get(wkey) else [])
++            active = set(S.custom_active_keys())
+             for i, d in enumerate(list(ss.custom_recipes)):
++                r_ = Recipe.from_json(d)
+                 cc = st.columns([6, 1], vertical_alignment="center")
+-                cc[0].markdown(":material/tune:&nbsp; " + Recipe.from_json(d).title())
+-                cc[1].button("Remove", key="rc_rm_%d" % i, icon=":material/close:", on_click=rm, args=(i,))
++                wk = "rc_on_%d" % i
++                ss[wk] = r_.key() in active                    # mirrors the model (set before the widget renders)
++                cc[0].checkbox(r_.title(), key=wk, on_change=toggle, args=(r_.key(), wk))
++                cc[1].button("Remove", key="rc_rm_%d" % i, icon=":material/close:", on_click=rm, args=(i,),
++                             help="Delete this saved recipe.")
+         res = ss.results
+         if res is None:
+             st.info("No results yet: press **Run simulation** in the sidebar.", icon=":material/play_arrow:")
+diff --git a/pages/2_Cost_vs_Precision.py b/pages/2_Cost_vs_Precision.py
+index 23a4097..14f0bea 100644
+--- a/pages/2_Cost_vs_Precision.py
++++ b/pages/2_Cost_vs_Precision.py
+@@ -197,6 +197,7 @@ with tabs[2]:
+ _res = ss.get("results")
+ _ds = ss.get("ds_result")
+ _state = S.to_json()
++_IMG = bool(ss.get("w_zip_images", True))          # captured now: the ZIP is built in a download thread
+ _params = dict(eps=float(ss.w_cvp_eps), budget=float(ss.w_cvp_budget), nmin=int(ss.w_cvp_nmin), nmax=int(ss.w_cvp_nmax),
+                nq=int(ss.w_wall_n), p1=float(ss.w_wall_p1), p2s=str(ss.w_wall_p2s), eps_w=float(ss.w_wall_eps),
+                L=int(ss.w_wall_L), con=ss.w_wall_con, bud=float(ss.w_wall_budget), N=int(ss.w_ds_N), t=float(ss.t_shot_us))
+@@ -216,7 +217,7 @@ def zip_bytes():
+     if _ds:
+         figs_all["depth_sweep"] = AC.depth_chart(_ds["rows"], pr["N"])
+         tabs_all["depth_sweep"] = pd.DataFrame(_ds["rows"])
+-    return make_zip("Cost vs precision", tables=tabs_all, figures=figs_all, state=_state,
++    return make_zip("Cost vs precision", tables=tabs_all, figures=figs_all, state=_state, images=_IMG,
+                     notes="Time per shot %.1f µs; target ε = %g; QPU budget %g s." % (pr["t"], pr["eps"], pr["budget"]))
+ 
+ 
+diff --git a/pages/3_Bias_Variance.py b/pages/3_Bias_Variance.py
+index dc03c9e..55be180 100644
+--- a/pages/3_Bias_Variance.py
++++ b/pages/3_Bias_Variance.py
+@@ -122,10 +122,11 @@ else:
+         dart_table = pd.concat([pd.DataFrame({"method": x["method"], "error_A": x["x"], "error_B": x["y"]}) for x in d],
+                                ignore_index=True) if d else pd.DataFrame()
+         state = S.to_json()
++        _img = bool(ss.get("w_zip_images", True))
+ 
+         def zip_bytes():
+             return make_zip("Bias–variance bullseye", tables={"bias_variance": df}, data={"darts": dart_table},
+-                            figures={k: v for k, v in figs.items()}, state=state,
++                            figures={k: v for k, v in figs.items()}, state=state, images=_img,
+                             notes="N = %d shots per experiment, %d experiments per method; x = %s, y = %s." % (
+                                 N, B, res["labels"][0], res["labels"][1]))
+         st.download_button("Download all (ZIP): darts, table, figures (PNG/SVG)", zip_bytes,
+diff --git a/pages/4_Model_Mismatch.py b/pages/4_Model_Mismatch.py
+index aa539c9..107bf74 100644
+--- a/pages/4_Model_Mismatch.py
++++ b/pages/4_Model_Mismatch.py
+@@ -245,9 +245,12 @@ def _collect(cap):
+ _has_any = bool(figs or _cap["mm"] or _cap["mm_map"] or _cap["mm_un"] or _cap.get("drift"))
+ 
+ 
++_IMG = bool(ss.get("w_zip_images", True))          # captured now: the ZIP is built in a download thread
++
++
+ def zip_bytes():
+     fg, tb = _collect(_cap)
+-    return make_zip("Model mismatch", tables=tb, figures=fg, state=_cap["state"])
++    return make_zip("Model mismatch", tables=tb, figures=fg, state=_cap["state"], images=_IMG)
+ 
+ 
+ st.divider()
+diff --git a/pages/5_Head_to_Head.py b/pages/5_Head_to_Head.py
+index 02f808a..d5975a9 100644
+--- a/pages/5_Head_to_Head.py
++++ b/pages/5_Head_to_Head.py
+@@ -138,9 +138,10 @@ else:
+                      column_config=MX.column_config(tables["sweep"].columns))
+     state = S.to_json()
+     ff, tt = dict(figs), dict(tables)
++    _img = bool(ss.get("w_zip_images", True))
+ 
+     def zip_bytes():
+-        return make_zip("Head-to-head sweep", tables=tt, figures=ff, state=state,
++        return make_zip("Head-to-head sweep", tables=tt, figures=ff, state=state, images=_img,
+                         notes="Sweep of %s; RMSE at N = %d shots in the line chart." % (xlabel, N))
+     st.divider()
+     st.download_button("Download all (ZIP): data and figures (PNG/SVG)", zip_bytes,
+diff --git a/pages/8_Batch_Run.py b/pages/8_Batch_Run.py
+index 8afe398..d6935ab 100644
+--- a/pages/8_Batch_Run.py
++++ b/pages/8_Batch_Run.py
+@@ -262,8 +262,11 @@ note = ("Batch run: algorithms %s; methods %s; noise models %s; scales %s; simul
+             len({B.scenario_key(r) for r in rows}), len(rows), len(failed), res["seconds"]))
+ 
+ 
++_IMG = bool(ss.get("w_zip_images", True))          # captured now: the ZIP is built in a download thread
++
++
+ def zip_bytes():
+-    return make_zip("Batch run", tables=tt, figures=ff, state=state, notes=note)
++    return make_zip("Batch run", tables=tt, figures=ff, state=state, notes=note, images=_IMG)
+ 
+ 
+ st.divider()
+diff --git a/pages/9_Learn.py b/pages/9_Learn.py
+index 4607187..e60bef5 100644
+--- a/pages/9_Learn.py
++++ b/pages/9_Learn.py
+@@ -40,10 +40,14 @@ def chapter_sections(key: str) -> tuple:
+ def setup_button(label: str, setup: dict, key: str, primary: bool = True):
+     where = L.setup_label(setup)[len("Set up "):]                  # "in the Playground", "in Cost vs precision", …
+     page = where.split(" ", 1)[1] if where.startswith(("in ", "on ")) else where
+-    st.button(label or L.setup_label(setup), key=key, on_click=S.apply_setup, args=(setup,),
++    mode = "merge" if ss.get("w_learn_merge") else "replace"
++    st.button(label or L.setup_label(setup), key=key, on_click=S.apply_setup, args=(setup, mode),
+               type="primary" if primary else "secondary", icon=":material/rocket_launch:",
+-              help="Loads the circuit, noise and contenders%s and opens %s. Your current circuit stays in the "
+-                   "Playground's undo history." % (" (the %s tab)" % setup["tab"] if "tab" in setup else "", page))
++              help="Loads the circuit, noise and contenders%s and opens %s. %s Your current circuit stays in the "
++                   "Playground's undo history, and your saved custom recipes stay saved." % (
++                       " (the %s tab)" % setup["tab"] if "tab" in setup else "", page,
++                       "The guide's contenders are added to the ones you have." if mode == "merge" else
++                       "The guide's contenders replace the active ones, so the guide starts from its own experiment."))
+ 
+ 
+ def chapter_view(k: str, setups: list, key_prefix: str, caption: str):
+@@ -73,6 +77,10 @@ st.markdown("Everything you need to read the rest of the app: the quantum-comput
+             "guides. Every guide, walkthrough and topic has a button that sets up the right page for you.")
+ if ss.get("learn_error"):
+     st.error(W.md_escape(ss.learn_error), icon=":material/error:")
++S.wdefault("w_learn_merge", False)
++st.toggle("Keep my current contenders when a guide sets up a page", key="w_learn_merge", persist_state=P,
++          help="Off (recommended): a guide's contenders replace the active ones, so every guide starts from the same "
++               "experiment. On: they are added to yours. Saved custom recipes are never deleted either way.")
+ 
+ TABS = ["Hands-on guides", "Fundamentals", "Algorithm walkthroughs", "Research topics"]
+ S.wdefault("w_learn_tabs", ss.page_tab.get("learn", TABS[0]))
+diff --git a/qemx/analysis.py b/qemx/analysis.py
+index ec8e702..f6a6663 100644
+--- a/qemx/analysis.py
++++ b/qemx/analysis.py
+@@ -125,7 +125,7 @@ def depth_sweep(make_compiled, depths, noise: NoiseSpec, observable_fn, recipes:
+     for j, d in enumerate(depths):
+         check()
+         compiled, obs = make_compiled(d), observable_fn(d)
+-        ideal, outs, _ = compare(compiled, noise, obs, recipes, backend, shots, symmetry)
++        ideal, outs, _ = compare(compiled, noise, obs, recipes, backend, shots, symmetry, check_budget=False)
+         for o in outs:
+             if o.result is None:
+                 continue
+@@ -284,7 +284,8 @@ def sweep(compiled: Compiled, noise: NoiseSpec, observable, recipes: list, key:
+     for j, v in enumerate(values):
+         check()
+         nz = apply_sweep(noise, key, v)
+-        ideal, outs, _ = compare(compiled, nz, observable, recipes, backend, shots, symmetry)
++        ideal, outs, _ = compare(compiled, nz, observable, recipes, backend, shots, symmetry,
++                                 check_budget=False)       # the winner map costs every budget from the cost model
+         for o in outs:
+             if o.result is None:
+                 out.append(dict(value=float(v), method=o.title, family=family(o.recipe), estimate=np.nan,
+diff --git a/qemx/batch.py b/qemx/batch.py
+index ca73c96..ea766a1 100644
+--- a/qemx/batch.py
++++ b/qemx/batch.py
+@@ -135,7 +135,8 @@ def run(scenarios, recipes, *, current: dict | None, opts: CP.CompileOptions, sh
+                 if overrides:
+                     noise = noise.replace(**overrides)
+                 ideal, outs, _ = compare(comp, noise, a["observable"], _recipes_for(recipes, a["symmetry"]),
+-                                         sc.backend, int(shots), a["symmetry"])
++                                         sc.backend, int(shots), a["symmetry"],
++                                         check_budget=False)       # rows are re-costed at any budget later
+             secs = time.time() - t0
+             for out in outs:
+                 row = dict(base, method=out.title, family=family(out.recipe), ideal=ideal,
+diff --git a/qemx/bundle.py b/qemx/bundle.py
+index 523dcbc..acf28ef 100644
+--- a/qemx/bundle.py
++++ b/qemx/bundle.py
+@@ -12,8 +12,10 @@ Layout of the archive::
+     state/qem_explorer_state.json   the app state (no credentials are ever part of it)
+     script/qem_explorer_export.py   the standalone Qiskit script, when available
+ 
+-Images are rendered in one Kaleido session; if Kaleido or a browser is missing the archive contains each figure's
+-Plotly JSON instead and the README says how to enable PNG/SVG. No HTML files are written.
++Images are rendered in a separate, time-limited process (one Kaleido browser for all figures once the first image
++proved a browser works). If Kaleido or a browser is missing, crashes or hangs, the archive still contains every table,
++the data, the state and each figure's Plotly JSON, plus every image finished before the failure, and the README says
++how to enable PNG/SVG. No HTML files are written.
+ """
+ from __future__ import annotations
+ 
+@@ -55,44 +57,83 @@ def _unique(name: str, used: set) -> str:
+     return name
+ 
+ 
+-_RENDER_LOCK = threading.Lock()          # one Kaleido server at a time (downloads run in their own threads)
++_RENDER_LOCK = threading.Lock()          # one renderer process at a time (downloads run in their own threads)
++RENDER_TIMEOUT_S = 90.0                  # wall-clock limit of one export's image rendering (QEMX_RENDER_TIMEOUT)
++RENDER_START_TIMEOUT_S = 30.0            # … of which the renderer may spend this long before its first image
+ 
+ 
+-def _server(start: bool) -> bool:
+-    """Start/stop Kaleido's persistent browser (Kaleido ≥ 1.0): one Chrome for all figures instead of one per image,
+-    about 4× faster. Returns whether a server is in use; older Kaleido simply renders figure by figure."""
+-    try:
+-        import kaleido
+-        fn = kaleido.start_sync_server if start else kaleido.stop_sync_server
+-        fn(silence_warnings=True)
+-        return True
+-    except Exception:                                    # noqa: BLE001 - no server API: per-image rendering
+-        return False
+-
+-
+-def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg")) -> tuple:
+-    """({(name, fmt): bytes}, error message or ''). One Kaleido browser session for all figures when possible."""
++def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg"), timeout: float | None = None) -> tuple:
++    """({(name, fmt): bytes}, error message or ''). Rendering runs in a child process (``qemx.render_worker``) with a
++    wall-clock limit: a missing or crashing Chrome, a dead renderer or a hang costs at most ``timeout`` seconds
++    (default RENDER_TIMEOUT_S, env QEMX_RENDER_TIMEOUT; at most RENDER_START_TIMEOUT_S before the first image), and
++    every image finished before that is kept. The numerical tables, configuration and figure JSON never depend on this
++    step: make_zip writes them regardless."""
+     out, err = {}, ""
+     if not figs:
+         return out, err
++    import shutil
++    import subprocess
++    import sys
++    import tempfile
++    import time
++    limit = float(os.environ.get("QEMX_RENDER_TIMEOUT", timeout if timeout is not None else RENDER_TIMEOUT_S))
++    start_limit = min(limit, RENDER_START_TIMEOUT_S)
++    names = list(figs)
++    stems = ["f%03d" % i for i in range(len(names))]
++    total = len(names) * len(formats)
++    jobdir = tempfile.mkdtemp(prefix="qemx-render-")
++    proc = None
+     with _RENDER_LOCK:
+-        server = _server(True)
+         try:
+-            import warnings
+-            import plotly.io as pio
+-            with warnings.catch_warnings():
+-                warnings.simplefilter("ignore")              # "kopts ignored when using a server"
+-                for fmt in formats:
+-                    for name, fig in figs.items():
+-                        w = int(fig.layout.width or 1400)
+-                        h = int(fig.layout.height or 600)
+-                        out[(name, fmt)] = pio.to_image(fig, format=fmt, width=w, height=h,
+-                                                        scale=scale if fmt == "png" else 1)
+-        except Exception as e:                           # Kaleido or Chrome missing: figures ship as JSON
+-            err = "%s: %s" % (type(e).__name__, str(e).splitlines()[0][:300] if str(e) else "")
++            with open(os.path.join(jobdir, "job.json"), "w", encoding="utf-8") as f:
++                json.dump(dict(items=[[st, figs[nm].to_json()] for st, nm in zip(stems, names)],
++                               formats=list(formats), scale=float(scale), server=True), f)
++            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++            env = dict(os.environ)
++            env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
++            with open(os.path.join(jobdir, "worker.log"), "wb") as log:
++                proc = subprocess.Popen([sys.executable, "-m", "qemx.render_worker", jobdir], cwd=jobdir, env=env,
++                                        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
++                t0 = time.monotonic()
++
++                def finished():
++                    return sum(os.path.exists(os.path.join(jobdir, "%s.%s" % (st, fm))) for st in stems
++                               for fm in formats)
++                while True:
++                    if proc.poll() is not None:
++                        break
++                    if finished() == total:                  # every image is written: shutdown is not our concern
++                        break
++                    el = time.monotonic() - t0
++                    if el > limit or (el > start_limit and finished() == 0):
++                        err = ("the image renderer did not finish within %.0f s (%d of %d images rendered)"
++                               % (el, finished(), total))
++                        break
++                    time.sleep(0.05)
++            for st, nm in zip(stems, names):
++                for fm in formats:
++                    path = os.path.join(jobdir, "%s.%s" % (st, fm))
++                    if os.path.exists(path):
++                        with open(path, "rb") as f:
++                            out[(nm, fm)] = f.read()
++            if not err and len(out) < total and not os.path.exists(os.path.join(jobdir, "done")):
++                why = ""
++                ep = os.path.join(jobdir, "error.txt")
++                if os.path.exists(ep):
++                    with open(ep, encoding="utf-8", errors="replace") as f:
++                        why = f.read().strip()
++                err = (why or "the image renderer stopped unexpectedly (exit code %s)" % proc.returncode) + (
++                    " (%d of %d images rendered)" % (len(out), total) if out else "")
++        except Exception as e:                           # noqa: BLE001 - the export continues without images
++            err = "%s: %s" % (type(e).__name__, str(e)[:300])
+         finally:
+-            if server:
+-                _server(False)
++            if proc is not None and proc.poll() is None:
++                proc.kill()
++                try:
++                    proc.wait(5)
++                except Exception:                        # noqa: BLE001
++                    pass
++            shutil.rmtree(jobdir, ignore_errors=True)
+     return out, err
+ 
+ 
+@@ -133,11 +174,13 @@ def make_zip(title: str, tables: dict | None = None, data: dict | None = None, f
+             for (nm, fmt), b in imgs.items():
+                 z.writestr("figures/%s.%s" % (nm, fmt), b)
+         for nm, (fig, name) in fig_names.items():
+-            if (nm, "png") in imgs or (nm, "svg") in imgs:
++            got = [fm for fm in ("png", "svg") if (nm, fm) in imgs]
++            if got == ["png", "svg"]:
+                 manifest.append("figures/%s.png (%.0f×) + .svg: %s" % (nm, scale, name))
+-            else:                                        # no renderer: keep the figure as its Plotly JSON
++            else:                                        # no (complete) rendering: the figure's Plotly JSON as well
+                 z.writestr("figures/%s.json" % nm, fig.to_json())
+-                manifest.append("figures/%s.json (Plotly figure): %s" % (nm, name))
++                manifest.append("figures/%s.json (Plotly figure)%s: %s" % (
++                    nm, "".join(" + .%s" % fm for fm in got), name))
+         if state is not None:
+             z.writestr("state/qem_explorer_state.json", json.dumps(state, indent=1, default=str))
+             manifest.append("state/qem_explorer_state.json: the app state (circuit, noise, recipes; no credentials)")
+@@ -151,6 +194,7 @@ def make_zip(title: str, tables: dict | None = None, data: dict | None = None, f
+         readme += ["Contents:"] + ["  " + m for m in manifest]
+         if img_err:
+             readme += ["", "PNG/SVG images were not rendered (%s)." % img_err,
++                       "Every table, the data, the state and each figure's Plotly JSON are complete regardless.",
+                        "Install Kaleido (pip install kaleido) and Google Chrome, or run `plotly_get_chrome`,",
+                        "then download again. Meanwhile each figure is saved as Plotly JSON:",
+                        "  import plotly.io as pio; pio.read_json('figures/<name>.json').show()"]
+diff --git a/qemx/hamiltonian.py b/qemx/hamiltonian.py
+index 0218969..646e1df 100644
+--- a/qemx/hamiltonian.py
++++ b/qemx/hamiltonian.py
+@@ -412,7 +412,23 @@ def combine(ps: PauliSum, parts: list, shots: int):
+     cal_grad = np.sum(grads, axis=0) if grads else None   # one calibration serves every setting: gradients add
+     cal_theta = next((r.cal_theta for _, _, r in parts if r.cal_theta is not None), None)
+     spc = [r.shots_per_circuit for _, _, r in parts if r.shots_per_circuit]
++    # the statistical contract: the combination is a protocol mean if any setting's is; reference fits add up
++    kinds = [getattr(r, "estimate_kind", "exact") for _, _, r in parts]
++    kind = "measured" if "measured" in kinds else ("protocol" if "protocol" in kinds else kinds[0])
++    refs = [r.reference_mean if r.reference_mean is not None else r.mean for _, _, r in parts]
++    has_ref = any(r.reference_mean is not None for _, _, r in parts)
++    moms = [r.moments for _, _, r in parts if r.moments]
++    mom = None
++    if moms:                                           # independent training sets: MC variances add
++        mom = dict(kind=moms[0].get("kind", "protocol"), settings=len(moms),
++                   mean_mcse=float(np.sqrt(sum(float(m.get("mean_mcse", 0.0)) ** 2 for m in moms))),
++                   repeats=int(min(int(m.get("repeats", 0)) for m in moms)),
++                   failed=int(sum(int(m.get("failed", 0)) for m in moms)),
++                   conditional=bool(any(m.get("conditional") for m in moms)))
++    flags = tuple(dict.fromkeys(f for _, _, r in parts for f in (r.flags or ())))
+     return MethodResult(
++        estimate_kind=kind, reference_mean=float(ps.constant + sum(refs)) if has_ref else None, moments=mom,
++        flags=flags,
+         mean=float(ps.constant + sum(means)), var1=var1, circuits=int(sum(r.circuits for _, _, r in parts)),
+         fixed_shots=int(sum(r.fixed_shots for _, _, r in parts)), gamma=float(max(r.gamma for _, _, r in parts)),
+         var_fixed=float(sum(r.var_fixed for _, _, r in parts)),     # independent training sets: variances add
+diff --git a/qemx/hardware.py b/qemx/hardware.py
+index ffdfdf5..33b6bd6 100644
+--- a/qemx/hardware.py
++++ b/qemx/hardware.py
+@@ -408,7 +408,7 @@ def make_plan(compiled: Compiled, observable, recipes: list, shots: int, symmetr
+                     R, parts = _record(runner, idx, rc, compiled, observable, plan, gp)
+             shots_by_key, info = _allocate(R, parts, B)
+             if shots_by_key is None:
+-                plan.skip(idx, "budget too small: needs more than %s shots" % f"{int(math.ceil(info['min_budget'])):,}")
++                plan.skip(idx, "insufficient_budget: needs at least %s shots" % f"{int(math.ceil(info['min_budget'])):,}")
+                 continue
+             for k, n_ in shots_by_key.items():
+                 req = runner.requests[k]
+@@ -520,7 +520,11 @@ def analyze(plan: Plan, freqs: dict, t_shot_us: float = 0.0, repeats: int = 120,
+             outs.append(Outcome(rc, None, getattr(plan, "skipped_idx", {}).get(idx, "not planned")))
+             continue
+         try:
+-            outs.append(Outcome(rc, _replay(plan, runner, idx, rc)))
++            R_ = _replay(plan, runner, idx, rc)
++            # the statistical contract: a replay of measured counts is one experiment's estimate, not an expectation
++            R_.estimate_kind = "measured"
++            R_.flags = tuple(dict.fromkeys(tuple(R_.flags or ()) + ("measured",)))
++            outs.append(Outcome(rc, R_))
+         except (MemoryError, KeyboardInterrupt, RunTimeout):
+             raise
+         except Exception as e:                           # noqa: BLE001 - the other recipes still report
+diff --git a/qemx/methods/base.py b/qemx/methods/base.py
+index 3db15e3..db9db8a 100644
+--- a/qemx/methods/base.py
++++ b/qemx/methods/base.py
+@@ -17,6 +17,7 @@ from __future__ import annotations
+ 
+ import dataclasses
+ import json
++import math
+ from dataclasses import dataclass, field
+ from typing import Callable
+ 
+@@ -74,6 +75,12 @@ class MethodResult:
+                                           # replaces the first-order w = Σ g²θ(1−θ) where the refit is nonlinear
+     joint_calibration: bool = False       # sampler(N, B, rng, theta=…) and train_resampler(…, theta=…) accept
+                                           # per-replicate calibration draws θ̂ and apply them to every circuit
++    # ---- the statistical contract (qemx/stats.py): what ``mean`` / ``var1`` / ``var_fixed`` refer to
++    estimate_kind: str = "exact"          # exact | protocol | measured (see qemx.stats.KINDS)
++    reference_mean: float | None = None   # learning: the exact-probability reference fit (an oracle quantity)
++    reference_var1: float | None = None   # its per-shot target variance
++    moments: dict | None = None           # protocol Monte-Carlo record (qemx.stats.Moments.as_dict)
++    flags: tuple = ()                     # approximation / oracle / validity flags (strings), shown with the result
+ 
+ 
+ class QEMMethod:
+@@ -90,12 +97,58 @@ class QEMMethod:
+     def run(self, ctx: "Context", **params) -> MethodResult:     # pragma: no cover
+         raise NotImplementedError
+ 
++    def min_cost(self, ctx: "Context", **params) -> dict | None:
++        """Budget preflight, *before* any simulation or fit: {"training": shots the protocol must spend on training
++        circuits, "target_circuits": distinct target circuits that each need ≥ 1 shot, "note": text}, or None when
++        the cost is not known in advance (then the method runs and its result's cost model decides). Must be cheap:
++        no simulation, no fitting."""
++        return None
++
+ 
+ def register(cls):
+     REGISTRY[cls.key] = cls()
+     return cls
+ 
+ 
++# ------------------------------------------------------------------ readout assignment matrices
++READOUT_SINGULAR_TOL = 1e-12     # |1 − e − h| at or below this: the assignment matrix is singular (not invertible)
++READOUT_COND_WARN = 100.0        # condition number above which first-order calibration propagation is unreliable
++
++
++def assignment_inverse_gamma(e, h) -> float:
++    """‖A⁻¹‖₁ for the one-bit assignment matrix A = [[1−e, h], [e, 1−h]] (e = P(1|0), h = P(0|1); columns are the
++    prepared states): (1 + |e − h|) / |1 − e − h|, ∞ when singular. Valid for every e, h in [0, 1], including
++    1 − e − h < 0 (an invertible matrix that mostly flips). ValueError for rates outside [0, 1] or non-finite."""
++    e, h = float(e), float(h)
++    if not (math.isfinite(e) and math.isfinite(h) and 0.0 <= e <= 1.0 and 0.0 <= h <= 1.0):
++        raise ValueError("readout flip probabilities must be finite and in [0, 1], got e = %r, h = %r" % (e, h))
++    det = abs(1.0 - e - h)
++    if det <= READOUT_SINGULAR_TOL:
++        return math.inf
++    return (1.0 + abs(e - h)) / det
++
++
++# ------------------------------------------------------------------ legacy names (explicit migration)
++# (estimator, parameter, legacy value) -> current value. Recipe.make applies these, so every entry point (presets,
++# saved states, manifests, exported scripts) resolves a legacy configuration to the same recipe; loaders call
++# migrate_params themselves to *report* what was migrated.
++PARAM_ALIASES = {
++    # 1.5.0: the learning estimator's feature-regression variant was selected by features="nil", which read as
++    # neighbor-informed learning (a different method: estimator "nil"). Its id is now "fr".
++    ("learning", "features", "nil"): "fr",
++}
++
++
++def migrate_params(estimator: str, params: dict) -> tuple:
++    """(params with legacy values replaced, [migration notes]). Never changes a current value."""
++    out, notes = dict(params or {}), []
++    for (est, name, old), new in PARAM_ALIASES.items():
++        if est == estimator and out.get(name) == old:
++            out[name] = new
++            notes.append("%s: %s=%r is the legacy name of %s=%r (migrated)" % (estimator, name, old, name, new))
++    return out, notes
++
++
+ # ------------------------------------------------------------------ recipes
+ TWIRL = {"none": "no twirling", "2q": "Pauli twirling (2q gates)", "all": "randomized compiling (all gates)"}
+ DD = {"none": "no DD", "X2": "DD: X2 (CPMG)", "XY4": "DD: XY4"}
+@@ -115,7 +168,7 @@ class Recipe:
+     def make(estimator: str, twirl="none", dd="none", readout="none", **params) -> "Recipe":
+         m = REGISTRY[estimator]
+         full = m.defaults()
+-        full.update(params)
++        full.update(migrate_params(estimator, params)[0])
+         return Recipe(estimator, tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in full.items())),
+                       twirl, dd, readout)
+ 
+@@ -251,6 +304,18 @@ class Context:
+                 pbar = [(dm.qubits[self.mm.get(i, i)].p01 + dm.qubits[self.mm.get(i, i)].p10) / 2 for i in range(n)]
+             else:
+                 pbar = [(self.noise.ro01 + self.noise.ro10) / 2] * n      # TREX: symmetrized flip probability
++            if self.recipe.readout in ("tensored", "m3", "trex"):
++                # a singular assignment matrix (P(1|0) + P(0|1) = 1, TREX: p̄ = ½) makes the outcome independent of
++                # the prepared state: no inverse exists. Say so instead of failing later in a linear solve.
++                if self.recipe.readout == "trex":
++                    bad = [i for i, pb in enumerate(pbar) if abs(1 - 2 * pb) <= READOUT_SINGULAR_TOL]
++                else:
++                    bad = [i for i, a in enumerate(A) if abs(1 - a[1, 0] - a[0, 1]) <= READOUT_SINGULAR_TOL]
++                if bad:
++                    raise ValueError(
++                        "readout mitigation is impossible: the assignment matrix of bit%s %s is singular "
++                        "(P(1|0) + P(0|1) = 1), so the measured outcome carries no information about the prepared "
++                        "state" % ("" if len(bad) == 1 else "s", ", ".join(map(str, bad))))
+             self._cal = dict(A=A, pbar=pbar, circuits=1 if self.recipe.readout == "trex" else 2)
+         return self._cal
+ 
+@@ -311,14 +376,37 @@ class Context:
+         return th
+ 
+     def theta_invertible(self, theta) -> bool:
+-        """Whether a calibration θ̂ can be inverted (a finite calibration can be this bad)."""
++        """Whether a calibration θ̂ is mathematically invertible: every per-bit assignment matrix has a nonzero
++        determinant 1 − e − h (TREX: 1 − 2p̄). A *negative* determinant (more flips than not) is invertible and is
++        accepted — the inverse then also undoes the systematic flip. Near-singular draws are invertible but badly
++        conditioned; see ``theta_condition``. (A finite calibration can be this bad; such draws are not clamped.)"""
+         t = np.asarray(theta, float)
++        if not np.all(np.isfinite(t)):
++            return False
+         if self.recipe.readout in ("tensored", "m3"):
+-            return bool(np.all(1 - t[0::2] - t[1::2] > 0))
++            return bool(np.all(np.abs(1 - t[0::2] - t[1::2]) > READOUT_SINGULAR_TOL))
+         if self.recipe.readout == "trex":
+-            return bool(np.all(t < 0.5))
++            return bool(np.all(np.abs(1 - 2 * t) > READOUT_SINGULAR_TOL))
+         return True
+ 
++    def theta_condition(self, theta=None) -> float:
++        """Largest per-bit 1-norm condition number of the assignment matrices of calibration θ (default: this
++        context's): 1 for perfect readout, ∞ when singular. Above READOUT_COND_WARN first-order (delta-method)
++        propagation of the calibration error is unreliable."""
++        t = np.asarray(self.cal_theta() if theta is None else theta, float)
++        mode = self.recipe.readout
++        if mode in ("tensored", "m3"):
++            pairs = zip(t[0::2], t[1::2])
++        elif mode == "trex":
++            pairs = ((x, x) for x in t)
++        else:
++            return 1.0
++        worst = 1.0
++        for e, h in pairs:
++            g = assignment_inverse_gamma(e, h)
++            worst = max(worst, g * max(1 - e + h, 1 - h + e))       # ‖A⁻¹‖₁ · ‖A‖₁
++        return float(worst)
++
+     def o_eff_theta(self, theta, o=None) -> np.ndarray:
+         """Per-shot values Mᵀ(θ)o with the mitigation built from a calibration θ (the linear map _mitigator(θ)
+         applies; M3 uses the tensored inverse, as in _mitigator), in O(n·2ⁿ). ``o`` may be a (2ⁿ, k) matrix of k
+@@ -365,17 +453,18 @@ class Context:
+         return g, th
+ 
+     def readout_gamma(self) -> float:
++        """Sampling overhead of the readout inversion: the product over bits of ‖A_i⁻¹‖₁ (the inverse's 1-norm, which
++        bounds how much it amplifies a ±1 per-shot value). ∞ for a singular assignment matrix."""
+         mode = self.recipe.readout
+         if mode in ("tensored", "m3"):
+             g = 1.0
+             for A in self.calibration()["A"]:
+-                e, h = A[1, 0], A[0, 1]
+-                g *= (1 + abs(e - h)) / max(1 - e - h, 1e-12)
++                g *= assignment_inverse_gamma(A[1, 0], A[0, 1])
+             return g
+         if mode == "trex":
+             g = 1.0
+             for pb in self.calibration()["pbar"]:
+-                g /= max(1 - 2 * pb, 1e-12)
++                g *= assignment_inverse_gamma(pb, pb)
+             return g
+         return 1.0
+ 
+diff --git a/qemx/methods/compose.py b/qemx/methods/compose.py
+index f4b95cb..651e69f 100644
+--- a/qemx/methods/compose.py
++++ b/qemx/methods/compose.py
+@@ -161,6 +161,25 @@ class Chain(QEMMethod):
+         i = REGISTRY[inner].short(ip) if hasattr(REGISTRY[inner], "short") else REGISTRY[inner].label
+         return "%s ∘ %s" % (o, i)
+ 
++    def min_cost(self, ctx, **p) -> dict | None:
++        """The outer learning step's training shots (T × k × s_tr on the inner method); ZNE outer: none."""
++        from ..transforms import non_clifford_slots
++        p = dict(self.defaults(), **p)
++        if p.get("outer") == "zne" or not non_clifford_slots(ctx.spec):
++            return dict(training=0, target_circuits=1, note="no training circuits")
++        if p["outer"] == "nil":
++            q = dict(REGISTRY["nil"].defaults(), **_strip(p, "nil_"))
++            try:
++                k = len(REGISTRY["nil"].neighbors(ctx, q["neighbors"], q["positions"], q["n_neighbors"],
++                                                  q["include_bare"], q["scales"], q.get("folding", "global")))
++            except Exception:                      # noqa: BLE001 - reported by run()
++                return None
++        else:
++            k = 1
++        T, s_tr = int(p["n_train"]), int(p["train_shots"])
++        return dict(training=T * k * s_tr, target_circuits=1,
++                    note="%d training circuits × %d feature circuits × %d shots" % (T, k, s_tr))
++
+     def hardware_supported(self, params) -> tuple:
+         return False, ("chained protocols run in simulation only in this version: the inner method's per-circuit "
+                        "processing (post-selection, PEC sampling, VD copies) and the outer combination are not planned "
+@@ -377,15 +396,25 @@ class Chain(QEMMethod):
+                     est[bi], v1[bi] = b + xt @ c, target_var(c)
+             return est, v1
+ 
++        from ..stats import ProtocolFailure, protocol_contract, training_moments
+         seed64 = int(ctx.seed) % (2 ** 63)
+-        est_u, _ = train_resampler(s_tr, MC_REPS, np.random.default_rng([seed64, 0x4E49, 1]))
+-        fin = np.isfinite(est_u)
+-        u_train = float(np.var(est_u[fin], ddof=1)) if fin.sum() > 1 else math.inf
+         notes = []
+-        if not fin.all():
+-            notes.append("%d of %d Monte-Carlo refits had a training value without an estimate (no accepted shot at "
+-                         "%d shots per training circuit): the protocol fails that often; the training variance is "
+-                         "over the others." % (int((~fin).sum()), MC_REPS, s_tr))
++        try:
++            # protocol moments at s_tr (qemx/stats.py); refits whose training data has no estimate (no accepted shot)
++            # count as failures and are reported, never silently dropped
++            mom = training_moments(train_resampler, s_tr, np.random.default_rng([seed64, 0x4E49, 1]))
++        except ProtocolFailure as e:
++            mom = None
++            notes.append("The finite-training protocol fails too often to report its moments (%s); the values shown "
++                         "are the reference fit to exact training data, with an infinite training variance." % e)
++        if mom is not None:
++            u_train = mom.u
++            contract = protocol_contract(ctx, mom, mean, var1, notes)
++            mean, var1 = contract.pop("mean"), contract.pop("var1")
++        else:
++            u_train = math.inf
++            contract = dict(estimate_kind="reference", reference_mean=float(mean), reference_var1=float(var1),
++                            moments=None, flags=("protocol-failed",))
+         # ---- readout calibration: through every inner value and the refit
+         cal = {}
+         if all(r.cal_fun is not None for row in R_tr for r in row) and all(r.cal_fun is not None for r in R_tg) \
+@@ -408,13 +437,17 @@ class Chain(QEMMethod):
+                          "weight equally." % (len(twins), "" if len(twins) == 1 else "s"))
+         notes.append("Training: %d circuits × %d feature circuit%s × %d shots on the inner method = %s shots; "
+                      "training-shot variance u = %.3g (%d Monte-Carlo refits)." % (
+-                         T, k, "" if k == 1 else "s", s_tr, f"{T * k * s_tr:,}", u_train, MC_REPS))
++                         T, k, "" if k == 1 else "s", s_tr, f"{T * k * s_tr:,}", u_train,
++                         mom.repeats if mom is not None else MC_REPS))
+         notes += _inner_notes([r for row in R_tr for r in row] + R_tg)
+         allr = [r for row in R_tr for r in row] + R_tg
+         a = np.abs(coef) * sig
+         alloc = (np.full(k, 1.0 / k) if target_split == "equal" else
+                  (a / a.sum() if a.sum() > 0 else np.where(coef != 0, 1.0, 0.0) / max(int(np.sum(coef != 0)), 1)))
++        if cal:
++            contract["flags"] = tuple(contract["flags"]) + ("calibration-mean-first-order",)
+         return MethodResult(
++            **contract,
+             mean=mean, var1=var1, circuits=circuits, fixed_shots=T * k * s_tr, train_circuits=T * k, **cal,
+             var_fixed=u_train, gamma=float(np.sum(np.abs(coef) * [r.gamma for r in R_tg])),
+             extra_qubits=max(int(r.extra_qubits or 0) for r in allr), accept=_accept_eff(R_tg),
+diff --git a/qemx/methods/learning.py b/qemx/methods/learning.py
+index 12ee0a3..d20074e 100644
+--- a/qemx/methods/learning.py
++++ b/qemx/methods/learning.py
+@@ -1,8 +1,8 @@
+ r"""Learning-based mitigation: Clifford data regression (CDR; Czarnik, Arrasmith, Coles & Cincio, Quantum 5, 592
+ (2021)) and a feature-regression extension of it (FR, this project's design, see below).
+ 
+-Naming and attribution. The parameter value ``features="nil"`` is kept for compatibility with stored manifests and
+-cell ids; the method it selects is *feature regression* (FR): CDR's regression with more features of the target's
++Naming and attribution. ``features="fr"`` selects *feature regression* (FR): CDR's regression with more features of
++the target's
+ own shots — ⟨O⟩, every ⟨Z_i⟩ and ⟨Z_iZ_j⟩ — fitted by OLS, Ridge or Lasso. FR is a heuristic of this project, not a
+ published protocol; the closest published work is ML-QEM (Liao et al., arXiv:2309.17368, Nat. Mach. Intell. 2024),
+ which feeds noisy expectation values of the target observables and circuit/noise descriptors into regression models.
+@@ -16,7 +16,9 @@ values are classically computable, while their noise stays that of the target. A
+ learns ideal ≈ b + c·features(noisy) and applies it to the target.
+ 
+ features  cdr   the noisy expectation value alone: ŷ = a x + b
+-          nil   (FR) ⟨O⟩, every ⟨Z_i⟩ and ⟨Z_iZ_j⟩ of the noisy distribution
++          fr    (FR) ⟨O⟩, every ⟨Z_i⟩ and ⟨Z_iZ_j⟩ of the noisy distribution. Until 1.4.2 this value was called
++                ``nil``, which read as neighbor-informed learning; manifests and states that say ``nil`` are migrated
++                explicitly (methods.base.PARAM_ALIASES) — the estimator itself is unchanged.
+ models    OLS, Ridge (L2 penalty α), Lasso (L1 penalty α; sparse), all for the objective
+           Σ_i (y_i − b − c·x_i)² + α Ω(c). The estimator is linear in the target's features, so its shot noise is
+           amplified by γ = ‖c‖₁ at most.
+@@ -51,6 +53,7 @@ import numpy as np
+ from .base import MethodResult, Param, QEMMethod, register
+ from .raw import cal_fields, display_circuit, readout_fun
+ from ..resources import check
++from ..stats import protocol_contract, training_moments
+ from ..transforms import clifford_replace, non_clifford_slots
+ 
+ 
+@@ -59,7 +62,7 @@ def feature_matrix(n: int, o: np.ndarray, kind: str) -> tuple:
+     x = np.arange(2 ** n)
+     z = 1.0 - 2.0 * ((x[:, None] >> np.arange(n)[None, :]) & 1)
+     cols, names = [o], ["⟨O⟩"]
+-    if kind == "nil":
++    if kind in ("fr", "nil"):                    # "nil": the legacy name of FR (methods.base.PARAM_ALIASES)
+         for i in range(n):
+             cols.append(z[:, i])
+             names.append("⟨Z%d⟩" % i)
+@@ -100,8 +103,9 @@ class Learning(QEMMethod):
+            r"It fails where the noise depends on the rotation angles the training circuits removed. "
+            r"The lasso ($\Omega=\|\mathbf c\|_1$) keeps few features, which keeps $\gamma=\|\mathbf c\|_1$ small.")
+     params = (
+-        Param("features", "features", "choice", "cdr", ("cdr", "nil"),
+-              help="cdr: the noisy ⟨O⟩ only; nil: feature regression (FR) — plus ⟨Zi⟩, ⟨ZiZj⟩ of the same shots. "
++        Param("features", "features", "choice", "cdr", ("cdr", "fr"),
++              help="cdr: the noisy ⟨O⟩ only; fr: feature regression (FR, this project's heuristic) — plus ⟨Zi⟩, "
++                   "⟨ZiZj⟩ of the same shots. "
+                    "(Neighbor-informed learning of Chen et al. is the separate estimator “Neighbor-informed "
+                    "learning”.)"),
+         Param("model", "regression", "choice", "ols", ("ols", "ridge", "lasso")),
+@@ -120,6 +124,13 @@ class Learning(QEMMethod):
+               help="Training shots are part of the method's total budget (training circuits × this)."),
+     )
+ 
++    def min_cost(self, ctx, features="cdr", model="ols", alpha=1e-3, n_train=16, keep=0, train_shots=1024,
++                 strategy="adaptive", min_spread=0.05) -> dict:
++        if not non_clifford_slots(ctx.spec):       # a Clifford circuit: learning is not applied, nothing is trained
++            return dict(training=0, target_circuits=1, note="Clifford circuit: no training circuits")
++        return dict(training=int(n_train) * int(train_shots), target_circuits=1,
++                    note="%d training circuits × %d shots" % (int(n_train), int(train_shots)))
++
+     def short(self, p):
+         extra = []
+         if int(p.get("keep", 0)):
+@@ -344,20 +355,25 @@ class Learning(QEMMethod):
+             est[bad] = np.nan
+             return est, v1
+ 
+-        # training-shot variance and calibration coefficient of the protocol as run, by Monte Carlo (fixed seeds)
++        # protocol moments at the protocol's training shots, by Monte Carlo (fixed seeds; qemx/stats.py): the mean of the
++        # refitted estimates, their variance u and the mean conditional per-shot target variance — not the moments of
++        # the reference fit to exact training features
+         seed64 = int(ctx.seed) % (2 ** 63)
+-        est_u, _ = train_resampler(int(train_shots), MC_REPS, np.random.default_rng([seed64, 0x4C45, 1]))
+-        est_u = est_u[np.isfinite(est_u)]
+-        u_train = float(np.var(est_u, ddof=1)) if len(est_u) > 1 else 0.0
++        mom = training_moments(train_resampler, int(train_shots), np.random.default_rng([seed64, 0x4C45, 1]))
++        u_train = mom.u
++        contract = protocol_contract(ctx, mom, mean, var1, notes, degenerate)
++        mean, var1 = contract.pop("mean"), contract.pop("var1")
+         if not degenerate:
+             notes.append("Shot noise of the training data (%d × %d shots) adds a variance %.3g that more target shots "
+                          "cannot remove (σ floor %.3g; %d Monte-Carlo refits)." % (T_, int(train_shots), u_train,
+-                                                                                   np.sqrt(u_train), MC_REPS))
++                                                                                   np.sqrt(u_train), mom.repeats))
+         cal = cal_fields(ctx, refit)
+         if cal:
+             cal["cal_w"] = calibration_w(ctx, train_resampler, int(train_shots), MC_REPS, seed64)
++            contract["flags"] = tuple(contract["flags"]) + ("calibration-mean-first-order",)
+ 
+         return MethodResult(
++            **contract,
+             mean=mean, var1=var1, var_fixed=u_train, circuits=1, train_circuits=int(len(tr_runs)),
+             fixed_shots=int(len(tr_runs)) * int(train_shots), **cal, joint_calibration=True,
+             gamma=(float(np.abs(coef).sum()) if not degenerate else 1.0) * ctx.readout_gamma(),
+diff --git a/qemx/methods/nil.py b/qemx/methods/nil.py
+index e85d43d..a8bcf86 100644
+--- a/qemx/methods/nil.py
++++ b/qemx/methods/nil.py
+@@ -438,9 +438,33 @@ def nil_fit(X, y, model: str, alpha: float = 0.0, l1_ratio: float = 0.5, l1_boun
+     (C²/m), and the ℓ1 terms (≥ |C|) and the sign constraint of NNLS are met by it, so every rule's solution splits C
+     equally — the point an interior-point solver such as Chen et al.'s CVXPY/MOSEK converges to. Solving the merged
+     problem (one column per group, ℓ2 weight 1/m) gives that split exactly and makes the fit independent of the column
+-    order."""
++    order.
++
++    Input contract (checked here, at the lowest level, so every caller gets the same validation): X a finite 2-D
++    array (T, k) with T ≥ 1 rows, y a finite vector of length T, α ≥ 0 and finite, 0 ≤ ρ ≤ 1, and for the ℓ1-bounded
++    rule a finite bound γ ≥ 0. γ = 0 is accepted and means "no weight on any feature": the only feasible coefficient
++    vector is c = 0 (with an intercept, the estimate is the mean training label); it is a legitimate, if useless,
++    constraint, not an error."""
+     X = np.asarray(X, float)
+     y = np.asarray(y, float)
++    if X.ndim != 2 or X.shape[0] < 1 or X.shape[1] < 1:
++        raise ValueError("NIL training features must be a non-empty 2-D array (training circuits × features), got "
++                         "shape %s" % (X.shape,))
++    if y.ndim != 1 or y.shape[0] != X.shape[0]:
++        raise ValueError("NIL training labels must be a vector with one value per training circuit (%d), got shape %s"
++                         % (X.shape[0], y.shape))
++    if not (np.all(np.isfinite(X)) and np.all(np.isfinite(y))):
++        raise ValueError("NIL training data contain non-finite values")
++    try:
++        alpha, l1_ratio, l1_bound = float(alpha), float(l1_ratio), float(l1_bound)
++    except (TypeError, ValueError):
++        raise ValueError("NIL regularization parameters must be numbers") from None
++    if not (math.isfinite(alpha) and alpha >= 0):
++        raise ValueError("the NIL penalty α must be finite and ≥ 0, got %r" % alpha)
++    if not (math.isfinite(l1_ratio) and 0.0 <= l1_ratio <= 1.0):
++        raise ValueError("the elastic-net mix ρ must be in [0, 1], got %r" % l1_ratio)
++    if model == "l1" and not (math.isfinite(l1_bound) and l1_bound >= 0):
++        raise ValueError("the ℓ1 bound γ must be finite and ≥ 0, got %r" % l1_bound)
+     if intercept:
+         xm, ym = X.mean(0), float(np.mean(y))
+         Xc, yc = X - xm, y - ym
+@@ -702,6 +726,19 @@ class NeighborInformedLearning(QEMMethod):
+         return out
+ 
+     # ------------------------------------------------------------------ estimator
++    def min_cost(self, ctx, neighbors="pauli", positions="2q", n_neighbors=12, include_bare=True,
++                 scales=(1.0, 3.0, 5.0), folding="global", n_train=16, train_shots=1024, **_) -> dict | None:
++        """T training circuits × k feature circuits (neighbors, plus the bare circuit) × training shots."""
++        if not non_clifford_slots(ctx.spec):       # NIL falls back to the unmitigated value: nothing is trained
++            return dict(training=0, target_circuits=1, note="Clifford circuit: no training circuits")
++        try:
++            k = len(self.neighbors(ctx, neighbors, positions, n_neighbors, include_bare, scales, folding))
++        except Exception:                          # noqa: BLE001 - an invalid setting is reported by run()
++            return None
++        return dict(training=int(n_train) * k * int(train_shots), target_circuits=1,
++                    note="%d training circuits × %d feature circuits × %d shots" % (int(n_train), k,
++                                                                                    int(train_shots)))
++
+     def run(self, ctx, neighbors="pauli", positions="2q", n_neighbors=12, include_bare=True, scales=(1.0, 3.0, 5.0),
+             folding="global", model="l1", l1_bound=2.0, alpha=1e-3, l1_ratio=0.5, intercept=False, n_train=16,
+             ensemble="design4", target_split="optimal", train_shots=1024) -> MethodResult:
+@@ -946,15 +983,20 @@ class NeighborInformedLearning(QEMMethod):
+         # ---- training-shot variance and calibration coefficient of the protocol as run, by Monte Carlo (the fit is
+         # piecewise smooth at best; with near-collinear features first-order values are meaningless)
+         from .learning import MC_REPS, CAL_REF_SHOTS, calibration_w
++        from ..stats import protocol_contract, training_moments
+         seed64 = int(ctx.seed) % (2 ** 63)
+-        est_u, _ = train_resampler(s_tr, MC_REPS, np.random.default_rng([seed64, 0x4E49, 1]))
+-        est_u = est_u[np.isfinite(est_u)]
+-        u_train = float(np.var(est_u, ddof=1)) if len(est_u) > 1 else 0.0
++        # protocol moments at s_tr (qemx/stats.py): mean of the refitted estimates, their variance u and the mean
++        # conditional per-shot target variance; the fit to exact training features is kept as the reference
++        mom = training_moments(train_resampler, s_tr, np.random.default_rng([seed64, 0x4E49, 1]))
++        u_train = mom.u
++        contract = protocol_contract(ctx, mom, mean, var1, notes)
++        mean, var1 = contract.pop("mean"), contract.pop("var1")
+         notes.append("Shot noise of the training data adds a variance %.3g that more target shots cannot remove "
+-                     "(σ floor %.3g; %d Monte-Carlo refits)." % (u_train, math.sqrt(max(u_train, 0.0)), MC_REPS))
++                     "(σ floor %.3g; %d Monte-Carlo refits)." % (u_train, math.sqrt(max(u_train, 0.0)), mom.repeats))
+         cal = cal_fields(ctx, refit)
+         if cal:
+             cal["cal_w"] = calibration_w(ctx, train_resampler, s_tr, MC_REPS, seed64)
++            contract["flags"] = tuple(contract["flags"]) + ("calibration-mean-first-order",)
+         ex_nb = next((f for f in feats if f[2]["kind"] != "bare"), feats[0])
+         implemented = [("Target circuit", display_circuit(ctx)),
+                        ("Neighbor circuit “%s” (1 of %d)" % (ex_nb[0], k), display_circuit(ctx, ex_nb[1](ctx.spec))),
+@@ -967,6 +1009,7 @@ class NeighborInformedLearning(QEMMethod):
+                        fitted=X @ coef + b0, x_train=X[:, 0], x_target=float(xt[0]), crn_key=crn_key,
+                        cal_w_ref_shots=CAL_REF_SHOTS)
+         return MethodResult(
++            **contract,
+             mean=mean, var1=var1, circuits=circuits, fixed_shots=T * k * s_tr, train_circuits=T * k,
+             var_fixed=float(u_train), gamma=float(np.abs(coef).sum()) * ctx.readout_gamma(),
+             **cal, joint_calibration=True, implemented=implemented, details=details, notes=notes,
+diff --git a/qemx/methods/pec.py b/qemx/methods/pec.py
+index dae5d76..9c5c701 100644
+--- a/qemx/methods/pec.py
++++ b/qemx/methods/pec.py
+@@ -24,6 +24,8 @@ ones only with twirl = "all"). A non-Clifford gate cannot be twirled exactly, so
+ """
+ from __future__ import annotations
+ 
++import math
++
+ import numpy as np
+ 
+ from .base import MethodResult, Param, QEMMethod, register
+@@ -34,13 +36,30 @@ from ..noise import (Instruction, gate_noise_instructions, instr_superop, pauli_
+ 
+ 
+ def depol_quasi(p: float, k: int, construction: str) -> list:
+-    """[(q, Pauli label)] of the correction after one k-qubit gate with assumed depolarizing p."""
++    """[(q, Pauli label)] of the correction after one k-qubit gate with assumed depolarizing p.
++
++    Convention: the channel ρ ↦ (1−p)ρ + p·I/d applied as the Pauli mixture with weight p spread uniformly over all
++    4ᵏ Paulis (identity included), so its Pauli-transfer eigenvalues are 1−p. Domain: finite 0 ≤ p < 1 (p = 1 maps
++    every state to I/d and has no inverse). An RB or average gate infidelity r is *not* this p: for this channel
++    r = p(d−1)/d."""
++    try:
++        p = float(p)
++    except (TypeError, ValueError):
++        raise ValueError("the depolarizing probability must be a number, got %r" % (p,)) from None
++    if not math.isfinite(p) or p < 0:
++        raise ValueError("the depolarizing probability must be finite and ≥ 0, got %r" % p)
++    if int(k) != k or int(k) < 1:
++        raise ValueError("a gate acts on at least one qubit, got k = %r" % (k,))
++    if construction not in ("inverse", "compensation"):
++        raise ValueError("construction must be 'inverse' or 'compensation', got %r" % (construction,))
++    k = int(k)
+     d2 = 4 ** k
+     labels = pauli_labels(k)
+-    if p <= 0:
++    if p == 0:
+         return [(1.0, "I" * k)]
+     if p >= 1:
+-        raise ValueError("a depolarizing probability p = %g ≥ 1 destroys the state; it cannot be inverted" % p)
++        raise ValueError("a depolarizing probability p = %g ≥ 1 maps every state to the maximally mixed state: the "
++                         "information the inverse would need is destroyed, so the channel cannot be inverted" % p)
+     f = 1 - p
+     if construction == "inverse":
+         return [((1 + (d2 - 1) / f) / d2 if l == "I" * k else (1 - 1 / f) / d2, l) for l in labels]
+@@ -51,6 +70,9 @@ def depol_quasi(p: float, k: int, construction: str) -> list:
+     return [(a, "I" * k)] + [(b / d2, l) for l in labels]
+ 
+ 
++LEARNED_SINGULAR_TOL = 1e-12        # |Pauli-transfer eigenvalue| at or below this: the channel is not invertible
++
++
+ def learned_quasi(noise, o: Op) -> list:
+     """Exact inverse of the Pauli twirl of this gate's noise channel."""
+     ins = gate_noise_instructions(noise, o, 0)
+@@ -60,7 +82,16 @@ def learned_quasi(noise, o: Op) -> list:
+     S = np.eye(4 ** k, dtype=complex)
+     for i in ins:
+         S = instr_superop(i, o.qubits) @ S
+-    eig = np.diag(ptm(S))
++    eig = np.real_if_close(np.diag(ptm(S)))
++    # the twirled channel is invertible iff no Pauli-transfer eigenvalue vanishes; negative nonzero eigenvalues are
++    # legitimate (they invert to negative weights) and are kept
++    small = np.flatnonzero(np.abs(eig) <= LEARNED_SINGULAR_TOL)
++    if len(small):
++        labs = pauli_labels(k)
++        raise ValueError("the noise of gate %s (on qubits %s) is not invertible: its Pauli-twirled channel destroys the "
++                         "%s component%s (transfer eigenvalue %s), so no quasi-probability correction exists"
++                         % (o.name, ",".join(map(str, o.qubits)), ", ".join(labs[i] for i in small[:4]),
++                            "" if len(small) == 1 else "s", ", ".join("%.2g" % abs(eig[i]) for i in small[:4])))
+     q = pauli_probs_from_eigs(1 / eig, k)
+     return [(float(v), l) for v, l in zip(q, pauli_labels(k)) if abs(v) > 1e-15]
+ 
+diff --git a/qemx/phase/cell.py b/qemx/phase/cell.py
+index d8fb830..26444aa 100644
+--- a/qemx/phase/cell.py
++++ b/qemx/phase/cell.py
+@@ -260,7 +260,14 @@ def _method_row(ms: MethodSpec, rc, res, ideal: float) -> dict:
+                accept=_f(res.accept), notes=list(res.notes or []))
+     if not finite or not math.isfinite(u) or not math.isfinite(float(res.var1)):
+         row["status"] = "nonfinite"
+-    flags = []
++    # the statistical contract (qemx/stats.py, record schema /3): what mean/b refer to
++    row["estimate_kind"] = getattr(res, "estimate_kind", "exact")
++    ref = getattr(res, "reference_mean", None)
++    row["reference_mean"] = _f(ref) if ref is not None else None
++    mom = getattr(res, "moments", None)
++    if mom:
++        row["moments"] = {k: (_f(v) if isinstance(v, float) else v) for k, v in mom.items()}
++    flags = list(getattr(res, "flags", ()) or ())
+     if ms.estimator == "zne":
+         lf = det.get("lams_fault")
+         row["details"] = dict(lams=[float(x) for x in det.get("lams", [])], E=[_f(x) for x in det.get("E", [])],
+@@ -481,7 +488,7 @@ def cell_runner(spec: CellSpec, *, time_limit: float | None = None) -> dict:
+         rec["guards"] = [dict(fold_guard(comp, backend, sc, fo, int(spec.seed)), folding=fo) for sc, fo in zne]
+         recipes = [recipe_for(m, spec, extra) for m in spec.methods]
+         ideal, outs, runner = compare(comp, noise, fc.observable, recipes, backend=backend, shots=4096,
+-                                      symmetry=None, seed=int(spec.seed))
++                                      symmetry=None, seed=int(spec.seed), check_budget=False)   # costed on a grid
+         rec["ideal"] = float(ideal)
+         # the noisy state itself (target circuit, no mitigation)
+         rr = runner.run(comp.implemented, noise if backend == "numpy" else runner_noise(runner), comp.measure_map,
+@@ -505,7 +512,9 @@ def cell_runner(spec: CellSpec, *, time_limit: float | None = None) -> dict:
+             try:
+                 row = _method_row(ms, rc, o.result, ideal)
+                 if row["status"] == "ok" and int(row.get("T") or 0) > 0 and o.result.train_resampler is not None:
+-                    row["b_inf"] = row["b"]                     # exact training features (infinite training shots)
++                    ref = getattr(o.result, "reference_mean", None)
++                    row["b_inf"] = (_f(float(ref) - ideal) if ref is not None   # exact training features (the reference fit)
++                                    else row["b"])
+                     row["u_delta"] = row["u"]                   # v1.2's first-order (delta-method) training variance
+                     row["w_run"] = row["w"]                     # the method's own Monte-Carlo or first-order w
+                     ctx = Context(comp, noise_used, fc.observable, rc, runner, shots=4096, seed=int(spec.seed))
+diff --git a/qemx/phase/manifest.py b/qemx/phase/manifest.py
+index 6d8e170..ef7db67 100644
+--- a/qemx/phase/manifest.py
++++ b/qemx/phase/manifest.py
+@@ -23,6 +23,8 @@ scale, engine and readout arm (common random numbers along the λ axis).
+ from __future__ import annotations
+ 
+ import hashlib
++import os
++import sys
+ import itertools
+ import json
+ import math
+@@ -41,9 +43,25 @@ def load(path: str) -> dict:
+     with open(path) as f:
+         m = yaml.safe_load(f)
+     check(m)
++    for note in migrations(m):
++        print("manifest %s: %s" % (os.path.basename(path), note), file=sys.stderr)
+     return m
+ 
+ 
++def migrations(m: dict) -> list:
++    """Notes on legacy parameter values in the manifest's methods (methods.base.PARAM_ALIASES). The manifest is not
++    changed — its methods, hence its cell ids, stay exactly as pre-registered; the legacy value is resolved when the
++    recipe is built (Recipe.make), and the record stores the parameters as written."""
++    from ..methods.base import migrate_params
++    out = []
++    for key, d in (m.get("methods") or {}).items():
++        d = dict(d)
++        est = d.pop("estimator", None)
++        for note in migrate_params(est, d)[1]:
++            out.append("method %s — %s" % (key, note))
++    return out
++
++
+ def manifest_hash(path: str) -> str:
+     with open(path, "rb") as f:
+         return hashlib.sha256(f.read()).hexdigest()
+@@ -61,6 +79,12 @@ def check(m: dict) -> None:
+     for k in ("methods", "circuits", "stages"):
+         if k not in m:
+             raise ValueError("missing %r" % k)
++    if not isinstance(m["methods"], dict) or not all(isinstance(d, dict) for d in m["methods"].values()):
++        raise ValueError("'methods' must map method keys to parameter mappings")
++    if not isinstance(m["stages"], list) or not all(isinstance(st, dict) and "name" in st for st in m["stages"]):
++        raise ValueError("'stages' must be a list of mappings, each with a 'name'")
++    if not isinstance(m.get("method_sets", {}) or {}, dict):
++        raise ValueError("'method_sets' must map set names to lists of method keys")
+     for key, d in m["methods"].items():
+         _check_method(key, d)
+     sets = m.get("method_sets", {})
+@@ -219,6 +243,8 @@ def _check_method(key: str, d: dict) -> None:
+     if est not in REGISTRY:
+         raise ValueError("method %s: unknown estimator %r (registered: %s)" % (key, est, ", ".join(sorted(REGISTRY))))
+     params = {p.name: p for p in REGISTRY[est].params}
++    from ..methods.base import migrate_params
++    d = dict(d, **migrate_params(est, {k: v for k, v in d.items() if k != "estimator"})[0])   # legacy names
+     for k, v in d.items():
+         if k == "estimator":
+             continue
+diff --git a/qemx/phase/run.py b/qemx/phase/run.py
+index 11d3510..f39ca66 100644
+--- a/qemx/phase/run.py
++++ b/qemx/phase/run.py
+@@ -135,11 +135,20 @@ def cmd_run(a):
+     n_tmp = clean_tmp(a.out)
+     if n_tmp:
+         print("removed %d temporary files of interrupted writes" % n_tmp, flush=True)
+-    todo = []
++    from .store import SCHEMA_VERSION
++    todo, older = [], 0
+     for c in cells:
+         r = read_cell(a.out, c.cell_id)
++        if r is not None and r.get("schema") != SCHEMA_VERSION:
++            older += 1
+         if r is None or (a.retry_errors and r.get("status") != "ok"):
+             todo.append(c)
++    if older and todo and not a.force:
++        # never mix records of two statistical semantics in one table (stats contract, record schema /3)
++        raise SystemExit("%s holds %d records written with an older record schema (statistical semantics differ: see "
++                         "qemx/phase/store.py); finishing it with this version would mix them. Run into a new --out "
++                         "directory (the old records stay as they are), or pass --force to accept the mixture."
++                         % (a.out, older))
+     if a.limit:
+         todo = todo[: a.limit]
+     print("%d cells, %d to run" % (len(cells), len(todo)), flush=True)
+@@ -276,7 +285,8 @@ def main(argv=None):
+     q.add_argument("--limit", type=int, default=0)
+     q.add_argument("--time-limit", type=float, default=None, help="seconds per cell (default: none)")
+     q.add_argument("--retry-errors", action="store_true", help="also re-run cells whose status is not 'ok'")
+-    q.add_argument("--force", action="store_true", help="bind --out to this manifest even if it holds another one")
++    q.add_argument("--force", action="store_true", help="bind --out to this manifest even if it holds another one, or finish a directory that holds records of an "
++                        "older record schema (mixed statistical semantics; not recommended)")
+     q.set_defaults(fn=cmd_run)
+     q = sub.add_parser("masterlist")
+     q.add_argument("manifest")
+diff --git a/qemx/phase/store.py b/qemx/phase/store.py
+index 592627c..b375692 100644
+--- a/qemx/phase/store.py
++++ b/qemx/phase/store.py
+@@ -25,8 +25,13 @@ import tempfile
+ 
+ import numpy as np
+ 
+-SCHEMA_VERSION = "qemx.phase.cell/2"
+-READABLE_SCHEMAS = ("qemx.phase.cell/1", SCHEMA_VERSION)   # /2 (v1.4): status "partial", per-level ok/v/w/se_w
++SCHEMA_VERSION = "qemx.phase.cell/3"
++# /2 (v1.4): status "partial", per-level ok/v/w/se_w.
++# /3 (v1.5): learning rows (CDR / FR / NIL / chains) report the *protocol* moments at their training shots in
++#     mean / b / v (qemx/stats.py), the exact-training reference fit in reference_mean / b_inf, and their Monte-Carlo
++#     record in ``moments``; every row carries estimate_kind and flags. /1–/2 records keep their own meaning: there
++#     mean / b / v of a learning row are the reference fit's (the ledger used the measured training levels anyway).
++READABLE_SCHEMAS = ("qemx.phase.cell/1", "qemx.phase.cell/2", SCHEMA_VERSION)
+ CELL_STATUS = ("ok", "partial", "error", "timeout", "oom", "crashed")
+ USABLE_STATUS = ("ok", "partial")                          # cells whose methods enter the tables
+ 
+diff --git a/qemx/recipes.py b/qemx/recipes.py
+index 34be589..339490b 100644
+--- a/qemx/recipes.py
++++ b/qemx/recipes.py
+@@ -23,10 +23,13 @@ PRESETS = {
+     "PEC · compensation": dict(estimator="pec", construction="compensation"),
+     "PEC · learned model + RC": dict(estimator="pec", model="learned", twirl="all"),
+     "CDR · OLS": dict(estimator="learning", features="cdr", model="ols"),
+-    "FR · Ridge": dict(estimator="learning", features="nil", model="ridge", alpha=1e-3),
+-    "FR · Lasso": dict(estimator="learning", features="nil", model="lasso", alpha=1e-4),
++    "FR · Ridge": dict(estimator="learning", features="fr", model="ridge", alpha=1e-3),
++    "FR · Lasso": dict(estimator="learning", features="fr", model="lasso", alpha=1e-4),
+     "NIL · ℓ1 ≤ 2 (Chen et al.)": dict(estimator="nil", model="l1", l1_bound=2.0),
+     "NIL · Ridge": dict(estimator="nil", model="ridge", alpha=1e-3),
++    # budget-scaled for teaching (T=6 training circuits × 4 circuits each × 128 shots = 3,072 training shots, so it
++    # runs within the default 4,096-shot budget). Not the configuration of the NIL paper; expect a noisy fit.
++    "NIL · small budget": dict(estimator="nil", model="l1", l1_bound=2.0, n_train=6, n_neighbors=3, train_shots=128),
+     "Readout · tensored": dict(estimator="raw", readout="tensored"),
+     "Readout · M3": dict(estimator="raw", readout="m3"),
+     "Readout · TREX": dict(estimator="raw", readout="trex"),
+@@ -65,15 +68,40 @@ class Outcome:
+     result: MethodResult | None
+     error: str = ""
+     label: str = ""                                   # set by compare() so that two identical contenders stay apart
++    status: str = ""                                  # "" (ran) | INSUFFICIENT_BUDGET (not run) | "error"
++    preflight: dict | None = None                     # the budget preflight that decided it (budget.preflight)
+ 
+     @property
+     def title(self) -> str:
+         return self.label or self.recipe.title()
+ 
+ 
++def preflight(rc: Recipe, make_ctx, compiled, observable, budget: int) -> dict | None:
++    """Cheap budget check before a recipe runs (no simulation, no fit): {feasible, min_budget, training, note} or
++    None when the method cannot tell its cost in advance. min_budget is inclusive: the smallest total budget that can
++    yield an estimate (training + one shot per calibration circuit + one shot per target circuit)."""
++    from . import hamiltonian as HM
++    if isinstance(observable, HM.PauliSum):            # several settings: each pays its own training; not preflighted
++        return None
++    try:
++        ctx = make_ctx(compiled, observable)
++        mc = REGISTRY[rc.estimator].min_cost(ctx, **rc.p)
++    except Exception:                                  # noqa: BLE001 - the run itself reports invalid settings
++        return None
++    if mc is None:
++        return None
++    cal = int(ctx.cal_circuits())
++    mb = float(mc["training"]) + cal + max(int(mc.get("target_circuits", 1)), 1)
++    return dict(feasible=bool(mb <= int(budget)), min_budget=mb, training=int(mc["training"]), calibration_circuits=cal,
++                note=mc.get("note", ""))
++
++
+ def compare(compiled: Compiled, noise: NoiseSpec, observable: Observable, recipes: list, backend: str = "numpy",
+-            shots: int = 4096, symmetry=None, seed: int = 0) -> tuple:
+-    """Run every recipe; returns (ideal value, list[Outcome], runner)."""
++            shots: int = 4096, symmetry=None, seed: int = 0, check_budget: bool = False) -> tuple:
++    """Run every recipe; returns (ideal value, list[Outcome], runner). ``shots`` is the total budget B per estimate.
++    With ``check_budget`` (the Playground) a recipe whose fixed cost (training, calibration) alone exceeds B is not run
++    at all — no fit, no Monte Carlo — and is returned with ``Outcome.status`` = INSUFFICIENT_BUDGET and its preflight.
++    Without it (studies that cost every recipe at many budgets from its cost model) every recipe runs."""
+     from .resources import RunTimeout
+     from . import device
+     runner = Runner(backend, layout=compiled.info.get("phys") if device.is_device(backend) else None)
+@@ -87,6 +115,12 @@ def compare(compiled: Compiled, noise: NoiseSpec, observable: Observable, recipe
+             return Context(c, noise, o, rc, runner, shots=shots, symmetry=symmetry, seed=seed)
+         if ideal is None:
+             ideal = HM.ideal_value(make_ctx, compiled, observable)
++        pf = preflight(rc, make_ctx, compiled, observable, shots) if check_budget else None
++        if pf is not None and not pf["feasible"]:
++            out.append(Outcome(rc, None, "%s: %s (budget %s shots; %s)" % (
++                INSUFFICIENT_BUDGET, budget_needed_text(pf["min_budget"]), f"{int(shots):,}", pf["note"]),
++                status=INSUFFICIENT_BUDGET, preflight=pf))
++            continue
+         try:
+             # a Pauli-sum Hamiltonian runs once per measurement setting and is combined; a diagonal one directly
+             res = HM.evaluate(make_ctx, lambda ctx, rc=rc: REGISTRY[rc.estimator].run(ctx, **rc.p), compiled,
+@@ -106,6 +140,15 @@ def compare(compiled: Compiled, noise: NoiseSpec, observable: Observable, recipe
+ 
+ HIDDEN = ("family", "v", "fixed_shots", "cal_circuits", "w_cal", "u_train", "n_circuits")   # cost-model fields in rows
+ 
++INSUFFICIENT_BUDGET = "insufficient_budget"     # status of a protocol that was not run: its minimum cost exceeds B
++
++
++def budget_needed_text(min_budget: float) -> str:
++    """'needs at least 212,997 shots' (min_budget is the smallest total budget that yields an estimate, inclusive)."""
++    if not math.isfinite(min_budget):
++        return "no estimate at any budget"
++    return "needs at least %s shots" % f"{int(math.ceil(min_budget)):,}"
++
+ 
+ def nonlinear_exact(recipe: Recipe) -> bool:
+     """Estimators that are nonlinear in the sampled data (their first-order sd can be optimistic at small budgets)
+@@ -159,16 +202,24 @@ def summary(o: Outcome, ideal: float, B: int, t_shot_us: float, samples=None, al
+             m = dataclasses.replace(m, u=max(emp * emp - (acc["var_target"] + acc["var_cal"]), m.u))
+     else:
+         sd = sd_an
++    kind = getattr(r, "estimate_kind", "exact") or "exact"
++    mom = getattr(r, "moments", None) or {}
++    mc = float(mom.get("mean_mcse", 0.0) or 0.0) if kind == "protocol" else 0.0
+     b = r.mean - ideal
+     st_ = status(r)
+     if not acc["feasible"]:
+-        mb = acc["min_budget"]
+-        st_ = ("budget too small: needs more than %s shots" % f"{int(math.ceil(mb)):,}" if math.isfinite(mb)
+-               else "no estimate at any budget")
+-    rmse_ = float(np.sqrt(b * b + sd * sd)) if (np.isfinite(sd) and np.isfinite(b)) else math.inf
+-    return {"method": o.title, "family": fam, "estimate": r.mean, "bias": b, "sd": sd,
++        st_ = INSUFFICIENT_BUDGET + ": " + budget_needed_text(acc["min_budget"])
++    if kind == "measured":
++        # one measured run: e = estimate − ideal is a single draw of bias + noise; e² is an unbiased estimate of the
++        # MSE, so the RMSE shown is |e| (not √(e² + sd²), which would count the shot noise twice)
++        rmse_ = abs(float(b)) if np.isfinite(b) else math.inf
++    else:
++        rmse_ = float(np.sqrt(b * b + sd * sd)) if (np.isfinite(sd) and np.isfinite(b)) else math.inf
++    ref = getattr(r, "reference_mean", None)
++    return {"method": o.title, "family": fam, "estimate": r.mean, "estimate kind": kind,
++            "exact-fit value": float(ref) if ref is not None else math.nan, "bias": b, "bias MC ±": mc, "sd": sd,
+             "sd from": "repeats" if use_emp else "analytic", "sd (repeats)": emp, "failed repeats": failed,
+-            "RMSE": rmse_, "γ": r.gamma,
++            "RMSE": rmse_, "γ": r.gamma, "flags": ", ".join(getattr(r, "flags", ()) or ()),
+             "circuits": acc["circuits"], "extra qubits": r.extra_qubits, "accepted": r.accept,
+             "target shots": int(round(acc["target_shots"])), "training shots": int(acc["training_shots"]),
+             "calibration shots": int(round(alloc["calibration"] if alloc else acc["calibration_shots"])),
+@@ -187,16 +238,38 @@ def table_rows(outs, ideal: float, B: int, t_shot_us: float, repeats: int = 120,
+     allocs = allocs or {}
+     for o in outs:
+         if o.result is None:
++            if o.status == INSUFFICIENT_BUDGET and o.preflight:
++                rows.append(unaffordable_row(o, int(B), t_shot_us))      # shown, explained, never run
+             continue
+         a = allocs.get(o.title)
+-        try:
+-            samples[o.title] = BG.draw(o.result, int(B), int(repeats), rng, alloc=a)
+-        except Exception:                                        # noqa: BLE001 - the table still shows the row
+-            samples[o.title] = None
++        if a is None and not BG.account(o.result, int(B))["feasible"]:
++            samples[o.title] = None              # budget preflight: an unaffordable protocol is not run at all
++        else:
++            try:
++                samples[o.title] = BG.draw(o.result, int(B), int(repeats), rng, alloc=a)
++            except Exception:                                    # noqa: BLE001 - the table still shows the row
++                samples[o.title] = None
+         rows.append(summary(o, ideal, int(B), t_shot_us, samples.get(o.title), alloc=a))
+     return samples, rows
+ 
+ 
++def unaffordable_row(o: Outcome, B: int, t_shot_us: float) -> dict:
++    """The table row of a recipe the budget preflight did not run: no estimate, no repeats (not "failed repeats"),
++    the training cost and the smallest budget that would run it."""
++    pf = o.preflight or {}
++    nan = math.nan
++    return {"method": o.title, "family": family(o.recipe), "estimate": nan, "estimate kind": "not run",
++            "exact-fit value": nan, "bias": nan, "bias MC ±": nan, "sd": math.inf, "sd from": "—",
++            "sd (repeats)": nan, "failed repeats": 0, "RMSE": math.inf, "γ": nan, "flags": "",
++            "circuits": 0, "extra qubits": 0, "accepted": 1.0, "target shots": 0,
++            "training shots": int(pf.get("training", 0)), "calibration shots": 0,
++            "QPU s": nan,                                    # not run: it cannot spend this budget
++            "status": "%s: %s (%s)" % (INSUFFICIENT_BUDGET, budget_needed_text(pf.get("min_budget", math.inf)),
++                                       pf.get("note", "")),
++            "v": math.inf, "fixed_shots": float(pf.get("training", 0)), "cal_circuits": int(pf.get("calibration_circuits", 0)),
++            "w_cal": 0.0, "u_train": 0.0, "n_circuits": 1}
++
++
+ def status(r: MethodResult) -> str:
+     """A short flag for results that should not be read at face value."""
+     d = r.details or {}
+diff --git a/qemx/render_worker.py b/qemx/render_worker.py
+new file mode 100644
+index 0000000..e2d6210
+--- /dev/null
++++ b/qemx/render_worker.py
+@@ -0,0 +1,104 @@
++"""Image rendering in a child process (``python -m qemx.render_worker JOBDIR``), used by ``qemx.bundle``.
++
++The job directory holds ``job.json``: {"items": [[file stem, Plotly JSON], …], "formats": […], "scale": …}. Every
++image is written as ``<stem>.<fmt>.part`` and renamed to ``<stem>.<fmt>`` when complete, so the parent can collect
++finished images at any time — also after it has killed this process. ``done`` marks a complete run; ``error.txt``
++records why rendering stopped. Nothing here reads anything but the job file the parent wrote.
++
++Rendering lives in its own process because a renderer can fail in ways that never return to its caller: Kaleido's
++persistent-server thread can die (e.g. no Chrome) while the caller waits on its queue forever (QA report §4.6). The
++parent enforces the time limit and kills this process; the numerical export never waits on it.
++"""
++from __future__ import annotations
++
++import json
++import os
++import sys
++
++
++def _write(path: str, data: bytes) -> None:
++    with open(path + ".part", "wb") as f:
++        f.write(data)
++    os.replace(path + ".part", path)
++
++
++def _find_browser():
++    """Path of a Chrome/Chromium Kaleido can use, False if we can tell there is none, None if we cannot tell (an
++    older or newer choreographer without this API: then the first image decides)."""
++    p = os.environ.get("BROWSER_PATH")
++    if p:
++        return p if os.path.exists(p) else False
++    try:
++        from choreographer.browsers.chromium import Chromium
++        return Chromium.find_browser(skip_local=False) or False
++    except Exception:                                    # noqa: BLE001
++        return None
++
++
++def main(jobdir: str) -> int:
++    with open(os.path.join(jobdir, "job.json"), encoding="utf-8") as f:
++        job = json.load(f)
++    formats, scale = list(job["formats"]), float(job["scale"])
++    try:
++        import warnings
++        import plotly.io as pio
++        warnings.simplefilter("ignore")
++        fault = os.environ.get("QEMX_RENDER_FAULT", "")      # fault injection for the export's own tests only
++        if fault == "hang":
++            import time
++            time.sleep(3600)
++        elif fault == "crash":
++            os._exit(9)
++        elif fault == "chrome":
++            raise RuntimeError("Kaleido v1 and later requires Chrome to be installed (simulated)")
++        figs = [(stem, pio.from_json(js)) for stem, js in job["items"]]
++        server = False
++        first = True
++        browser = _find_browser()
++        if browser is False:                             # we can tell that there is no browser: fail fast
++            raise RuntimeError("no Chrome or Chromium browser was found (Kaleido ≥ 1 needs one to render images)")
++        if browser and job.get("server", True):
++            # a browser exists: one persistent browser for every image (about 4× faster than one per image)
++            try:
++                import kaleido
++                kaleido.start_sync_server(silence_warnings=True)
++                server, first = True, False
++            except Exception:                            # noqa: BLE001 - render image by image instead
++                server = False
++        for fmt in formats:
++            for stem, fig in figs:
++                w, h = int(fig.layout.width or 1400), int(fig.layout.height or 600)
++                data = pio.to_image(fig, format=fmt, width=w, height=h, scale=scale if fmt == "png" else 1)
++                _write(os.path.join(jobdir, "%s.%s" % (stem, fmt)), data)
++                if fault == "after-first":
++                    os._exit(9)
++                if first and job.get("server", True):
++                    first = False
++                    # the first image proved a working browser: one persistent browser for the rest (about 4×
++                    # faster). If it cannot start, rendering continues image by image; if it dies later, the
++                    # parent's time limit ends this process and keeps what was written.
++                    try:
++                        import kaleido
++                        kaleido.start_sync_server(silence_warnings=True)
++                        server = True
++                    except Exception:                    # noqa: BLE001
++                        server = False
++        if server:
++            try:
++                import kaleido
++                kaleido.stop_sync_server(silence_warnings=True)
++            except Exception:                            # noqa: BLE001
++                pass
++        _write(os.path.join(jobdir, "done"), b"ok")
++        return 0
++    except BaseException as e:                           # noqa: BLE001 - recorded for the parent
++        msg = "%s: %s" % (type(e).__name__, str(e).splitlines()[0][:300] if str(e) else "")
++        try:
++            _write(os.path.join(jobdir, "error.txt"), msg.encode("utf-8"))
++        except Exception:                                # noqa: BLE001
++            pass
++        return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main(sys.argv[1]))
+diff --git a/qemx/stats.py b/qemx/stats.py
+new file mode 100644
+index 0000000..533f4ee
+--- /dev/null
++++ b/qemx/stats.py
+@@ -0,0 +1,195 @@
++r"""The statistical result contract: what a reported number *means*.
++
++A mitigation result can refer to four different quantities, and QEM Explorer keeps them apart:
++
++==============  ==================================================================================================
++``exact``       an exact (infinite-shot) property of the simulated protocol, computed from exact probabilities.
++                For ZNE, PEC, readout mitigation and the other estimators that are linear in their data this *is*
++                the expected value of the finite-shot protocol.
++``reference``   the exact-probability **reference fit** of a learning method (CDR, FR, NIL): the regression fitted
++                to *exact* training features. It is an oracle quantity — a real experiment never sees exact
++                training features — and it is generally **not** the protocol's expected value, because the fit is a
++                nonlinear function of the sampled training data:
++                :math:`\mathbb E_D[\hat f_D(x)]\neq f_{\mathbb E[D]}(x)`.
++``protocol``    the expected moments of the specified finite-shot protocol (finite training shots, exact target
++                features), estimated by Monte Carlo over independent training-data draws :math:`D`:
++
++                .. math:: \mu=\mathbb E_D[m(D)],\qquad
++                          \operatorname{Var}(\hat O)=\operatorname{Var}_D[m(D)]+\mathbb E_D[v(D)]/N_t,
++
++                with :math:`m(D)` the estimate of the fit on draw :math:`D` applied to the exact target and
++                :math:`v(D)` its per-shot target variance. The decomposition is the law of total variance; it is
++                exact when, given the fit, the estimate is linear in the target's sample frequencies (readout
++                mitigation none / tensored / TREX) and holds to first order in :math:`1/N_t` for M3.
++``measured``    one experiment's estimate (hardware replay, or one simulated run): a single draw, not a mean.
++==============  ==================================================================================================
++
++Bias and RMSE in tables, budget curves and exports are always computed from the ``protocol`` (or ``exact``) mean of
++a *simulated* result. A ``measured`` hardware result has no bias unless a trusted ideal reference exists.
++
++Readout calibration enters the variance to first order (:math:`w/s`, measured by Monte Carlo for learning methods);
++its :math:`O(1/s)` effect on the mean of a nonlinear refit is not included in :math:`\mu` and the result carries the
++flag ``calibration-mean-first-order`` when a calibration is present.
++
++Failed refits are never dropped silently: :class:`Moments` records how many of the requested refits produced a
++finite estimate, and moments computed from the survivors are marked ``conditional`` (conditional on the protocol
++succeeding). A protocol that fails in more than half of the refits raises :class:`ProtocolFailure`.
++"""
++from __future__ import annotations
++
++import math
++from dataclasses import asdict, dataclass
++
++import numpy as np
++
++KINDS = ("exact", "reference", "protocol", "measured")
++
++# Monte-Carlo refits behind protocol moments: start, cap, and the declared tolerance on the mean's Monte-Carlo
++# standard error (absolute, in units of the observable). Repeats double until mean_mcse <= tol or the cap is reached;
++# the number used is always recorded.
++REPEATS_START = 500
++REPEATS_MAX = 4000
++MEAN_MCSE_TOL = 2.5e-3
++MAX_FAILURE_RATE = 0.5
++
++
++class ProtocolFailure(FloatingPointError):
++    """The finite-shot protocol fails (non-finite estimate) in too many training-data draws to report moments."""
++
++
++@dataclass(frozen=True)
++class Moments:
++    """Monte-Carlo moments of a finite-training protocol at one number of training shots."""
++    mean: float               # E_D[m(D)]
++    var1: float               # E_D[v(D)]: per-shot target variance, averaged over training draws
++    u: float                  # Var_D[m(D)]: training-data variance (does not shrink with target shots)
++    train_shots: int          # shots per training circuit at which the draws were made
++    repeats: int              # refits requested
++    finite: int               # refits that produced a finite estimate
++    mean_mcse: float          # Monte-Carlo standard error of ``mean``: sqrt(u / finite)
++    var1_mcse: float          # Monte-Carlo standard error of ``var1``
++    u_se: float               # standard error of ``u`` (fourth-moment formula, no Gaussian assumption)
++    tol: float                # declared tolerance on mean_mcse that stopped the adaptive repeats (nan: none)
++    kind: str = "protocol"
++
++    @property
++    def failed(self) -> int:
++        return int(self.repeats - self.finite)
++
++    @property
++    def failure_rate(self) -> float:
++        return self.failed / self.repeats if self.repeats else math.nan
++
++    @property
++    def conditional(self) -> bool:
++        """True when failed refits were excluded: the moments are conditional on the protocol succeeding."""
++        return self.failed > 0
++
++    def as_dict(self) -> dict:
++        d = asdict(self)
++        d.update(failed=self.failed, failure_rate=self.failure_rate, conditional=self.conditional)
++        return d
++
++
++def _se_var(x: np.ndarray, var: float) -> float:
++    n = len(x)
++    if n < 4:
++        return math.nan
++    m4 = float(np.mean((x - x.mean()) ** 4))
++    return float(math.sqrt(max(m4 - var * var * (n - 3) / (n - 1), 0.0) / n))
++
++
++def moments_from_draws(est, var1, train_shots: int, repeats: int | None = None, tol: float = math.nan) -> Moments:
++    """Moments from R refits: ``est`` the estimates m(D_r), ``var1`` their per-shot target variances v(D_r).
++    Non-finite rows count as failed refits (both arrays must be finite for a row to count)."""
++    est = np.asarray(est, float).ravel()
++    v1 = np.asarray(var1, float).ravel()
++    if est.shape != v1.shape:
++        raise ValueError("estimates and variances have different shapes %s, %s" % (est.shape, v1.shape))
++    R = int(len(est) if repeats is None else repeats)
++    ok = np.isfinite(est) & np.isfinite(v1)
++    if np.any(v1[ok] < -1e-12 * max(1.0, float(np.max(np.abs(v1[ok]))) if ok.any() else 1.0)):
++        raise FloatingPointError("a refit produced a negative per-shot variance")
++    n = int(ok.sum())
++    if n < 2:
++        raise ProtocolFailure("only %d of %d training-data draws gave a finite estimate" % (n, R))
++    if (R - n) / max(R, 1) > MAX_FAILURE_RATE:
++        raise ProtocolFailure("the protocol fails in %d of %d training-data draws (> %.0f %%): its moments are not "
++                              "reported" % (R - n, R, 100 * MAX_FAILURE_RATE))
++    e, v = est[ok], np.maximum(v1[ok], 0.0)
++    u = float(np.var(e, ddof=1))
++    return Moments(mean=float(np.mean(e)), var1=float(np.mean(v)), u=u, train_shots=int(train_shots), repeats=R,
++                   finite=n, mean_mcse=float(math.sqrt(u / n)), var1_mcse=float(np.std(v, ddof=1) / math.sqrt(n)),
++                   u_se=_se_var(e, u), tol=float(tol))
++
++
++def training_moments(train_resampler, train_shots: int, rng, *, repeats: int = REPEATS_START,
++                     max_repeats: int = REPEATS_MAX, tol: float = MEAN_MCSE_TOL) -> Moments:
++    """Protocol moments of a learning method at ``train_shots`` shots per training circuit.
++
++    ``train_resampler(s_tr, R, rng) -> (estimates, per-shot variances)`` refits the method on R independent draws of
++    the training data and applies each fit to the exact target features. Repeats start at ``repeats`` and double (new
++    draws from the same generator, so the result is deterministic for a seeded ``rng``) until the Monte-Carlo
++    standard error of the mean is at most ``tol`` or ``max_repeats`` is reached; ``tol`` = nan disables adaptation."""
++    if int(repeats) < 2:
++        raise ValueError("at least two refits are required")
++    if int(max_repeats) < int(repeats):
++        raise ValueError("max_repeats must be at least repeats")
++    ests, vs = [], []
++    total, batch = 0, int(repeats)
++    while True:
++        e, v = train_resampler(int(train_shots), int(batch), rng)
++        e, v = np.asarray(e, float).ravel(), np.asarray(v, float).ravel()
++        if e.shape != (batch,) or v.shape != (batch,):
++            raise ValueError("unexpected training-refit result shape %s, %s (expected %d)" % (e.shape, v.shape, batch))
++        ests.append(e)
++        vs.append(v)
++        total += batch
++        m = moments_from_draws(np.concatenate(ests), np.concatenate(vs), train_shots, total, tol)
++        if not (math.isfinite(tol) and m.mean_mcse > tol and total < int(max_repeats)):
++            return m
++        batch = min(total, int(max_repeats) - total)
++
++
++def is_measured(ctx) -> bool:
++    """True when the context replays measured hardware data (not a simulation and not a hardware *recording*, which
++    answers with predictions to plan the allocation)."""
++    r = getattr(ctx, "runner", None)
++    return getattr(r, "backend", None) == "hardware" and not getattr(r, "recording", True)
++
++
++def protocol_contract(ctx, mom: Moments, ref_mean: float, ref_var1: float, notes: list, degenerate: bool = False) -> dict:
++    """The MethodResult fields of a learning method under the statistical contract.
++
++    Simulation: ``mean``/``var1`` become the protocol moments; the exact-probability fit is kept as the reference.
++    Hardware replay: ``mean`` stays the fit to the *measured* training data applied to the measured target (one
++    experiment); the resampled refits are then a bootstrap of the measured data and only supply the uncertainty."""
++    if is_measured(ctx):
++        rec = dict(mom.as_dict(), kind="bootstrap")
++        notes.append("Measured estimate: the regression fitted to the measured training data and applied to the measured "
++                     "target. The training-data uncertainty u comes from %d bootstrap refits of the measured counts."
++                     % mom.finite)
++        return dict(mean=float(ref_mean), var1=float(ref_var1), estimate_kind="measured", reference_mean=None,
++                    reference_var1=None, moments=rec, flags=("measured",))
++    flags = []
++    if mom.conditional:
++        flags.append("conditional-on-success")
++        notes.append("%d of %d training-data draws gave no finite estimate (failure rate %.1f %%); the moments are "
++                     "conditional on success." % (mom.failed, mom.repeats, 100 * mom.failure_rate))
++    if not degenerate and math.isfinite(ref_mean):
++        d = mom.mean - float(ref_mean)
++        if abs(d) > 3 * max(mom.mean_mcse, 1e-15):
++            notes.append("With %d shots per training circuit the protocol's expected value is %.4g (± %.2g Monte-Carlo), "
++                         "not the %.4g of the fit to exact training features: the regression is nonlinear in its "
++                         "noisy training data. Bias and RMSE use the protocol's value; the exact fit is kept as a "
++                         "reference." % (mom.train_shots, mom.mean, mom.mean_mcse, ref_mean))
++    return dict(mean=float(mom.mean), var1=float(mom.var1), estimate_kind="protocol", reference_mean=float(ref_mean),
++                reference_var1=float(ref_var1), moments=mom.as_dict(), flags=tuple(flags))
++
++
++def rmse_with_mc(bias: float, sd: float, bias_mcse: float = 0.0) -> tuple:
++    """(RMSE, its Monte-Carlo standard error from the bias's MC error, first order)."""
++    r = math.sqrt(bias * bias + sd * sd) if (math.isfinite(bias) and math.isfinite(sd)) else math.inf
++    if not math.isfinite(r) or r == 0.0:
++        return r, math.nan
++    return r, abs(bias) * float(bias_mcse) / r
+diff --git a/scripts/validate_learning_moments.py b/scripts/validate_learning_moments.py
+new file mode 100644
+index 0000000..d07256b
+--- /dev/null
++++ b/scripts/validate_learning_moments.py
+@@ -0,0 +1,122 @@
++#!/usr/bin/env python3
++r"""Independent check of the reported protocol moments of the learning methods (QA report §4.2).
++
++For each case the reported row (``recipes.summary``: estimate, sd, RMSE at the total budget B) is compared with R
++independent complete experiments drawn by the method's own end-to-end sampler (``budget.draw``): fresh training data
++at the protocol's training shots, a refit, and fresh target shots at the budget's target allocation — a different
++code path from the Monte-Carlo moments behind the reported row (``train_resampler`` with the *exact* target).
++
++Pass criteria (declared before running, Monte-Carlo uncertainty only):
++
++* mean:  |reported − empirical| ≤ 4·sqrt(mcse_reported² + sd_emp²/R)
++* sd:    |reported − empirical| ≤ 4·SE(sd_emp) + 4·SE(sd_reported), SE(sd) ≈ sd·sqrt(1/(2(R−1))) (normal approximation;
++         the reported sd's own MC error from u and var1 is propagated to first order)
++* RMSE:  reported within 4 combined standard errors of the empirical RMSE
++
++The three default cases are the QA report's diagnostic cases (QFT(3, s=5), ideal 1, B = 100 000, 8 training circuits,
++seed 13; p1 = p2/10). They are diagnostics, not a ranking of methods.
++
++    python scripts/validate_learning_moments.py --out validation_learning.json            # 6 000 repeats per case
++    python scripts/validate_learning_moments.py --reps 1500 --out quick.json
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import math
++import os
++import sys
++import time
++
++import numpy as np
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++CASES = [
++    # (label, p2, train shots, recipe kwargs)
++    ("CDR-OLS", 0.03, 64, dict(estimator="learning", features="cdr", model="ols", n_train=8, train_shots=64)),
++    ("FR-Ridge", 0.03, 1024, dict(estimator="learning", features="fr", model="ridge", alpha=1e-3, n_train=8,
++                                  train_shots=1024)),
++    ("NIL-L1", 0.20, 1024, dict(estimator="nil", model="l1", l1_bound=2.0, n_train=8, n_neighbors=4,
++                                train_shots=1024)),
++]
++
++
++def run_case(label, p2, train_shots, kw, B=100_000, reps=6000, seed=13, draw_seed=5101):
++    from qemx import budget as BG
++    from qemx import compile as CP
++    from qemx import templates as T
++    from qemx.methods import Recipe
++    from qemx.noise import NoiseSpec
++    from qemx.recipes import compare, summary
++    kw = dict(kw)
++    est = kw.pop("estimator")
++    rc = Recipe.make(est, **kw)
++    tpl = T.build("qft", {"n": 3})
++    comp = CP.build(tpl.spec, relabel=tpl.relabel)
++    t0 = time.time()
++    ideal, outs, _ = compare(comp, NoiseSpec(p1=p2 / 10, p2=p2), tpl.observable, [rc], shots=B, seed=seed)
++    o = outs[0]
++    if o.result is None:
++        raise RuntimeError(o.error)
++    r = o.result
++    t_fit = time.time() - t0
++    x = np.asarray(BG.draw(r, B, reps, np.random.default_rng(draw_seed)), float)
++    t_draw = time.time() - t0 - t_fit
++    ok = x[np.isfinite(x)]
++    row = summary(o, ideal, B, 250.0, x)
++    R = len(ok)
++    m_emp, sd_emp = float(np.mean(ok)), float(np.std(ok, ddof=1))
++    rmse_emp = float(np.sqrt(np.mean((ok - ideal) ** 2)))
++    mom = r.moments or {}
++    mcse = float(mom.get("mean_mcse", 0.0))
++    acc = BG.account(r, B)
++    se_sd_emp = sd_emp / math.sqrt(2 * (R - 1))
++    # MC error of the reported sd: Var(sd²) from u (u_se) and var1/N_t (var1_mcse/N_t), first order in sd
++    sd_rep = float(row["sd"])
++    var_rep_se = math.sqrt(float(mom.get("u_se", 0.0) or 0.0) ** 2 + (float(mom.get("var1_mcse", 0.0) or 0.0)
++                                                                     / max(acc["target_shots"], 1.0)) ** 2)
++    se_sd_rep = var_rep_se / (2 * sd_rep) if sd_rep > 0 else 0.0
++    # empirical RMSE's SE by the delta method on mean((x − ideal)²)
++    sq = (ok - ideal) ** 2
++    se_rmse_emp = float(np.std(sq, ddof=1) / math.sqrt(R) / (2 * rmse_emp))
++    rmse_rep = float(row["RMSE"])
++    se_rmse_rep = (abs(row["bias"]) * mcse + sd_rep * se_sd_rep) / rmse_rep if rmse_rep > 0 else 0.0
++    z_mean = (r.mean - m_emp) / math.sqrt(mcse ** 2 + sd_emp ** 2 / R)
++    z_sd = (sd_rep - sd_emp) / math.sqrt(se_sd_emp ** 2 + se_sd_rep ** 2)
++    z_rmse = (rmse_rep - rmse_emp) / math.sqrt(se_rmse_emp ** 2 + se_rmse_rep ** 2)
++    return dict(
++        case=label, method=o.title, ideal=ideal, p1=p2 / 10, p2=p2, train_shots=train_shots, budget=B, reps=reps,
++        finite_reps=R, target_shots=acc["target_shots"], seconds_method=round(t_fit, 2), seconds_draws=round(t_draw, 2),
++        estimate_kind=r.estimate_kind, reported_mean=r.mean, reported_mean_mcse=mcse,
++        reference_mean=r.reference_mean, reported_sd=sd_rep, reported_rmse=rmse_rep, protocol_repeats=mom.get("repeats"),
++        empirical_mean=m_emp, empirical_sd=sd_emp, empirical_rmse=rmse_emp,
++        z_mean=z_mean, z_sd=z_sd, z_rmse=z_rmse,
++        passed=bool(abs(z_mean) <= 4 and abs(z_sd) <= 4 and abs(z_rmse) <= 4))
++
++
++def main(argv=None):
++    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    ap.add_argument("--reps", type=int, default=6000)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--cases", nargs="*", default=None, help="subset of: " + ", ".join(c[0] for c in CASES))
++    a = ap.parse_args(argv)
++    import warnings
++    warnings.simplefilter("ignore")
++    rows = []
++    for label, p2, s_tr, kw in CASES:
++        if a.cases and label not in a.cases:
++            continue
++        row = run_case(label, p2, s_tr, kw, reps=a.reps)
++        rows.append(row)
++        print(json.dumps(row), flush=True)
++        with open(a.out, "w") as f:
++            json.dump(dict(script="validate_learning_moments.py", criteria="|z| <= 4 for mean, sd and RMSE",
++                           cases=rows), f, indent=1)
++    bad = [r["case"] for r in rows if not r["passed"]]
++    print("FAILED: %s" % ", ".join(bad) if bad else "PASSED: %d cases" % len(rows))
++    return 1 if bad else 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_compose.py b/tests/test_compose.py
+index 43238f6..74b7c2d 100644
+--- a/tests/test_compose.py
++++ b/tests/test_compose.py
+@@ -67,7 +67,8 @@ def test_chain_cdr_is_a_line_through_inner_values():
+     ctx, r = _run(rc)
+     X, y = r.details["X"][:, 0], r.details["y_train"]
+     a, b = np.polyfit(X, y, 1)
+-    assert r.mean == pytest.approx(a * r.details["xt"][0] + b, abs=1e-8)
++    assert r.reference_mean == pytest.approx(a * r.details["xt"][0] + b, abs=1e-8)     # the exact-training fit
++    assert r.estimate_kind == "protocol" and r.mean == pytest.approx(r.moments["mean"])
+     assert r.fixed_shots == 8 * 1024 and r.train_circuits == 8 and r.circuits == 1
+ 
+ 
+diff --git a/tests/test_nil.py b/tests/test_nil.py
+index 348564d..0b8905d 100644
+--- a/tests/test_nil.py
++++ b/tests/test_nil.py
+@@ -184,7 +184,13 @@ def test_certificates_bound_the_excess_objective(monkeypatch):
+     monkeypatch.setattr(N, "NIL_STAB", 0.0)                  # the plain problems (unique here: X in general position)
+     c0, _, i0 = N.nil_fit(X, y, "lasso", alpha=0.05)
+     assert i0["ok"] and i0["eps"] == 0.0 and N._nil_gap_lasso(X, y, c0, 0.05) <= N.NIL_GAP_REL * (y @ y)
+-    assert 0.0 <= lasso_f(c) - lasso_f(c0) <= eps * (c0 @ c0) + 2 * N.NIL_GAP_REL * (y @ y)
++    # c0 is optimal only up to its own certificate (and floating-point roundoff of the objective's evaluation), so the
++    # stabilized solution may undercut it by that much: the lower bound is −certificate − roundoff, not exactly 0
++    f, f0 = lasso_f(c), lasso_f(c0)
++    roundoff = 64 * np.finfo(float).eps * max(1.0, abs(f), abs(f0))
++    certificate = N.NIL_GAP_REL * float(y @ y)
++    assert -certificate - roundoff <= f - f0
++    assert f - f0 <= eps * (c0 @ c0) + 2 * certificate + roundoff
+     cl0, _, il0 = N.nil_fit(X, y, "l1", l1_bound=1.0)
+     assert il0["ok"] and N._nil_gap_l1(X, y, cl0, 1.0) <= N.NIL_GAP_REL * (y @ y)
+     assert -N.NIL_GAP_REL * (y @ y) <= l1_f(cl) - l1_f(cl0) <= eps * (cl0 @ cl0) + 2 * N.NIL_GAP_REL * (y @ y)
+@@ -253,10 +259,14 @@ def test_estimator_accounting(model):
+     k = d["n_features"]
+     assert k == 6 and r.train_circuits == 8 * k and r.fixed_shots == 8 * k * 1024
+     c, sig = np.asarray(d["coef"]), np.asarray(d["sigma"])
+-    assert r.var1 == pytest.approx(float(np.sum(np.abs(c) * sig)) ** 2, rel=1e-12)
++    # the reference fit (exact training features) obeys the closed forms; mean / var1 are the protocol's moments at
++    # the training shots (qemx/stats.py)
++    assert r.estimate_kind == "protocol" and r.moments["train_shots"] == 1024
++    assert r.mean == pytest.approx(r.moments["mean"], abs=1e-15) and r.var1 == pytest.approx(r.moments["var1"])
++    assert r.reference_var1 == pytest.approx(float(np.sum(np.abs(c) * sig)) ** 2, rel=1e-12)
+     assert r.circuits == max(int(np.sum(c != 0)), 1)
+     assert r.gamma == pytest.approx(np.abs(c).sum() * ctx.readout_gamma(), rel=1e-12)
+-    assert r.mean == pytest.approx(d["intercept"] + c @ d["xt"], abs=1e-14)
++    assert r.reference_mean == pytest.approx(d["intercept"] + c @ d["xt"], abs=1e-14)
+     assert np.allclose(d["fitted"], d["X"] @ c + d["intercept"])
+     assert d["solver_ok"] and r.cal_circuits == 2 and len(r.cal_grad) == 2 * ctx.n
+     if model == "l1":
+@@ -266,7 +276,7 @@ def test_estimator_accounting(model):
+     req = Recipe.make("nil", "none", "none", "tensored", model=model, n_train=8, n_neighbors=5, target_split="equal")
+     re_ = REGISTRY["nil"].run(_qft_ctx(req), **req.p)
+     ce = np.asarray(re_.details["coef"])
+-    assert re_.circuits == k and re_.var1 == pytest.approx(k * float(np.sum((ce * sig) ** 2)), rel=1e-12)
++    assert re_.circuits == k and re_.reference_var1 == pytest.approx(k * float(np.sum((ce * sig) ** 2)), rel=1e-12)
+     assert np.allclose(ce, c)                                 # the split does not change the fit
+ 
+ 
+@@ -279,7 +289,9 @@ def test_estimator_is_exact_without_noise():
+     eps = r.details["eps"]
+     assert 0 < eps < 1e-8
+     assert np.abs(r.details["X"] @ r.details["coef"] - r.details["y_train"]).max() < 10 * eps
+-    assert r.mean == pytest.approx(ctx.ideal_value(), abs=10 * eps)
++    assert r.reference_mean == pytest.approx(ctx.ideal_value(), abs=10 * eps)
++    # the protocol (finite training shots) refits on noisy features: its mean deviates by at most a few training sd
++    assert abs(r.mean - ctx.ideal_value()) < 5 * math.sqrt(r.var_fixed) + 5 * r.moments["mean_mcse"] + 1e-12
+     # 'bare' may have twins (a Pauli that acts trivially on every training circuit): the group shares weight 1
+     names, c = list(r.details["names"]), np.asarray(r.details["coef"])
+     grp = next((g for g in r.details["twins"] if "bare" in g), ["bare"])
+@@ -320,8 +332,8 @@ def test_recalibrated_refit_paths_agree(monkeypatch):
+         ctx = _qft_ctx(rc)
+         r = REGISTRY["nil"].run(ctx, **rc.p)
+         th = np.asarray(r.cal_theta) * 1.3
+-        out.append((r.cal_fun(ctx._mitigator(th)), r.cal_fun(ctx._mitigator(np.asarray(r.cal_theta))), r.mean,
+-                    np.asarray(r.cal_grad)))
++        out.append((r.cal_fun(ctx._mitigator(th)), r.cal_fun(ctx._mitigator(np.asarray(r.cal_theta))),
++                    r.reference_mean, np.asarray(r.cal_grad)))
+     assert out[0][0] == pytest.approx(out[1][0], abs=1e-12)
+     assert out[0][1] == pytest.approx(out[0][2], abs=1e-12) and out[1][1] == pytest.approx(out[1][2], abs=1e-12)
+     assert np.allclose(out[0][3], out[1][3], atol=1e-6)
+diff --git a/tests/test_qa_v15.py b/tests/test_qa_v15.py
+new file mode 100644
+index 0000000..9cc889a
+--- /dev/null
++++ b/tests/test_qa_v15.py
+@@ -0,0 +1,330 @@
++"""1.5.0: regression tests for the defects of the 1.4.2 QA report (QEM_Explorer_1.4.2_QA_Report.md).
++
++Each test names the report section it covers. The numbers asserted here are closed-form (readout inverse norms,
++quasi-probability sums) or properties of the statistical result contract (qemx.stats), not values copied from a
++previous run."""
++import io
++import json
++import math
++import os
++import zipfile
++
++import numpy as np
++import pytest
++
++from qemx import compile as CP
++from qemx import templates as T
++from qemx.methods import REGISTRY, Context, Recipe, Runner
++from qemx.methods import base as MB
++from qemx.methods import nil as N
++from qemx.methods import pec as PEC
++from qemx.noise import NoiseSpec
++from qemx.recipes import (INSUFFICIENT_BUDGET, PRESETS as RECIPE_PRESETS, budget_needed_text, compare, preflight,
++                          preset, summary, table_rows)
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++
++
++def _qft(n=3):
++    tpl = T.build("qft", {"n": n})
++    return tpl, CP.build(tpl.spec, relabel=tpl.relabel)
++
++
++def _ctx(noise, readout="tensored", n=2):
++    tpl, comp = _qft(n)
++    rc = Recipe.make("raw", readout=readout)
++    return Context(comp, noise, tpl.observable, rc, Runner("numpy"), shots=4096)
++
++
++# ------------------------------------------------------------------ §4.3 readout inverse norm
++@pytest.mark.parametrize("e,h,expect", [(0.0, 0.0, 1.0), (0.1, 0.1, 1.25), (0.02, 0.05, 1.03 / 0.93),
++                                        (0.6, 0.6, 5.0), (0.9, 0.0, 1.9 / 0.1), (1.0, 1.0, 1.0)])
++def test_assignment_inverse_norm_closed_form(e, h, expect):
++    g = MB.assignment_inverse_gamma(e, h)
++    assert g == pytest.approx(expect, rel=1e-12)
++    A = np.array([[1 - e, h], [e, 1 - h]])
++    assert g == pytest.approx(np.abs(np.linalg.inv(A)).sum(0).max(), rel=1e-10)     # ‖A⁻¹‖₁ (max column sum)
++
++
++def test_assignment_inverse_norm_singular_and_invalid():
++    assert MB.assignment_inverse_gamma(0.5, 0.5) == math.inf
++    assert MB.assignment_inverse_gamma(0.3, 0.7) == math.inf
++    for e, h in [(-0.1, 0.0), (0.0, 1.2), (math.nan, 0.0), (0.1, math.inf)]:
++        with pytest.raises(ValueError):
++            MB.assignment_inverse_gamma(e, h)
++
++
++def test_two_qubit_readout_gamma_is_25_for_mostly_flipping_readout():
++    """QA §4.3: e = h = 0.6 on two qubits. Each assignment matrix has determinant 1 − e − h = −0.2 (invertible: it
++    mostly flips), ‖A⁻¹‖₁ = 1/0.2 = 5, and the product over the two bits is 25 (1.4.2 reported 1 by clamping)."""
++    ctx = _ctx(NoiseSpec(ro01=0.6, ro10=0.6), "tensored", n=2)
++    A = ctx.calibration()["A"]
++    assert all(np.linalg.det(a) == pytest.approx(-0.2, abs=1e-12) for a in A)
++    assert ctx.readout_gamma() == pytest.approx(25.0, rel=1e-12)
++    assert ctx.theta_invertible(ctx.cal_theta())
++    assert ctx.theta_condition() > 1.0
++
++
++@pytest.mark.parametrize("mode", ["tensored", "m3", "trex"])
++def test_singular_readout_is_a_clear_error(mode):
++    ctx = _ctx(NoiseSpec(ro01=0.5, ro10=0.5), mode, n=2)
++    with pytest.raises(ValueError, match="singular"):
++        ctx.calibration()
++    tpl, comp = _qft(2)
++    ideal, outs, _ = compare(comp, NoiseSpec(ro01=0.5, ro10=0.5), tpl.observable, [Recipe.make("raw", readout=mode)])
++    assert outs[0].result is None and "singular" in outs[0].error
++
++
++def test_theta_invertible_accepts_negative_determinant_and_rejects_singular():
++    ctx = _ctx(NoiseSpec(ro01=0.6, ro10=0.6), "tensored", n=2)
++    assert ctx.theta_invertible([0.6, 0.6, 0.6, 0.6])
++    assert not ctx.theta_invertible([0.5, 0.5, 0.1, 0.1])
++    assert not ctx.theta_invertible([math.nan, 0.1, 0.1, 0.1])
++
++
++# ------------------------------------------------------------------ §4.4 PEC inputs
++def test_depol_quasi_domain():
++    for bad in (1.0, 1.5, -0.01, math.nan, math.inf, "x"):
++        with pytest.raises(ValueError):
++            PEC.depol_quasi(bad, 1, "inverse")
++    with pytest.raises(ValueError):
++        PEC.depol_quasi(0.1, 0, "inverse")
++    with pytest.raises(ValueError):
++        PEC.depol_quasi(0.1, 1, "sideways")
++    assert PEC.depol_quasi(0.0, 2, "inverse") == [(1.0, "II")]
++    for k in (1, 2):
++        for c in ("inverse", "compensation"):
++            q = PEC.depol_quasi(0.05, k, c)
++            assert sum(w for w, _ in q) == pytest.approx(1.0, abs=1e-12), (k, c)     # trace preserving
++    d2, f = 16, 0.95
++    gamma = sum(abs(w) for w, _ in PEC.depol_quasi(0.05, 2, "inverse"))
++    assert gamma == pytest.approx((2 * (d2 - 1) / f - d2 + 2) / d2, rel=1e-12)
++    assert sum(abs(w) for w, _ in PEC.depol_quasi(0.05, 2, "compensation")) == pytest.approx(1.05 / 0.95, rel=1e-12)
++
++
++def test_learned_pec_refuses_a_non_invertible_channel():
++    from qemx.circuit import parse
++    spec = parse("cx 0 1", 2, "cx")
++    op = next(o for o in spec.ops if o.k == 2)
++    with pytest.raises(ValueError, match="not invertible"):
++        PEC.learned_quasi(NoiseSpec(p2=1.0), op)
++    q = PEC.learned_quasi(NoiseSpec(p2=0.02), op)
++    assert sum(w for w, _ in q) == pytest.approx(1.0, abs=1e-9)
++
++
++# ------------------------------------------------------------------ §4.4 NIL solver inputs
++def test_nil_fit_validates_its_inputs():
++    X, y = np.eye(3), np.ones(3)
++    bad = [dict(X=np.ones(3), y=y), dict(X=X, y=np.ones(2)), dict(X=X * np.nan, y=y), dict(X=X, y=y, alpha=-1.0),
++           dict(X=X, y=y, alpha=math.inf), dict(X=X, y=y, l1_ratio=1.5), dict(X=X, y=y, model="l1", l1_bound=-1.0),
++           dict(X=X, y=y, model="l1", l1_bound=math.nan), dict(X=np.zeros((0, 3)), y=np.zeros(0))]
++    for kw in bad:
++        kw.setdefault("model", "ridge")
++        with pytest.raises(ValueError):
++            N.nil_fit(kw.pop("X"), kw.pop("y"), kw.pop("model"), **kw)
++    c, b, info = N.nil_fit(X, y, "l1", l1_bound=0.0)                   # γ = 0: legitimate, c = 0
++    assert np.all(c == 0) and b == 0.0
++
++
++# ------------------------------------------------------------------ §4.1 FR id migration
++def test_feature_regression_legacy_id_is_migrated():
++    p, notes = MB.migrate_params("learning", dict(features="nil", model="ridge"))
++    assert p["features"] == "fr" and len(notes) == 1 and "legacy" in notes[0]
++    assert MB.migrate_params("learning", dict(features="fr"))[1] == []
++    assert MB.migrate_params("nil", dict(features="nil"))[1] == []        # only the learning estimator's value
++    assert Recipe.make("learning", features="nil").p["features"] == "fr"
++    assert Recipe.make("learning", features="nil").key() == Recipe.make("learning", features="fr").key()
++    for name, d in RECIPE_PRESETS.items():
++        assert d.get("features") != "nil", name
++
++
++def test_manifest_with_legacy_feature_id_validates_and_reports_migration():
++    import yaml
++    from qemx.phase import manifest as M
++    with open(os.path.join(ROOT, "manifests", "smoke.yaml"), encoding="utf-8") as f:
++        m = yaml.safe_load(f)
++    legacy = sorted(k for k, d in m["methods"].items() if d.get("estimator") == "learning" and d.get("features") == "nil")
++    assert legacy                                                       # the 1.3 manifests name FR "nil"
++    M.check(m)                                                          # still valid …
++    notes = M.migrations(m)
++    assert sorted(n.split(" — ")[0].replace("method ", "") for n in notes) == legacy
++    assert all("'fr'" in n for n in notes)
++    assert all(m["methods"][k]["features"] == "nil" for k in legacy)    # … and never rewritten (cell ids unchanged)
++    for bad in (dict(m, stages={"pilot": {}}), dict(m, methods=[1, 2]), dict(m, method_sets=["core"])):
++        with pytest.raises(ValueError):                                 # a clear message, not an AttributeError
++            M.check(bad)
++
++
++# ------------------------------------------------------------------ §4.5 budget preflight
++def test_insufficient_budget_is_detected_before_any_fit():
++    tpl, comp = _qft(3)
++    nil = preset("NIL · ℓ1 ≤ 2 (Chen et al.)")
++    small = preset("NIL · small budget")
++    ideal, outs, _ = compare(comp, NoiseSpec(p1=0.002, p2=0.02), tpl.observable, [nil, small, preset("Unmitigated")],
++                             shots=4096, check_budget=True)
++    o_nil, o_small, o_raw = outs
++    assert o_nil.status == INSUFFICIENT_BUDGET and o_nil.result is None
++    assert o_nil.preflight["min_budget"] > 4096 and not o_nil.preflight["feasible"]
++    assert "needs at least" in o_nil.error and budget_needed_text(o_nil.preflight["min_budget"]) in o_nil.error
++    assert o_small.result is not None, o_small.error                  # the budget-scaled preset fits 4 096 shots
++    assert o_small.preflight is None or o_small.preflight["feasible"]
++    assert o_raw.result is not None
++    samples, rows = table_rows(outs, ideal, 4096, 250.0, repeats=20)
++    assert len(rows) == 3                                               # the unaffordable row is shown, not dropped
++    bad = [r for r in rows if r.get("status") == INSUFFICIENT_BUDGET or "needs at least" in str(r)]
++    assert len(bad) == 1 and o_nil.recipe.title() not in samples
++    # without check_budget (studies) every recipe runs, so cost curves stay comparable across budgets
++    _, outs2, _ = compare(comp, NoiseSpec(p1=0.002, p2=0.02), tpl.observable, [small], shots=4096)
++    assert outs2[0].result is not None
++
++
++def test_preflight_minimum_is_inclusive():
++    tpl, comp = _qft(3)
++    rc = preset("NIL · small budget")
++    noise = NoiseSpec(p2=0.02)
++
++    def make_ctx(c, o, B):
++        return Context(c, noise, o, rc, Runner("numpy"), shots=B)
++    pf = preflight(rc, lambda c, o: make_ctx(c, o, 4096), comp, tpl.observable, 4096)
++    mb = int(pf["min_budget"])
++    assert pf["training"] == 6 * 4 * 128
++    assert preflight(rc, lambda c, o: make_ctx(c, o, mb), comp, tpl.observable, mb)["feasible"]
++    assert not preflight(rc, lambda c, o: make_ctx(c, o, mb - 1), comp, tpl.observable, mb - 1)["feasible"]
++
++
++# ------------------------------------------------------------------ §4.2 statistical result contract
++def test_learning_results_report_protocol_moments_and_reference():
++    tpl, comp = _qft(3)
++    rc = Recipe.make("learning", features="cdr", model="ols", n_train=8, train_shots=64)
++    ideal, outs, _ = compare(comp, NoiseSpec(p1=0.003, p2=0.03), tpl.observable, [rc], shots=100_000, seed=13)
++    r = outs[0].result
++    assert r.estimate_kind == "protocol"
++    assert r.reference_mean is not None and r.reference_var1 is not None
++    mom = r.moments
++    assert mom["repeats"] >= 500 and mom["finite"] >= 1 and mom["train_shots"] == 64
++    assert mom["mean"] == pytest.approx(r.mean)
++    # finite training data move the mean away from the exact-training fit by more than its MC error here
++    assert abs(r.mean - r.reference_mean) > 0 or "protocol" in r.estimate_kind
++    row = summary(outs[0], ideal, 100_000, 250.0)
++    assert row["estimate"] == pytest.approx(r.mean)
++
++
++# ------------------------------------------------------------------ §4.6 bounded export
++@pytest.fixture
++def _figs():
++    import plotly.graph_objects as go
++    return {"a": go.Figure(go.Scatter(x=[0, 1], y=[0, 1])), "b/c": go.Figure(go.Bar(x=[1], y=[2]))}
++
++
++@pytest.mark.parametrize("fault", ["chrome", "crash", "hang"])
++def test_export_never_waits_on_a_failing_renderer(fault, _figs, monkeypatch):
++    from qemx import bundle as BD
++    import time
++    import pandas as pd
++    monkeypatch.setenv("QEMX_RENDER_FAULT", fault)
++    monkeypatch.setenv("QEMX_RENDER_TIMEOUT", "4")
++    t0 = time.monotonic()
++    data = BD.make_zip("t", tables={"rows": pd.DataFrame(dict(x=[1, 2]))}, figures=_figs, state={"k": 1})
++    assert time.monotonic() - t0 < 15
++    z = zipfile.ZipFile(io.BytesIO(data))
++    names = set(z.namelist())
++    assert {"tables/rows.csv", "state/qem_explorer_state.json", "figures/a.json", "figures/b/c.json",
++            "README.txt"} <= names
++    readme = z.read("README.txt").decode()
++    assert "not rendered" in readme and "complete regardless" in readme
++    json.loads(z.read("figures/a.json"))
++
++
++def test_export_data_only_skips_rendering(_figs, monkeypatch):
++    from qemx import bundle as BD
++    monkeypatch.setenv("QEMX_RENDER_FAULT", "hang")                    # would hang if rendering were attempted
++    data = BD.make_zip("t", figures=_figs, images=False)
++    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
++    assert "figures/a.json" in names and not any(n.endswith(".png") for n in names)
++
++
++def test_render_worker_writes_atomically(tmp_path):
++    from qemx import render_worker as RW
++    RW._write(str(tmp_path / "x.png"), b"abc")
++    assert (tmp_path / "x.png").read_bytes() == b"abc" and not (tmp_path / "x.png.part").exists()
++
++
++# ------------------------------------------------------------------ §4.7 guide setups: atomic, replace and merge
++class _SS(dict):
++    __getattr__ = dict.get
++
++    def __setattr__(self, k, v):
++        self[k] = v
++
++
++@pytest.fixture
++def fake_state(monkeypatch):
++    import streamlit as st
++    from ui import state as S
++    mine = Recipe.make("zne", rule="linear").to_json()
++    fake = _SS(custom_recipes=[mine], custom_active=[Recipe.from_json(mine).key()], recipe_names=["Unmitigated",
++               "PEC · inverse"], page_tab={}, time_limit=0, n=3)
++    monkeypatch.setattr(st, "session_state", fake, raising=False)
++    monkeypatch.setattr(S, "push_widgets", lambda: None)
++    monkeypatch.setattr(S, "set_circuit", lambda spec: fake.update(n=spec.n, spec=spec))
++    monkeypatch.setattr(S, "_load_template_model", lambda key, params: fake.update(n=T.build(key, params).spec.n))
++    return fake, mine
++
++
++def test_setup_replace_makes_the_guide_contenders_the_only_active_ones(fake_state):
++    from qemx import learn as L
++    from ui import state as S
++    fake, mine = fake_state
++    S.apply_setup(dict(L.FOLDING_SETUP), "replace")
++    assert not fake.learn_error, fake.learn_error
++    assert fake.recipe_names == list(L.FOLDING_SETUP.get("recipes", []))
++    assert Recipe.from_json(mine).key() not in fake.custom_active      # deactivated …
++    assert mine in fake.custom_recipes                                  # … but never deleted
++    assert len(S.recipes()) == len(fake.recipe_names) + len(L.FOLDING_SETUP.get("custom", []))
++
++
++def test_setup_merge_adds_the_guide_contenders(fake_state):
++    from qemx import learn as L
++    from ui import state as S
++    fake, mine = fake_state
++    S.apply_setup(dict(L.FOLDING_SETUP), "merge")
++    assert not fake.learn_error, fake.learn_error
++    assert {"Unmitigated", "PEC · inverse"} <= set(fake.recipe_names)
++    assert Recipe.from_json(mine).key() in fake.custom_active
++    assert len(fake.custom_active) == 1 + len(L.FOLDING_SETUP.get("custom", []))
++
++
++def test_setup_is_atomic(fake_state, monkeypatch):
++    from qemx import learn as L
++    from ui import state as S
++    fake, mine = fake_state
++    def snap():
++        return json.dumps({k: v for k, v in fake.items() if k != "learn_error"}, default=str, sort_keys=True)
++    before = snap()
++    S.apply_setup(dict(L.FOLDING_SETUP, recipes=["Unmitigated", "No such preset"]))   # invalid: rejected up front
++    assert fake.learn_error.startswith("Could not set this up")
++    fake.learn_error = ""
++    assert snap() == before
++    monkeypatch.setattr(S, "push_widgets", lambda: (_ for _ in ()).throw(RuntimeError("boom")))   # fails mid-way
++    S.apply_setup(dict(L.FOLDING_SETUP))
++    assert "nothing was changed" in fake.learn_error and "boom" in fake.learn_error
++    fake.learn_error = ""
++    assert snap() == before
++    S.apply_setup(dict(L.FOLDING_SETUP), "sideways")
++    assert "unknown mode" in fake.learn_error
++
++
++def test_older_state_without_custom_active_keeps_every_saved_recipe_active(fake_state):
++    from ui import state as S
++    fake, mine = fake_state
++    del fake["custom_active"]
++    assert S.custom_active_keys() == [Recipe.from_json(mine).key()]
++
++
++# ------------------------------------------------------------------ record schema
++def test_record_schema_version_and_mixed_schema_guard():
++    from qemx.phase import store as ST
++    assert ST.SCHEMA_VERSION == "qemx.phase.cell/3"
++    assert ST.READABLE_SCHEMAS[-1] == ST.SCHEMA_VERSION
++    src = open(os.path.join(ROOT, "qemx", "phase", "run.py"), encoding="utf-8").read()
++    assert "older record schema" in src
+diff --git a/ui/cache.py b/ui/cache.py
+index 55c7786..3cb1741 100644
+--- a/ui/cache.py
++++ b/ui/cache.py
+@@ -57,7 +57,7 @@ def timeline(sig: str, compiled_, noise_json: str, kind: str, lam: float, foldin
+ def comparison(sig: str, _compiled, noise_json: str, _observable: Observable, _recipes: tuple, backend: str,
+                shots: int, _symmetry):
+     return compare(_compiled, NoiseSpec(**json.loads(noise_json)), _observable, list(_recipes), backend, shots,
+-                   _symmetry)
++                   _symmetry, check_budget=True)       # budget preflight: unaffordable protocols are not run
+ 
+ 
+ def noise_json(noise: NoiseSpec) -> str:
+diff --git a/ui/metrics.py b/ui/metrics.py
+index 1946910..f3b300b 100644
+--- a/ui/metrics.py
++++ b/ui/metrics.py
+@@ -8,9 +8,24 @@ from ui.tooltips import plain
+ 
+ # name -> (format, markdown help with $LaTeX$)
+ METRICS = {
+-    "estimate": ("%.4f", r"**Estimate** $\hat O=\mathbb E[\text{estimator}]$ — the method's exact mean (no shot noise)."
++    "estimate": ("%.4f", r"**Expected estimate** $\mathbb E[\hat O]$ of the protocol as specified — not one sampled run. "
++                         r"For linear estimators (ZNE, PEC, readout mitigation, …) it is exact. For learning methods "
++                         r"(CDR / FR / NIL) it is the mean over Monte-Carlo draws of the finite training data "
++                         r"$\mathbb E_D[m(D)]$ (see *estimate kind* and *bias MC ±*)."
+                          "\n\nCompare it with the ideal value: the difference is the bias. On hardware it is the "
+-                         "value computed from the measured counts, so it includes their shot noise."),
++                         "value computed from the measured counts — one experiment, including its shot noise."),
++    "estimate kind": (None, "What **estimate** is: *exact* (exact probabilities), *protocol* (Monte-Carlo expectation "
++                            "of the finite-training protocol), *measured* (one hardware experiment) or *not run* "
++                            "(insufficient budget)."),
++    "exact-fit value": ("%.4f", r"**Reference fit** of a learning method: the regression fitted to *exact* training "
++                                r"features — an oracle quantity no experiment sees. With finite training shots the fit "
++                                r"is a nonlinear function of noisy data, so the protocol's expected value (*estimate*) "
++                                r"differs: $\mathbb E_D[\hat f_D(x)]\neq f_{\mathbb E[D]}(x)$."),
++    "bias MC ±": ("%.4f", r"**Monte-Carlo standard error** of the protocol mean (and so of the bias) from the finite "
++                          r"number of training-data draws: $\sqrt{u/R}$. It is not experimental shot noise."),
++    "flags": (None, "Approximations and validity conditions of this result, e.g. *calibration-mean-first-order* (the "
++                    "readout calibration enters the variance to first order; its O(1/s) effect on the mean is not "
++                    "included), *conditional-on-success* (failed refits excluded), *measured*."),
+     "simulated (Playground)": ("%.4f", "The same contender's estimate in the Playground's simulation (same circuit, "
+                                        "observable and budget), for comparison with the device."),
+     "bias": ("%+.4f", r"**Bias** $b=\mathbb E[\hat O]-\langle O\rangle_{\rm ideal}$."
+@@ -24,7 +39,9 @@ METRICS = {
+     "sd (repeats)": ("%.4f", r"**Empirical spread** $\sqrt{\tfrac{1}{B-1}\sum_{k=1}^{B}(\hat O_k-\bar O)^2}$ of "
+                              r"$B=120$ simulated experiments with $N$ shots each."
+                              "\n\nShould agree with **sd**; a large difference flags a non-linear estimator."),
+-    "RMSE": ("%.4f", r"**Root-mean-square error** $\mathrm{RMSE}=\sqrt{b^2+\sigma^2}$ at the common budget $B$."
++    "RMSE": ("%.4f", r"**Root-mean-square error** $\mathrm{RMSE}=\sqrt{b^2+\sigma^2}$ at the common budget $B$ "
++                     r"(simulation). For one *measured* hardware run it is $|\hat O-\langle O\rangle_{\rm ideal}|$, "
++                     r"whose square is an unbiased estimate of the MSE."
+                      "\n\nThe error you should expect from one run. *Lowest RMSE = best method at this shot budget*; "
+                      "with more shots the variance shrinks and low-bias methods win."),
+     "γ": ("%.3f", r"**Sampling overhead** $\gamma$: the factor by which mitigation inflates the standard deviation, "
+diff --git a/ui/results.py b/ui/results.py
+index 350dafb..5c42bdf 100644
+--- a/ui/results.py
++++ b/ui/results.py
+@@ -378,12 +378,23 @@ def render(res, kp: str = "", stale: bool = False, bundle=None, zip_name: str =
+         st.subheader("Cost and accuracy")
+         df = pd.DataFrame(rows).drop(columns=[c for c in HIDDEN if c in pd.DataFrame(rows).columns])
+         if not res.get("hardware"):
+-            df["QPU s"] = N * float(ss.t_shot_us) * 1e-6     # every method spends the same budget N
++            ran = df["estimate kind"] != "not run" if "estimate kind" in df else True
++            df["QPU s"] = np.where(ran, N * float(ss.t_shot_us) * 1e-6, np.nan)   # the same budget N for every method run
+         for c_ in ("training shots", "calibration shots"):
+             if c_ in df and not df[c_].any():
+                 df = df.drop(columns=[c_])
+         if not df["failed repeats"].any():
+             df = df.drop(columns=["failed repeats"])
++        # contract columns only where they say something: the exact-fit reference and its MC error (learning methods),
++        # the estimate kind when not every row is exact, and approximation flags
++        if "exact-fit value" in df and not df["exact-fit value"].notna().any():
++            df = df.drop(columns=["exact-fit value"])
++        if "bias MC ±" in df and not (df["bias MC ±"].fillna(0) > 0).any():
++            df = df.drop(columns=["bias MC ±"])
++        if "estimate kind" in df and set(df["estimate kind"]) <= {"exact"}:
++            df = df.drop(columns=["estimate kind"])
++        if "flags" in df and not df["flags"].astype(bool).any():
++            df = df.drop(columns=["flags"])
+         if "status" in df:
+             if not df["status"].astype(bool).any():
+                 df = df.drop(columns=["status"])
+@@ -402,6 +413,11 @@ def render(res, kp: str = "", stale: bool = False, bundle=None, zip_name: str =
+         W.why("table")
+     st.subheader("Inside each method")
+     for i_o, o in enumerate(res["outs"]):
++        if o.result is None and getattr(o, "status", "") == "insufficient_budget":
++            st.info("**%s was not run.** %s Raise the shot budget in the sidebar, or reduce its training circuits, "
++                    "feature circuits or training shots (e.g. the *NIL · small budget* preset)."
++                    % (W.md_escape(o.title), W.md_escape(o.error)), icon=":material/savings:")
++            continue
+         if o.result is None:
+             st.error("%s failed: %s" % (W.md_escape(o.title), W.md_escape(o.error)))
+             continue
+@@ -569,6 +585,7 @@ def bundle_factory(res, state, source_label, title="Playground comparison", extr
+     holds this comparison and every cross-page result derived from it (cost and precision, PEC wall,
+     bias–variance), plus other pages' stored results."""
+     params = zip_params()
++    images = bool(st.session_state.get("w_zip_images", True))   # captured now (the ZIP runs in a thread)
+     extras_in = page_extras_inputs()               # references only; the work happens when the ZIP is requested
+     extra_tables = dict(extra_tables or {})
+ 
+@@ -592,7 +609,7 @@ def bundle_factory(res, state, source_label, title="Playground comparison", extr
+             script = None
+         return make_zip(title, tables=tables,
+                         data={"repeated_experiments": pd.DataFrame({k: pd.Series(v) for k, v in samples.items()})},
+-                        figures=figs, state=state, script=script,
++                        figures=figs, state=state, script=script, images=images,
+                         notes="Ideal ⟨O⟩ = %.6f; budget %d shots per method; %s. Folders: comparison/ (this result), "
+                               "cost_precision/, pec_wall/, bias_variance/ and the other pages' stored results." % (
+                                   res["ideal"], res["shots"], source_label))
+diff --git a/ui/sidebar.py b/ui/sidebar.py
+index 18b7418..62f4335 100644
+--- a/ui/sidebar.py
++++ b/ui/sidebar.py
+@@ -81,6 +81,11 @@ def sidebar(run_label: str | None = "Run simulation", run_key: str = "run_reques
+                        on_change=S.cb_tlimit, persist_state=P,
+                        help="A run stops cleanly after this many seconds; 0 = no limit. There is no limit on "
+                             "qubits or depth.")
++        S.wdefault("w_zip_images", True)
++        st.toggle("PNG/SVG images in ZIP downloads", key="w_zip_images", persist_state=P,
++                  help="On: every figure is also rendered as PNG and SVG (needs Kaleido and a Chrome/Chromium; a "
++                       "separate, time-limited process — tables and data never wait for it). Off: tables, data, "
++                       "state and each figure's Plotly JSON only; instant, no browser needed.")
+         st.divider()
+         if device.is_device(s.backend):
+             device_panel()
+diff --git a/ui/state.py b/ui/state.py
+index c4a58fe..7da63dc 100644
+--- a/ui/state.py
++++ b/ui/state.py
+@@ -68,7 +68,8 @@ def init():
+     s.t_shot_us = 250.0
+     s.time_limit = default_time_limit()
+     s.recipe_names = list(DEFAULT_SET)
+-    s.custom_recipes = []
++    s.custom_recipes = []            # the saved library of custom recipes (state files, recipe builder, guides)
++    s.custom_active = []             # keys of the saved custom recipes that are active contenders
+     s.results = None
+     s.timeline = None
+     s.page_tab = {}
+@@ -448,11 +449,21 @@ def parse_layout(text) -> list:
+     return out
+ 
+ 
++def custom_active_keys() -> list:
++    """Keys of the saved custom recipes that are active contenders. A session without the key (older state) treats
++    every saved custom recipe as active, as before 1.5."""
++    s = ss()
++    if s.get("custom_active") is None:
++        return [Recipe.from_json(d).key() for d in (s.get("custom_recipes") or [])]
++    return list(s.custom_active)
++
++
+ def recipes() -> list:
+     s = ss()
+     out, seen = [], set()
++    active = set(custom_active_keys())
+     for r in [preset(n, s.get("symmetry")) for n in s.recipe_names if n in RECIPE_PRESETS] + \
+-             [Recipe.from_json(d) for d in s.custom_recipes]:
++             [Recipe.from_json(d) for d in s.custom_recipes if Recipe.from_json(d).key() in active]:
+         if r.key() not in seen:                    # the same recipe twice would share one result row
+             seen.add(r.key())
+             out.append(r)
+@@ -819,6 +830,8 @@ def validate_params(estimator: str, params) -> dict:
+     schema = list(REGISTRY[estimator].params)
+     if not isinstance(params, dict) or not set(params) <= {p.name for p in schema}:
+         raise ValueError("unknown parameter in recipe %s" % estimator)
++    from qemx.methods.base import migrate_params
++    params = migrate_params(estimator, params)[0]           # legacy names (e.g. FR's features="nil") → current ids
+     chosen = {}
+     for p in schema:
+         v = params.get(p.name, p.default)
+@@ -1002,6 +1015,7 @@ def from_json(d: dict):
+     s.symmetry = v["symmetry"]
+     s.recipe_names = []
+     s.custom_recipes = v["recipes"]
++    s.custom_active = [Recipe.from_json(d).key() for d in v["recipes"]]     # a loaded state's recipes are all active
+     s.backend = v["backend"]
+     s.shots = v["shots"]
+     s.t_shot_us = v["t_shot_us"]
+@@ -1015,20 +1029,76 @@ SETUP_PAGE_TABS = {"playground": "w_pg_tabs", "cvp": "w_cvp_tabs", "mm": "w_mm_t
+ SETUP_WIDGET_PREFIXES = ("w_hh_", "w_cvp_", "w_mm_", "w_hw_", "w_b_")   # analysis-page controls a setup may preset
+ 
+ 
+-def apply_setup(setup: dict):
++SETUP_MODES = ("replace", "merge")
++
++
++def _validate_setup(setup: dict) -> list:
++    """Check every field of a setup before anything changes; returns the custom contenders as Recipe objects.
++    ValueError with the field's name on anything invalid (a setup is static data of qemx.learn, never executed)."""
++    from qemx import hamiltonian as HM
++    from qemx.circuit import parse
++    if "template" in setup:
++        key, params = setup["template"]
++        if key not in T.REGISTRY:
++            raise ValueError("template: unknown template %r" % (key,))
++        n = T.build(key, T.clamp_params(key, dict(T.defaults(key), **params))).spec.n
++    elif "circuit" in setup:
++        name, n, text = setup["circuit"]
++        parse(text, int(n), name)
++        n = int(n)
++    else:
++        n = int(ss().get("n", 1))
++    ob = setup.get("observable")
++    if ob:
++        if ob[0] == "z":
++            if not 0 <= int(ob[1]) < n:
++                raise ValueError("observable: qubit %s is outside the circuit's %d qubits" % (ob[1], n))
++        elif ob[0] == "hamiltonian":
++            HM.parse_pauli_sum(ob[1], n)
++        else:
++            raise ValueError("observable: unknown kind %r" % (ob[0],))
++    if "noise" in setup and setup["noise"] not in PRESETS:
++        raise ValueError("noise: unknown preset %r" % (setup["noise"],))
++    bad = [r for r in setup.get("recipes", []) if r not in RECIPE_PRESETS]
++    if bad:
++        raise ValueError("recipes: unknown preset%s %s" % ("" if len(bad) == 1 else "s", ", ".join(map(repr, bad))))
++    custom = []
++    for d in setup.get("custom") or []:
++        validate_params(d["estimator"], d.get("params", {}))
++        custom.append(Recipe.from_json(d))
++    return custom
++
++
++def apply_setup(setup: dict, mode: str = "replace"):
+     """Callback for the Learn page: put the Playground (or an analysis page) into a guide's starting state, then
+     ask the Learn page to switch pages (``goto``).
+ 
+     Keys: ``template`` or ``circuit``, ``observable``, ``noise``, ``recipes`` (preset names), ``custom`` (recipe
+-    dicts, validated like the recipe builder's and added to the custom contenders), ``backend``, ``compile``,
+-    ``batch``, ``tab`` (the Playground's), ``tabs`` ({page key: tab} for other pages), ``widgets`` (initial values of
+-    whitelisted analysis-page controls) and ``page``. Setups are static data of ``qemx.learn``; nothing in them is
+-    executed."""
++    dicts, validated like the recipe builder's), ``backend``, ``compile``, ``batch``, ``tab`` (the Playground's),
++    ``tabs`` ({page key: tab} for other pages), ``widgets`` (initial values of whitelisted analysis-page controls)
++    and ``page``. Setups are static data of ``qemx.learn``; nothing in them is executed.
++
++    Contenders. ``mode="replace"`` (default) makes the guide's contenders the *only* active ones, so a guide always
++    starts from the same experiment whatever was explored before; the user's saved custom recipes stay saved (inactive,
++    one click to reactivate). ``mode="merge"`` adds the guide's contenders to the active ones.
++
++    Atomic. Every field is validated first, and the change is applied as one transaction: if anything fails, the
++    session is restored exactly and the error is shown on the Learn page."""
+     from qemx import hamiltonian as HM
+     from qemx.circuit import parse
+     from qemx.resources import deadline
+     s = ss()
+     s.learn_error = ""
++    if mode not in SETUP_MODES:
++        s.learn_error = "Could not set this up: unknown mode %r" % (mode,)
++        return
++    try:
++        custom = _validate_setup(setup)
++    except Exception as e:                                   # noqa: BLE001 - nothing has changed yet
++        s.learn_error = "Could not set this up: %s: %s" % (type(e).__name__, str(e)[:200])
++        return
++    # transaction: a shallow snapshot (lists and dicts copied one level, since some helpers append in place)
++    snap = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in s.items()}
+     try:
+         if "template" in setup:
+             key, params = setup["template"]
+@@ -1047,20 +1117,24 @@ def apply_setup(setup: dict):
+         elif ob and ob[0] == "hamiltonian":
+             s.observable = HM.parse_pauli_sum(ob[1], int(s.n))
+             s.w_obs_ham = ob[1]
+-        if "noise" in setup and setup["noise"] in PRESETS:
++        if "noise" in setup:
+             s.noise, s.noise_preset = PRESETS[setup["noise"]], setup["noise"]
+-        if "recipes" in setup:
+-            s.recipe_names = [r for r in setup["recipes"] if r in RECIPE_PRESETS]
+-        if setup.get("custom"):                              # custom contenders, checked like the recipe builder's
+-            have = {Recipe.from_json(d).key() for d in s.custom_recipes}
+-            add = []
+-            for d in setup["custom"]:
+-                validate_params(d["estimator"], d.get("params", {}))
+-                r = Recipe.from_json(d)
++        if "recipes" in setup or custom:
++            names = [r for r in setup.get("recipes", [])]
++            library = list(s.get("custom_recipes") or [])
++            have = {Recipe.from_json(d).key() for d in library}
++            for r in custom:                                 # the guide's custom recipes join the saved library
+                 if r.key() not in have:
+                     have.add(r.key())
+-                    add.append(r.to_json())
+-            s.custom_recipes = list(s.custom_recipes) + add
++                    library.append(r.to_json())
++            keys = [r.key() for r in custom]
++            if mode == "replace":
++                s.recipe_names = names
++                s.custom_active = keys
++            else:
++                s.recipe_names = list(dict.fromkeys(list(s.get("recipe_names") or []) + names))
++                s.custom_active = list(dict.fromkeys(custom_active_keys() + keys))
++            s.custom_recipes = library
+         s.backend = setup.get("backend", "numpy")
+         s.compile = {**COMPILE_DEFAULT, **setup.get("compile", {"mode": "abstract"}), "initial_layout": ""}
+         b = setup.get("batch")
+@@ -1078,8 +1152,18 @@ def apply_setup(setup: dict):
+         for k, v in setup.get("widgets", {}).items():          # controls of the analysis pages (a fixed whitelist)
+             if k.startswith(SETUP_WIDGET_PREFIXES):
+                 s[k] = list(v) if isinstance(v, (list, tuple)) else v
+-    except Exception as e:                                   # noqa: BLE001 - a setup never crashes the page
+-        s.learn_error = "Could not set this up: %s: %s" % (type(e).__name__, str(e)[:200])
++        push_widgets()
++    except Exception as e:                                   # noqa: BLE001 - roll back; a setup never crashes the page
++        for k in [k for k in list(s.keys()) if k not in snap]:
++            try:
++                del s[k]
++            except Exception:                                # noqa: BLE001
++                pass
++        for k, v in snap.items():
++            try:
++                s[k] = v
++            except Exception:                                # noqa: BLE001 - a widget key that cannot be set now
++                pass
++        s.learn_error = "Could not set this up (nothing was changed): %s: %s" % (type(e).__name__, str(e)[:200])
+         return
+-    push_widgets()
+     s.goto = setup.get("page", "pages/1_Playground.py")
+diff --git a/ui/widgets.py b/ui/widgets.py
+index 16801d3..3909f27 100644
+--- a/ui/widgets.py
++++ b/ui/widgets.py
+@@ -353,7 +353,10 @@ def recipe_builder(noise: NoiseSpec, n: int, symmetry=None):
+         if r.key() in known:
+             s.rb_msg = "%s is already a contender." % r.title()
+         else:
+-            s.custom_recipes = s.custom_recipes + [r.to_json()]
++            saved = [Recipe.from_json(d).key() for d in s.custom_recipes]
++            if r.key() not in saved:                     # into the saved library …
++                s.custom_recipes = s.custom_recipes + [r.to_json()]
++            s.custom_active = S.custom_active_keys() + [r.key()]     # … and active
+             s.rb_msg = ""
+     st.button("Add this contender", icon=":material/add:", key="rb_add", on_click=add)
+     if s.get("rb_msg"):
+-- 
+2.43.0
+

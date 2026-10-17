@@ -1,0 +1,22 @@
+[project]
+name = "qem-explorer"
+version = "1.5.0"
+description = "Interactive exploration of quantum error mitigation (ZNE, PEC, learning, VD, symmetry verification, readout, twirling, DD) with Streamlit, Plotly and Qiskit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["streamlit>=1.64,<2", "plotly>=6.0", "numpy>=1.26", "scipy>=1.11", "pandas>=2.1",
+                "scikit-learn>=1.4", "matplotlib>=3.8", "pylatexenc>=2.10", "psutil>=5.9", "qiskit>=1.0",
+                "qiskit-aer>=0.13", "qiskit-ibm-runtime>=0.40", "kaleido>=1.0", "pyyaml>=6", "jsonschema>=4",
+                "threadpoolctl>=3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "playwright>=1.45"]
+phase = ["pyarrow>=14"]          # Parquet tables of qemx.phase (CSV is always written)
+
+[tool.setuptools.packages.find]
+include = ["qemx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: slower end-to-end tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

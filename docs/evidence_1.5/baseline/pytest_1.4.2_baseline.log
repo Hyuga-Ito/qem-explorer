@@ -1,0 +1,42 @@
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+...............................F........................................ [ 45%]
+........................................................................ [ 54%]
+........................................................................ [ 63%]
+........................................................................ [ 73%]
+........................................................................ [ 82%]
+........................................................................ [ 91%]
+.....................................................................    [100%]
+=================================== FAILURES ===================================
+_________________ test_certificates_bound_the_excess_objective _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3daca0b2f0>
+
+    def test_certificates_bound_the_excess_objective(monkeypatch):
+        """The certificates refer to the stabilized objective (‖y − Xc‖² + ε‖c‖² + penalty); relative to the plain
+        objective the stabilized solution is worse by at most ε‖c*‖² (c*: the plain optimum) plus its own gap."""
+        rng = np.random.default_rng(8)
+        X, y = rng.normal(size=(10, 14)), rng.normal(size=10)    # more features than training circuits
+        lasso_f = lambda c: float((y - X @ c) @ (y - X @ c) + 0.05 * np.abs(c).sum())
+        l1_f = lambda c: float((y - X @ c) @ (y - X @ c))
+        c, _, info = N.nil_fit(X, y, "lasso", alpha=0.05)
+        eps = info["eps"]
+        assert eps == pytest.approx((N.NIL_STAB * np.linalg.norm(X, 2)) ** 2)
+        assert info["ok"] and N._nil_gap_lasso(*_aug(X, y, eps), c, 0.05) <= N.NIL_GAP_REL * (y @ y)
+        cl, _, infol = N.nil_fit(X, y, "l1", l1_bound=1.0)
+        assert infol["ok"] and N._nil_gap_l1(*_aug(X, y, eps), cl, 1.0) <= N.NIL_GAP_REL * (y @ y)
+        assert np.abs(cl).sum() <= 1.0 + 1e-12
+        monkeypatch.setattr(N, "NIL_STAB", 0.0)                  # the plain problems (unique here: X in general position)
+        c0, _, i0 = N.nil_fit(X, y, "lasso", alpha=0.05)
+        assert i0["ok"] and i0["eps"] == 0.0 and N._nil_gap_lasso(X, y, c0, 0.05) <= N.NIL_GAP_REL * (y @ y)
+>       assert 0.0 <= lasso_f(c) - lasso_f(c0) <= eps * (c0 @ c0) + 2 * N.NIL_GAP_REL * (y @ y)
+E       assert 0.0 <= (0.2352318084405989 - 0.23523180844059893)
+E        +  where 0.2352318084405989 = <function test_certificates_bound_the_excess_objective.<locals>.<lambda> at 0x7f3dac8f1940>(array([ 0.        ,  0.40332699,  0.01477139,  0.        ,  0.15242571,\n       -0.31467375, -0.30802957,  1.22990286, -0.44738608,  0.        ,\n        0.        ,  0.9126285 , -0.41148491, -0.45190992]))
+E        +  and   0.23523180844059893 = <function test_certificates_bound_the_excess_objective.<locals>.<lambda> at 0x7f3dac8f1940>(array([ 0.        ,  0.40332699,  0.01477139,  0.        ,  0.15242571,\n       -0.31467375, -0.30802957,  1.22990286, -0.44738608,  0.        ,\n        0.        ,  0.9126285 , -0.41148491, -0.45190992]))
+
+tests/test_nil.py:187: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_nil.py::test_certificates_bound_the_excess_objective - asse...
+1 failed, 788 passed, 1 deselected in 790.44s (0:13:10)
