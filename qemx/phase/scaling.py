@@ -1,6 +1,6 @@
 r"""Noise scaling for the λ axis of the phase diagrams, and NoiseSpec models calibrated to a fake device.
 
-Two noise engines produce the λ sweep (see docs/v13_direction_A_design.md):
+Two noise engines produce the λ sweep (see docs/research/direction_A_v1_design.md):
 
 E2  the fake device itself, every gate error and every relaxation rate multiplied by s (``device_at``; the
     device specification ``fake_fez@s=2,eng=exact`` is executed exactly by ``qemx.device_exact``);

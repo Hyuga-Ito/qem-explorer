@@ -8,7 +8,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 streamlit run app.py
 ```
 
-Supported platforms are Linux, macOS and Windows with Python 3.10–3.13. `requirements-lock.txt` pins the versions the release was tested with.
+Supported platforms are Linux, macOS and Windows with Python 3.10–3.13 (CI: the lock on 3.12, the latest releases on 3.10, 3.12 and 3.13, a Windows smoke job; on Linux with `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2048`). `requirements-lock.txt` pins the versions the release was tested with.
 
 PNG/SVG figure export needs Kaleido ≥ 1 and a Chrome or Chromium browser. Without them, exports still contain every table and each figure's Plotly JSON.
 
@@ -17,7 +17,8 @@ PNG/SVG figure export needs Kaleido ≥ 1 and a Chrome or Chromium browser. With
 ```bash
 python -m pytest -q                     # everything (≈ 25 min on 2 cores)
 python -m pytest -q -m "not slow"       # without the end-to-end AppTest pages
-python scripts/validate_learning_moments.py --out validation_learning.json   # statistical check (≈ 2 min)
+python scripts/validate_learning_moments.py --out validation_learning.json   # learning methods (≈ 2 min)
+python scripts/validate_protocol_moments.py --out validation_protocol.json   # nonlinear ZNE / symmetry verification
 ```
 
 Rules that keep the suite meaningful:
@@ -38,4 +39,8 @@ Rules that keep the suite meaningful:
 
 ## Data and manifests
 
-Pre-registered manifests are never edited in place; write a new version. Record schemas carry a version. A run directory refuses to mix records of different statistical semantics.
+Pre-registered manifests are never edited in place; write a new version. Record schemas carry a version. A run directory refuses to mix records of different statistical semantics. The final holdout (`manifests/direction_A_v2_final_holdout.yaml`) is frozen; read `docs/FINAL_HOLDOUT.md` before touching it.
+
+## Hardware
+
+Never submit from a test. Real-provider paths require a campaign ledger (`qemx.campaign`); tests use mock providers (`tests/test_spending.py` shows the pattern) and never a real token.

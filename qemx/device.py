@@ -67,14 +67,35 @@ _LOCK = threading.RLock()
 #                                      total gate infidelity unchanged (exact engine only; see device_exact.py)
 # The compiled circuit (layout, routing, native gates) depends only on the base device, never on the modifiers, so
 # a noise sweep runs the identical circuit at every scale.
-_SPEC = re.compile(r"^([a-z][a-z0-9_]{0,40})(?:@([a-z]{1,4}=[A-Za-z0-9.+\-]{1,24}(?:,[a-z]{1,4}=[A-Za-z0-9.+\-]{1,24}){0,7}))?$")
-DEVICE_MODS = {"s": 1.0, "ro": 1.0, "eng": "aer", "hom": 0.0, "chi": 0.0}
+_SPEC = re.compile(r"^([a-z][a-z0-9_]{0,40})(?:@([a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\-]{1,24}(?:,[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\-]{1,24}){0,9}))?$")
+DEVICE_MODS = {"s": 1.0, "ro": 1.0, "eng": "aer", "hom": 0.0, "chi": 0.0, "g1": 1.0, "g2": 1.0, "t": 1.0}
+# Component scales (1.7.0, noise-composition study): g1 multiplies the reported one-qubit gate errors, g2 the
+# two-qubit gate errors, t the relaxation rates (T1 → T1/t, T2 → T2/t); they combine multiplicatively with s, which
+# scales all three together (s = 2 ≡ g1 = g2 = t = 2). ro scales readout, chi makes part of each gate's error coherent.
 ENGINES = ("aer", "exact")
+
+
+# Calibration snapshots (1.5.1): a DeviceModel built from any backend's calibration (``model_for``, e.g. a real
+# device's calibration of the day) registered under a simulator name "cal:<label>", so that ``compare``,
+# ``simulate`` and the methods run on exactly that model through the same device path as the fake devices.
+_REGISTERED: dict = {}
+_CAL_NAME = re.compile(r"^cal:[A-Za-z0-9_.\-]{1,80}$")
+
+
+def register_model(dm: "DeviceModel", label: str) -> str:
+    """The simulator name ("cal:<label>") of a calibration snapshot; registering the same label again replaces it,
+    so a label should identify the calibration (e.g. backend name and ``transfer.calibration_hash``)."""
+    import dataclasses as _dc
+    name = "cal:" + re.sub(r"[^A-Za-z0-9_.\-]", "_", str(label))[:80]
+    _REGISTERED[name] = _dc.replace(dm, name=name, noise={}, relax_cache={})   # its own caches, under its own name
+    return name
 
 
 def parse_device(name: str) -> tuple:
     """(base device, modifiers with defaults filled in). Raises ValueError for anything malformed: unknown keys,
     non-finite or out-of-range values, an unknown engine. The base name is not checked here (see is_device)."""
+    if isinstance(name, str) and name in _REGISTERED:      # a calibration snapshot: the model as measured
+        return name, dict(DEVICE_MODS)
     m = _SPEC.match(name or "") if isinstance(name, str) else None
     if not m:
         raise ValueError("not a device specification: %r" % (str(name)[:60],))
@@ -93,8 +114,8 @@ def parse_device(name: str) -> tuple:
             mods[k] = v
             continue
         x = float(v)
-        if not np.isfinite(x) or x < 0 or (k == "s" and x <= 0):
-            raise ValueError("device modifier %s=%r is out of range (s > 0, ro ≥ 0)" % (k, v))
+        if not np.isfinite(x) or x < 0 or (k in ("s", "g1", "g2", "t") and x <= 0):
+            raise ValueError("device modifier %s=%r is out of range (s, g1, g2, t > 0; ro ≥ 0)" % (k, v))
         if k == "hom" and x not in (0.0, 1.0):
             raise ValueError("hom must be 0 or 1")
         if k == "chi" and x > 1.0:
@@ -110,7 +131,10 @@ def base_name(name: str) -> str:
     try:
         return parse_device(name)[0]
     except ValueError:
-        return name
+        # a well-formed specification whose modifiers need another engine (``chi`` without ``eng=exact``) still
+        # names its base device (1.7.0: a coherent-fraction task could not find its device)
+        m = _SPEC.match(name or "") if isinstance(name, str) else None
+        return m.group(1) if m else name
 
 
 def device_spec(base: str, s: float = 1.0, ro: float = 1.0, eng: str = "aer", hom: bool = False,
@@ -137,6 +161,8 @@ def device_spec(base: str, s: float = 1.0, ro: float = 1.0, eng: str = "aer", ho
 def is_device(backend: str | None) -> bool:
     if not backend or not isinstance(backend, str):
         return False
+    if backend in _REGISTERED:
+        return True
     m = _SPEC.match(backend)
     return bool(m) and m.group(1) in FAKE_DEVICES
 
@@ -154,6 +180,9 @@ def device_label(backend: str) -> str:
     extra = []
     if mods["s"] != 1.0:
         extra.append("errors × %g" % mods["s"])
+    for k, what in (("g1", "1q gate errors"), ("g2", "2q gate errors"), ("t", "relaxation rates")):
+        if mods.get(k, 1.0) != 1.0:
+            extra.append("%s × %g" % (what, mods[k]))
     if mods["ro"] != 1.0:
         extra.append("readout × %g" % mods["ro"])
     if mods["hom"]:
@@ -245,19 +274,33 @@ def _props(backend):
         return None
 
 
-@lru_cache(maxsize=256)
-@qiskit_serial
 def get_model(name: str, phys: tuple) -> DeviceModel:
     """The fake device restricted to the physical qubits `phys` (compact index i = phys[i]); a specification with
-    modifiers (``fake_fez@s=2,ro=0``) gives the scaled model (see scale_model)."""
+    modifiers (``fake_fez@s=2,ro=0``) gives the scaled model (see scale_model); a registered calibration snapshot
+    (``register_model``) is returned as registered, for its own physical qubits only."""
+    dm = _REGISTERED.get(name) if isinstance(name, str) else None
+    if dm is not None:
+        if tuple(int(p) for p in phys) != tuple(int(p) for p in dm.phys):
+            raise ValueError("calibration snapshot %s covers physical qubits %s, not %s" % (name, list(dm.phys),
+                                                                                          list(phys)))
+        return dm
+    return _get_model(name, tuple(phys))
+
+
+get_model.cache_clear = lambda: _get_model.cache_clear()     # noqa: E731 - the cache of the fake-device models
+
+
+@lru_cache(maxsize=256)
+@qiskit_serial
+def _get_model(name: str, phys: tuple) -> DeviceModel:
     base, mods = parse_device(name)
     if base not in FAKE_DEVICES:
         raise ValueError("unknown fake device %r" % base)
     plain = model_for(fake_backend(base), phys, base)
     if mods["hom"]:
         plain = homogenize(plain, name)
-    if mods["s"] != 1.0 or mods["ro"] != 1.0:
-        plain = scale_model(plain, mods["s"], mods["ro"], name)
+    if any(mods[k] != 1.0 for k in ("s", "ro", "g1", "g2", "t")):
+        plain = scale_model(plain, mods["s"], mods["ro"], name, g1=mods["g1"], g2=mods["g2"], t=mods["t"])
     plain.name = name                           # the name keeps caches of different models and engines apart
     plain.coherent = float(mods["chi"])
     return plain
@@ -282,7 +325,8 @@ def homogenize(dm: DeviceModel, name: str | None = None) -> DeviceModel:
                        dm.two_qubit, durations, errors)
 
 
-def scale_model(dm: DeviceModel, s: float, ro: float = 1.0, name: str | None = None) -> DeviceModel:
+def scale_model(dm: DeviceModel, s: float, ro: float = 1.0, name: str | None = None, *, g1: float = 1.0,
+                g2: float = 1.0, t: float = 1.0) -> DeviceModel:
     """The device model with every reported gate error × s and every relaxation rate × s (T1 → T1/s, T2 → T2/s),
     and both readout flip probabilities × ro. Gate durations, couplings and the schedule are unchanged.
 
@@ -291,17 +335,24 @@ def scale_model(dm: DeviceModel, s: float, ro: float = 1.0, name: str | None = N
     relaxation rates together keeps that split, so every error source grows with s (linearly to first order; the
     exact fault rate of the scaled circuit is measured by qemx.phase.lightcone, not assumed). Out-of-range values
     raise: no gate error may exceed that of the completely depolarizing channel, 1 − 1/d, and no readout flip
-    probability may reach 1/2."""
-    s, ro = float(s), float(ro)
+    probability may reach 1/2.
+
+    Component scales (1.7.0): ``g1`` and ``g2`` multiply only the one- and two-qubit gates' reported errors, ``t``
+    only the relaxation rates; each combines with ``s``. Scaling relaxation without the reported gate errors moves
+    part of each gate's error from the depolarizing remainder to relaxation (the reported error stays as long as the
+    relaxation part does not exceed it) and lengthens nothing but the idle decoherence."""
+    s, ro, g1, g2, t = float(s), float(ro), float(g1), float(g2), float(t)
     if not (np.isfinite(s) and s > 0 and np.isfinite(ro) and ro >= 0):
         raise ValueError("scale factors must be finite, s > 0 and ro >= 0")
+    if not all(np.isfinite(x) and x > 0 for x in (g1, g2, t)):
+        raise ValueError("component scales g1, g2 and t must be finite and > 0")
     errors = {}
     for (nm, qa), e in dm.errors.items():
         if e is None:
             errors[(nm, qa)] = None
             continue
         d = 2 ** len(qa)
-        es = float(e) * s
+        es = float(e) * s * (g1 if len(qa) == 1 else g2 if len(qa) == 2 else 1.0)
         if es > 1 - 1 / d:
             raise ValueError("gate %s on %s: error %.4g × %g = %.4g exceeds the completely depolarizing value %.4g"
                              % (nm, qa, e, s, es, 1 - 1 / d))
@@ -311,7 +362,7 @@ def scale_model(dm: DeviceModel, s: float, ro: float = 1.0, name: str | None = N
         p01, p10 = q.p01 * ro, q.p10 * ro
         if p01 >= 0.5 or p10 >= 0.5:
             raise ValueError("qubit %d: readout flip probability × %g reaches 1/2" % (i, ro))
-        qubits.append(QubitInfo(q.t1 / s, q.t2 / s, p01, p10))
+        qubits.append(QubitInfo(q.t1 / (s * t), q.t2 / (s * t), p01, p10))
     return DeviceModel(name or "%s@s=%r,ro=%r" % (dm.name, s, ro), dm.phys, dm.dt, qubits, dm.two_qubit,
                        dict(dm.durations), errors)
 

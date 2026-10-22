@@ -13,6 +13,7 @@ curve.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import math
 
 import numpy as np
@@ -45,20 +46,122 @@ def cost_fields(r) -> dict:
     return dict(v=m.v, fixed_shots=m.fixed, cal_circuits=m.c, w_cal=m.w, u_train=m.u)
 
 
-def rmse_row(row: dict, budgets) -> np.ndarray:
-    """RMSE of a row at total budgets B (target, training and calibration shots included)."""
+def target_grid(row: dict) -> dict | None:
+    """The budget-dependent moment grid of a row of a target-nonlinear estimator (qemx.stats.moment_grid), or None."""
+    g = row.get("target moments")
+    if isinstance(g, dict):
+        return g
+    if not isinstance(g, str) or not g:
+        return None
+    return _parse_grid(g)
+
+
+@functools.lru_cache(maxsize=256)
+def _parse_grid(text: str):
+    import json
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def row_point(row: dict, B: float) -> dict:
+    """{rmse, bias, var, source} of a row at total budget B. Rows of target-nonlinear estimators use their
+    budget-dependent Monte-Carlo moments (``source`` monte-carlo / interpolated / first-order (validated) / first-order
+    (not validated)); every other row the analytic cost model with its constant bias (``source`` "analytic")."""
     from . import budget as BG
-    return BG.rmse_curve(float(row["bias"]), BG.CostModel.of_row(row), budgets)
+    from .stats import grid_at
+    m = BG.CostModel.of_row(row)
+    g = target_grid(row)
+    if g is None:
+        b = float(row["bias"])
+        var = BG.variance(m, B)
+        r = math.sqrt(b * b + var) if (math.isfinite(var) and math.isfinite(b)) else math.inf
+        return dict(rmse=r, bias=b, var=var, source="analytic")
+    N, s = BG.split(m, B)
+    if not N > 0 or not BG._model_finite(m):
+        return dict(rmse=math.inf, bias=math.nan, var=math.inf, source="infeasible")
+    gm = grid_at(g, N)
+    ref_bias = float(row.get("reference bias", math.nan))
+    b = gm["mean"] - (float(g["reference_mean"]) - ref_bias)
+    var = gm["var"] + (m.w / s if s > 0 else 0.0) + m.u
+    ok = math.isfinite(b) and math.isfinite(var)
+    return dict(rmse=math.sqrt(b * b + var) if ok else math.inf, bias=b, var=var, source=gm["source"],
+                abstention_rate=gm.get("abstention_rate"), fit_failure_rate=gm.get("fit_failure_rate"),
+                sd_range=gm.get("sd_range", math.nan))
+
+
+def rmse_row(row: dict, budgets) -> np.ndarray:
+    """RMSE of a row at total budgets B (target, training and calibration shots included). Target-nonlinear rows
+    (exponential ZNE, symmetry verification) use their budget-dependent moments (row_point)."""
+    from . import budget as BG
+    if target_grid(row) is None:
+        return BG.rmse_curve(float(row["bias"]), BG.CostModel.of_row(row), budgets)
+    return np.array([row_point(row, float(b))["rmse"] for b in np.atleast_1d(np.asarray(budgets, float))])
+
+
+def curve_sources(row: dict, budgets) -> list:
+    """What each point of rmse_row is: analytic, monte-carlo, interpolated, first-order (validated / not validated)."""
+    return [row_point(row, float(b))["source"] for b in np.atleast_1d(np.asarray(budgets, float))]
+
+
+def _scan(f, lo: float, hi: float = 1e15, n: int = 400) -> tuple:
+    grid = np.unique(np.geomspace(max(lo, 1.0), hi, n))
+    return grid, np.array([f(B) for B in grid])
 
 
 def budget_row(row: dict, eps: float) -> float:
+    """Smallest total budget with RMSE ≤ eps. Target-nonlinear rows: the first budget on a fine geometric scan (their
+    RMSE need not fall monotonically at small budgets), refined by bisection to the crossing."""
     from . import budget as BG
-    return BG.budget_for(float(row["bias"]), BG.CostModel.of_row(row), eps)
+    if target_grid(row) is None:
+        return BG.budget_for(float(row["bias"]), BG.CostModel.of_row(row), eps)
+    m = BG.CostModel.of_row(row)
+    lo = BG.min_budget(m)
+    if not math.isfinite(lo):
+        return math.inf
+    grid, r = _scan(lambda B: row_point(row, B)["rmse"], lo)
+    hit = np.flatnonzero(r <= eps)
+    if not len(hit):
+        return math.inf
+    i = int(hit[0])
+    if i == 0:
+        return float(grid[0])
+    a, b = grid[i - 1], grid[i]
+    for _ in range(60):
+        mid = math.sqrt(a * b)
+        if row_point(row, mid)["rmse"] <= eps:
+            b = mid
+        else:
+            a = mid
+    return float(b)
 
 
 def crossover_rows(row: dict, ref: dict):
+    """Budget above which ``row`` has the lower RMSE than ``ref`` and keeps it (None if never or always), on the
+    budget-dependent curves when either row is target-nonlinear."""
     from . import budget as BG
-    return BG.crossover(float(row["bias"]), BG.CostModel.of_row(row), float(ref["bias"]), BG.CostModel.of_row(ref))
+    if target_grid(row) is None and target_grid(ref) is None:
+        return BG.crossover(float(row["bias"]), BG.CostModel.of_row(row), float(ref["bias"]), BG.CostModel.of_row(ref))
+    lo = max(BG.min_budget(BG.CostModel.of_row(row)), BG.min_budget(BG.CostModel.of_row(ref)), 1.0)
+    if not math.isfinite(lo):
+        return None
+    grid, d = _scan(lambda B: row_point(row, B)["rmse"] - row_point(ref, B)["rmse"], lo)
+    ok = np.isfinite(d)
+    if not ok.any():
+        return None
+    better = (d < 0) & ok
+    if better.all() or not better[-1]:
+        return None
+    i = int(np.flatnonzero(~better)[-1])
+    a, b = grid[i], grid[i + 1]
+    for _ in range(60):
+        mid = math.sqrt(a * b)
+        if row_point(row, mid)["rmse"] - row_point(ref, mid)["rmse"] < 0:
+            b = mid
+        else:
+            a = mid
+    return float(b)
 
 
 def rmse_curve(bias: float, v: float, shots) -> np.ndarray:
@@ -132,7 +235,7 @@ def depth_sweep(make_compiled, depths, noise: NoiseSpec, observable_fn, recipes:
             r = o.result
             out.append(dict(depth=int(d), method=o.title, family=family(o.recipe), estimate=r.mean, ideal=ideal,
                             bias=r.mean - ideal, gamma=r.gamma, twoq=compiled.implemented.count("2q"),
-                            **cost_fields(r)))
+                            **cost_fields(r), **nonlinear_fields(r, ideal)))
         if progress:
             progress((j + 1) / len(depths))
     return out
@@ -152,11 +255,33 @@ def darts(outs_a: list, outs_b: list, ideal_a: float, ideal_b: float, N: int, B:
         xa = _samples(oa.result, N, B, rng) - ideal_a
         xb = _samples(ob.result, N, B, rng) - ideal_b
         ok = np.isfinite(xa) & np.isfinite(xb)
-        from .budget import variance as _var, CostModel as _CM
-        res.append(dict(method=oa.title, family=family(oa.recipe), x=xa[ok], y=xb[ok],
-                        bias=(oa.result.mean - ideal_a, ob.result.mean - ideal_b),
-                        var=(_var(_CM.of(oa.result), N), _var(_CM.of(ob.result), N)), failed=int((~ok).sum())))
+        (ba, va), (bb, vb) = protocol_point(oa.result, N, ideal_a), protocol_point(ob.result, N, ideal_b)
+        res.append(dict(method=oa.title, family=family(oa.recipe), x=xa[ok], y=xb[ok], bias=(ba, bb), var=(va, vb),
+                        failed=int((~ok).sum())))
     return res
+
+
+def nonlinear_fields(r, ideal: float) -> dict:
+    """Row fields that let curve functions use the budget-dependent moments of a target-nonlinear result."""
+    import json
+    g = (r.details or {}).get("target_moments") if getattr(r, "target_sampler", None) is not None else None
+    if not g or getattr(r, "reference_mean", None) is None:
+        return {}
+    return {"target moments": json.dumps(g, default=float), "reference bias": float(r.reference_mean) - ideal}
+
+
+def protocol_point(r, N: int, ideal: float) -> tuple:
+    """(bias, variance) of one experiment at total budget N: the analytic cost model, or for a target-nonlinear
+    result (exponential ZNE, symmetry verification) its Monte-Carlo protocol moments at that budget."""
+    from . import budget as BG
+    if getattr(r, "target_sampler", None) is not None and getattr(r, "estimate_kind", "") != "measured":
+        from .recipes import target_protocol
+        acc = BG.account(r, int(N))
+        tm = target_protocol(r, acc)
+        if tm is None:
+            return math.nan, math.inf
+        return tm.mean - ideal, tm.var + acc["var_cal"] + acc["var_train"]
+    return r.mean - ideal, BG.variance(BG.CostModel.of(r), int(N))
 
 
 def _samples(r, N, B, rng):
@@ -295,7 +420,7 @@ def sweep(compiled: Compiled, noise: NoiseSpec, observable, recipes: list, key: 
             r = o.result
             out.append(dict(value=float(v), method=o.title, family=family(o.recipe), estimate=r.mean,
                             bias=r.mean - ideal, gamma=r.gamma, ideal=ideal, circuits=r.circuits, error="",
-                            **cost_fields(r)))
+                            **cost_fields(r), **nonlinear_fields(r, ideal)))   # F01: budget-dependent moments
         if progress:
             progress((j + 1) / len(values))
     return out

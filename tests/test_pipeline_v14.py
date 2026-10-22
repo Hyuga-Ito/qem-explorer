@@ -194,7 +194,7 @@ stages:
 
 
 def _write(path, text):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return str(path)
 
@@ -229,9 +229,9 @@ def test_output_directory_is_bound_to_one_manifest(tmp_path):
     with pytest.raises(SystemExit):
         prepare_out(out, m2)
     prepare_out(out, m2, force=True)
-    with open(os.path.join(out, "run_history.jsonl")) as f:
+    with open(os.path.join(out, "run_history.jsonl"), encoding="utf-8") as f:
         assert len(f.read().splitlines()) == 3
-    with open(os.path.join(out, "manifest.yaml")) as f:
+    with open(os.path.join(out, "manifest.yaml"), encoding="utf-8") as f:
         assert "study: other" in f.read()
 
 
@@ -264,14 +264,14 @@ def test_collect_uses_the_manifest_cells_and_rewrites_every_table(small_run, tmp
     t = os.path.join(out, "tables")
     os.makedirs(t, exist_ok=True)
     pd.DataFrame([dict(cell_id="old", method="RAW", z_rmse=9.9)]).to_csv(os.path.join(t, "validation.csv"),
-                                                                         index=False)
+                                                                         index=False, encoding="utf-8")
     n = collect(out)
     assert n["used"] == 1 and n["stale"] == 1 and n["missing"] == 0 and n["budgets"] == 5
-    assert len(pd.read_csv(os.path.join(t, "validation.csv"))) == 0      # the old table did not survive
-    led = pd.read_csv(os.path.join(t, "ledger.csv"))
+    assert len(pd.read_csv(os.path.join(t, "validation.csv"), encoding="utf-8")) == 0      # the old table did not survive
+    led = pd.read_csv(os.path.join(t, "ledger.csv"), encoding="utf-8")
     assert set(led.cell_id) == {rec["cell_id"]} and len(led) == 2 * 5 * 2   # methods × budgets × policies
     assert sorted(led.B.unique()) == sorted({int(round(x)) for x in np.logspace(3, 5, 5)})
-    with open(os.path.join(t, "collect.json")) as f:
+    with open(os.path.join(t, "collect.json"), encoding="utf-8") as f:
         assert json.load(f)["stale_ids"] == ["f" * 20]
     n_all = collect(out, only_manifest=False)
     assert n_all["used"] == 2
@@ -293,7 +293,7 @@ def test_one_bad_record_never_aborts_collect(small_run, tmp_path, monkeypatch):
     monkeypatch.setattr(S, "ledger_rows", flaky)
     n = S.collect(out)
     assert n["tables"]["methods"]["rows"] == 0 and n["tables"]["errors"]["rows"] == 1
-    er = pd.read_csv(os.path.join(out, "tables", "errors.csv"))
+    er = pd.read_csv(os.path.join(out, "tables", "errors.csv"), encoding="utf-8")
     assert er.status.tolist() == ["collect-error"] and "KeyError" in er.error[0]
 
 
@@ -305,7 +305,7 @@ def test_parquet_failure_removes_the_old_parquet(tmp_path):
     pd.DataFrame([dict(a=1)]).to_parquet(base + ".parquet")
     info = _write_table([dict(a=1, b=1), dict(a=2, b="text")], base)     # a mixed column: no parquet
     assert not info["parquet"] and "warning" in info and not os.path.exists(base + ".parquet")
-    assert len(pd.read_csv(base + ".csv")) == 2
+    assert len(pd.read_csv(base + ".csv", encoding="utf-8")) == 2
 
 
 def test_ledger_rows_accept_policy_names_and_use_the_cells_bounds(small_run):
@@ -383,7 +383,7 @@ def test_collect_warns_instead_of_failing_on_a_bad_manifest_copy(small_run, tmp_
     src, rec = small_run
     out = str(tmp_path / "o")
     shutil.copytree(src, out)
-    with open(os.path.join(out, "manifest.yaml"), "a") as f:
+    with open(os.path.join(out, "manifest.yaml"), "a", encoding="utf-8") as f:
         f.write("\nunknown_key: 1\n")                        # no longer a valid manifest
     n = collect(out)
     assert n["used"] == 1 and n["warnings"] and "could not be expanded" in n["warnings"][0]

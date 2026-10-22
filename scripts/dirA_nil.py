@@ -230,6 +230,8 @@ def fig_head_to_head(H: pd.DataFrame, reference: str = REFERENCE_RULE):
 
 # ------------------------------------------------------------------ driver: input → computation → output
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("data", help="the run directory (contains tables/)")
     ap.add_argument("--out", default="figs_nil")

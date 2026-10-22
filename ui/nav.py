@@ -26,9 +26,24 @@ DRILLDOWNS = {
 }
 
 
+MIN_STREAMLIT = (1, 64)      # the oldest Streamlit CI runs the interaction tests with (the lock pins 1.66.0)
+
+
+def streamlit_version_ok(version: str | None = None) -> bool:
+    """Whether the running Streamlit is at least MIN_STREAMLIT (pre-release suffixes are ignored)."""
+    import re
+    v = version or st.__version__
+    parts = [int(x) for x in re.findall(r"\d+", v)[:2]] + [0, 0]
+    return tuple(parts[:2]) >= MIN_STREAMLIT
+
+
 def sidebar_nav():
     with st.sidebar:
         st.markdown("### QEM Explorer")
+        if not streamlit_version_ok():
+            st.warning("Streamlit %s is older than the oldest tested %d.%d. Install the pinned versions: "
+                       "`python -m pip install -r requirements-lock.txt`." % ((st.__version__,) + MIN_STREAMLIT),
+                       icon=":material/warning:")
         for path, label, icon, live in PAGES:
             try:
                 if live:

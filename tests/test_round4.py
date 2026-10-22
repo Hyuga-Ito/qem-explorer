@@ -29,6 +29,7 @@ from qemx.timeline import preview
 from qemx.viz import composer as CV
 from qemx.viz import states as SV
 from qemx.viz import topology as TOPO
+from qemx.textio import child_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ABSTRACT = CP.CompileOptions()
@@ -359,9 +360,9 @@ def test_export_script_reproduces_a_heavy_hex_hamiltonian_run(tmp_path):
                  recipes=[r.to_json() for r in recipes], backend="numpy", shots=4096, t_shot_us=250.0)
     src = EX.script(state, {x.title: x.result.mean for x in outs})
     p = tmp_path / "export.py"
-    p.write_text(src)
+    p.write_text(src, encoding="utf-8")
     out = subprocess.run([sys.executable, str(p), "--numpy"], capture_output=True, text=True, timeout=600,
-                         cwd=tmp_path)
+                         cwd=tmp_path, encoding="utf-8", env=child_env())
     assert out.returncode == 0, out.stderr[-2000:]
     assert sum(ln.rstrip().endswith("✓") for ln in out.stdout.splitlines()) == len(recipes), out.stdout[-2000:]
     assert "0, 1, 99" in src                        # the out-of-range layout travels in the state and is ignored

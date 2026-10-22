@@ -12,7 +12,7 @@ from qemx import insight as IN
 from qemx import report as RP
 from qemx.bundle import make_zip
 from qemx.methods import REGISTRY
-from qemx.recipes import HIDDEN
+from qemx.recipes import HIDDEN, measured_view
 from qemx.viz import charts as CH
 from qemx.viz import composer as CV
 from qemx.viz import theme as TH
@@ -412,6 +412,10 @@ def render(res, kp: str = "", stale: bool = False, bundle=None, zip_name: str = 
             df = df.drop(columns=["estimate kind"])
         if "flags" in df and not df["flags"].astype(bool).any():
             df = df.drop(columns=["flags"])
+        for c_ in ("fit failures", "failure policy", "MC experiments", "signed error to reference", "absolute error"):
+            if c_ in df and not df[c_].notna().any():
+                df = df.drop(columns=[c_])
+        df = measured_view(df)              # one hardware experiment: signed / absolute error, not bias / RMSE
         if "status" in df:
             if not df["status"].astype(bool).any():
                 df = df.drop(columns=["status"])
@@ -421,7 +425,9 @@ def render(res, kp: str = "", stale: bool = False, bundle=None, zip_name: str = 
                     "and calibration circuits together — so the table is an equal-cost comparison." % f"{N:,}")
                    + (" On hardware the columns *target / training / calibration shots* and *circuits* are what was "
                       "actually sent; *sd* is the standard error of that allocation." if res.get("hardware") else ""))
-        MX.legend(("bias", "sd", "RMSE", "γ", "circuits", "accepted", "target shots", "QPU s"))
+        MX.legend(("signed error to reference", "bootstrap sd", "absolute error", "γ", "circuits", "target shots",
+                   "QPU s") if "absolute error" in df else ("bias", "sd", "RMSE", "γ", "circuits", "accepted",
+                                                            "target shots", "QPU s"))
         st.dataframe(df, hide_index=True, width="stretch", column_config=MX.column_config(df.columns))
         d1, d2, _ = st.columns([1, 1, 3])
         d1.download_button("Table (CSV)", df.to_csv(index=False), "qem_comparison.csv", "text/csv", key=kp + "tbl_csv")
@@ -612,9 +618,11 @@ def bundle_factory(res, state, source_label, title="Playground comparison", extr
         df = pd.DataFrame(res["rows"])
         tables = {}
         if len(df):
+            df = measured_view(df)                       # measured experiments: signed / absolute error columns
             tables["comparison/cost_table"] = df
-            tables["comparison/estimates"] = df[[c for c in ("method", "estimate", "bias", "sd", "RMSE")
-                                                 if c in df.columns]]
+            tables["comparison/estimates"] = df[[c for c in ("method", "estimate", "bias", "sd", "RMSE",
+                                                             "signed error to reference", "bootstrap sd",
+                                                             "absolute error") if c in df.columns]]
         tables.update({"comparison/" + k: v for k, v in extra_tables.items()})
         f2, t2 = RP.cross_tab(res, params, extras)
         figs.update(f2)

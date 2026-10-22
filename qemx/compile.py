@@ -10,6 +10,8 @@ import math
 import re
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from .circuit import CircuitSpec, Op, from_qiskit, to_qiskit
 from .resources import qiskit_serial
 
@@ -21,7 +23,13 @@ from .resources import QISKIT_LOCK   # one process-wide lock for every entry int
 
 # A phase input "ph:t" is (|0⟩ + e^{2πi t}|1⟩)/√2 = P(2πt)·H|0⟩, t in turns. Register inputs such as the phase ramp
 # |ramp:k⟩ = F†|k⟩ = (1/√N) Σ_j e^{-2πijk/N}|j⟩ are products of these (see qemx/sweep.py).
-_PHASE = re.compile(r"^ph:(-?\d{1,6}(?:\.\d{1,15})?(?:e-?\d{1,3})?)$", re.ASCII)
+# A general input "bloch:θ,φ" (1.5.1) is cos(θ/2)|0⟩ + e^{iφ} sin(θ/2)|1⟩ = P(φ)·RY(θ)|0⟩, angles in radians: the
+# polar angle θ and the azimuth φ of the Bloch vector. Every pure single-qubit state has one canonical token
+# (``state_token``): a named state, a phase input, or bloch:θ,φ with 0 < θ < π, 0 ≤ φ < 2π.
+_NUM = r"(-?\d{1,6}(?:\.\d{1,15})?(?:e-?\d{1,3})?)"
+_PHASE = re.compile(r"^ph:%s$" % _NUM, re.ASCII)
+_BLOCH = re.compile(r"^bloch:%s,%s$" % (_NUM, _NUM), re.ASCII)
+STATE_TOL = 1e-9                          # two inputs are the same state when |⟨a|b⟩| ≥ 1 − STATE_TOL
 
 
 def phase_token(turns: float) -> str:
@@ -30,8 +38,15 @@ def phase_token(turns: float) -> str:
     return "ph:%.12g" % (0.0 if abs(t - 1.0) < 1e-12 else t)
 
 
+def bloch_token(theta: float, phi: float = 0.0) -> str:
+    """The canonical token of cos(θ/2)|0⟩ + e^{iφ} sin(θ/2)|1⟩ (radians): a named or phase input when the state is
+    one, else bloch:θ,φ with θ in (0, π) and φ in [0, 2π)."""
+    return state_token(np.array([math.cos(theta / 2), np.exp(1j * phi) * math.sin(theta / 2)]))
+
+
 def valid_input(token) -> bool:
-    return isinstance(token, str) and (token in INPUT_STATES or bool(_PHASE.match(token)))
+    return isinstance(token, str) and (token in INPUT_STATES or bool(_PHASE.match(token))
+                                       or bool(_BLOCH.match(token)))
 
 
 def input_ops(token: str) -> list:
@@ -39,26 +54,78 @@ def input_ops(token: str) -> list:
     if token in INPUT_STATES:
         return [(g, ()) for g in INPUT_STATES[token]]
     m = _PHASE.match(token or "")
-    if not m:
-        raise ValueError("unknown input %r (use %s or ph:<turns>)" % (str(token)[:20], ", ".join(INPUT_STATES)))
-    t = float(m.group(1)) % 1.0
-    return [("h", ())] + ([("p", (2 * math.pi * t,))] if abs(t) > 1e-15 and abs(t - 1) > 1e-15 else [])
+    if m:
+        t = float(m.group(1)) % 1.0
+        return [("h", ())] + ([("p", (2 * math.pi * t,))] if abs(t) > 1e-15 and abs(t - 1) > 1e-15 else [])
+    m = _BLOCH.match(token or "")
+    if m:
+        th, ph = float(m.group(1)), float(m.group(2))
+        return ([("ry", (th,))] if th != 0 else []) + ([("p", (ph,))] if ph != 0 else [])
+    raise ValueError("unknown input %r (use %s, ph:<turns> or bloch:<θ>,<φ>)" % (str(token)[:24],
+                                                                               ", ".join(INPUT_STATES)))
+
+
+def input_state(token: str) -> np.ndarray:
+    """The input's single-qubit state vector (amplitudes of |0⟩, |1⟩)."""
+    from .circuit import gate_matrix
+    v = np.array([1.0, 0.0], dtype=complex)
+    for g, pr in input_ops(token):
+        v = np.asarray(gate_matrix(g, pr), dtype=complex) @ v
+    return v
+
+
+def state_token(v) -> str:
+    """The canonical input token of a pure single-qubit state (any global phase and norm)."""
+    v = np.asarray(v, dtype=complex).reshape(2)
+    nrm = float(np.linalg.norm(v))
+    if not np.isfinite(nrm) or nrm < 1e-12:
+        raise ValueError("not a state")
+    v = v / nrm
+    for tok in INPUT_STATES:                                     # the named states first
+        if abs(np.vdot(input_state(tok), v)) >= 1 - STATE_TOL:
+            return tok
+    a0, a1 = abs(v[0]), abs(v[1])
+    phi = float(np.angle(v[1] / v[0])) % (2 * math.pi) if a0 > 1e-12 and a1 > 1e-12 else 0.0
+    if abs(a0 - a1) < 1e-10:                                     # an equator state: a phase input (turns)
+        tok = phase_token(phi / (2 * math.pi))
+    else:
+        theta = 2 * math.atan2(a1, a0)
+        tok = "bloch:%.12g,%.12g" % (theta, 0.0 if abs(phi - 2 * math.pi) < 1e-12 else phi)
+    if abs(np.vdot(input_state(tok), v)) < 1 - STATE_TOL:       # pragma: no cover - a formatting slip
+        raise ValueError("could not express the state as an input token")
+    return tok
+
+
+def same_input(a: str, b: str) -> bool:
+    """Whether two input tokens prepare the same state (up to a global phase)."""
+    if a == b:
+        return True
+    try:
+        return abs(np.vdot(input_state(a), input_state(b))) >= 1 - STATE_TOL
+    except ValueError:
+        return False
 
 
 def input_short(token: str) -> str:
-    """A label that fits in front of a wire: the token itself, or '+φ' for a phase input."""
-    return token if token in INPUT_STATES else "+φ"
+    """A label that fits in front of a wire: the token itself, '+φ' for a phase input, 'ψ' for a general one."""
+    return token if token in INPUT_STATES else "+φ" if _PHASE.match(token or "") else "ψ"
 
 
 def input_label(token: str) -> str:
-    """Short text for a qubit input: |0⟩, |+i⟩, or a phase input |φt⟩ with t in turns, e.g. |φ.875⟩."""
+    """Short text for a qubit input: |0⟩, |+i⟩, a phase input |φt⟩ with t in turns (e.g. |φ.875⟩), or a general
+    input |θ,φ⟩ in radians (e.g. |θ=π/3⟩, |θ=1.2,φ=π/2⟩)."""
     if token in INPUT_STATES:
         return "|%s⟩" % token
     m = _PHASE.match(token or "")
-    if not m:
-        return str(token)[:20]
-    t = ("%.4f" % (float(m.group(1)) % 1.0)).rstrip("0").rstrip(".")
-    return "|φ%s⟩" % (t[1:] if t.startswith("0.") else t)
+    if m:
+        t = ("%.4f" % (float(m.group(1)) % 1.0)).rstrip("0").rstrip(".")
+        return "|φ%s⟩" % (t[1:] if t.startswith("0.") else t)
+    m = _BLOCH.match(token or "")
+    if m:
+        from .circuit import fmt_angle_tex
+        th, ph = float(m.group(1)), float(m.group(2))
+        return "|θ=%s%s⟩" % (fmt_angle_tex(th, 4), "" if ph == 0 else ",φ=%s" % fmt_angle_tex(ph, 4))
+    return str(token)[:20]
 
 
 @dataclass(frozen=True)

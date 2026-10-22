@@ -9,6 +9,7 @@ import time
 
 import numpy as np
 import pytest
+from qemx.textio import child_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -219,9 +220,9 @@ def test_exported_script_with_two_same_title_contenders_reproduces_both(tmp_path
                                  values=list(tpl.observable.values)), symmetry=None,
                  recipes=[a.to_json(), b.to_json()], backend="numpy", shots=4096, t_shot_us=250.0)
     p = tmp_path / "export.py"
-    p.write_text(EX.script(state, {o.title: o.result.mean for o in outs}))
+    p.write_text(EX.script(state, {o.title: o.result.mean for o in outs}), encoding="utf-8")
     out = subprocess.run([sys.executable, str(p), "--numpy"], capture_output=True, text=True, timeout=600,
-                         cwd=tmp_path)
+                         cwd=tmp_path, encoding="utf-8", env=child_env())
     assert out.returncode == 0, out.stderr[-2000:]
     assert sum(ln.rstrip().endswith("✓") for ln in out.stdout.splitlines()) == 2, out.stdout
 

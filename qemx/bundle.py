@@ -60,14 +60,47 @@ def _unique(name: str, used: set) -> str:
 _RENDER_LOCK = threading.Lock()          # one renderer process at a time (downloads run in their own threads)
 RENDER_TIMEOUT_S = 90.0                  # wall-clock limit of one export's image rendering (QEMX_RENDER_TIMEOUT)
 RENDER_START_TIMEOUT_S = 30.0            # … of which the renderer may spend this long before its first image
+_WORKER_CMD = ("-m", "qemx.render_worker")   # arguments after the interpreter (tests substitute a stand-in)
+
+
+def _spawn_kwargs() -> dict:
+    """Start the renderer in its own process group, so that the whole tree (the worker and the browser it starts) can
+    be stopped together (1.5.1, review 6.5)."""
+    import subprocess
+    if os.name == "nt":
+        return dict(creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    return dict(start_new_session=True)
+
+
+def _kill_tree(proc) -> None:
+    """Stop the renderer and every process it started (POSIX: its process group; Windows: taskkill /T)."""
+    import signal
+    import subprocess
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:                                    # noqa: BLE001 - already gone, or no permission
+        pass
+    try:
+        proc.kill()
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        proc.wait(5)
+    except Exception:                                    # noqa: BLE001
+        pass
 
 
 def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg"), timeout: float | None = None) -> tuple:
     """({(name, fmt): bytes}, error message or ''). Rendering runs in a child process (``qemx.render_worker``) with a
     wall-clock limit: a missing or crashing Chrome, a dead renderer or a hang costs at most ``timeout`` seconds
     (default RENDER_TIMEOUT_S, env QEMX_RENDER_TIMEOUT; at most RENDER_START_TIMEOUT_S before the first image), and
-    every image finished before that is kept. The numerical tables, configuration and figure JSON never depend on this
-    step: make_zip writes them regardless."""
+    every image finished before that is kept. The limit includes the time spent waiting for another export's renderer
+    (one renderer runs at a time): a request that cannot start within it returns without images. On a timeout the
+    renderer's whole process tree is stopped, not only the Python worker. The numerical tables, configuration and
+    figure JSON never depend on this step: make_zip writes them regardless."""
     out, err = {}, ""
     if not figs:
         return out, err
@@ -81,9 +114,16 @@ def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg"), timeou
     names = list(figs)
     stems = ["f%03d" % i for i in range(len(names))]
     total = len(names) * len(formats)
+    t_req = time.monotonic()
+    if not _RENDER_LOCK.acquire(timeout=max(limit, 0.0)):
+        return out, ("the image renderer was busy with another export for %.0f s (the time limit); the ZIP holds "
+                     "every table and the figures' JSON" % (time.monotonic() - t_req))
+    waited = time.monotonic() - t_req
+    limit = max(limit - waited, 0.0)
+    start_limit = min(start_limit, limit)
     jobdir = tempfile.mkdtemp(prefix="qemx-render-")
     proc = None
-    with _RENDER_LOCK:
+    try:
         try:
             with open(os.path.join(jobdir, "job.json"), "w", encoding="utf-8") as f:
                 json.dump(dict(items=[[st, figs[nm].to_json()] for st, nm in zip(stems, names)],
@@ -92,8 +132,9 @@ def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg"), timeou
             env = dict(os.environ)
             env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             with open(os.path.join(jobdir, "worker.log"), "wb") as log:
-                proc = subprocess.Popen([sys.executable, "-m", "qemx.render_worker", jobdir], cwd=jobdir, env=env,
-                                        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+                proc = subprocess.Popen([sys.executable, *_WORKER_CMD, jobdir], cwd=jobdir, env=env,
+                                        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                        **_spawn_kwargs())
                 t0 = time.monotonic()
 
                 def finished():
@@ -120,20 +161,24 @@ def render_images(figs: dict, scale: float = 3.0, formats=("png", "svg"), timeou
                 why = ""
                 ep = os.path.join(jobdir, "error.txt")
                 if os.path.exists(ep):
-                    with open(ep, encoding="utf-8", errors="replace") as f:
-                        why = f.read().strip()
+                    try:
+                        with open(ep, encoding="utf-8") as f:     # written as UTF-8 by qemx.render_worker
+                            why = f.read().strip()
+                    except UnicodeDecodeError as ue:              # reported as such, never silently replaced
+                        why = "the renderer's error report is not valid UTF-8 (byte %d)" % ue.start
                 err = (why or "the image renderer stopped unexpectedly (exit code %s)" % proc.returncode) + (
                     " (%d of %d images rendered)" % (len(out), total) if out else "")
         except Exception as e:                           # noqa: BLE001 - the export continues without images
             err = "%s: %s" % (type(e).__name__, str(e)[:300])
         finally:
-            if proc is not None and proc.poll() is None:
-                proc.kill()
-                try:
-                    proc.wait(5)
-                except Exception:                        # noqa: BLE001
-                    pass
+            if proc is not None:
+                if proc.poll() is None:
+                    _kill_tree(proc)
+                elif os.name != "nt":                    # the worker ended: stop anything it left in its group
+                    _kill_tree(proc)
             shutil.rmtree(jobdir, ignore_errors=True)
+    finally:
+        _RENDER_LOCK.release()
     return out, err
 
 

@@ -101,6 +101,60 @@ def extrapolate(rule: str, lams, E) -> float:
     raise ValueError(rule)
 
 
+# ------------------------------------------------------------------ failure policy of nonlinear rules (1.5.1)
+NONLINEAR_RULES = ("exponential",)       # rules that are nonlinear in the sampled E(λ) and can fail on sampled data
+ON_FAIL = ("linear", "abstain")          # linear: the least-squares line through the same E(λ) (no extra shots)
+ON_FAIL_POLICY = {"linear": "fallback", "abstain": "abstain"}    # qemx.stats policy names
+
+
+def linear_weights_for(rule: str, lams, E=None) -> np.ndarray:
+    """The weights of a linear rule (``exponential`` has none: it is not linear in E)."""
+    if rule == "richardson":
+        return richardson_weights(lams)
+    if rule == "linear":
+        return linear_weights(lams)
+    if rule == "poly2":
+        return poly_weights(lams, 2)
+    raise ValueError("%s is not a linear rule" % rule)
+
+
+def _exp_fit_many(lams, Em) -> tuple:
+    """Vectorized exponential rule on the rows of Em (R × scales): (estimates, fit failed). Identical, up to rounding,
+    to :func:`extrapolate` row by row: least squares of log|E| on λ, all E of the sign of the first one."""
+    lams = np.asarray(lams, float)
+    Em = np.atleast_2d(np.asarray(Em, float))
+    s = np.where(Em[:, 0] != 0, np.sign(Em[:, 0]), 1.0)
+    ok = np.all(s[:, None] * Em > 0, axis=1) & np.isfinite(Em).all(axis=1)
+    y = np.log(np.where(ok[:, None], s[:, None] * Em, 1.0))
+    x = lams - lams.mean()
+    c1 = (y - y.mean(axis=1, keepdims=True)) @ x / float(x @ x)
+    c0 = y.mean(axis=1) - c1 * lams.mean()
+    return np.where(ok, s * np.exp(c0), np.nan), ~ok
+
+
+def extrapolate_many(rule: str, lams, Em, on_fail: str = "linear") -> tuple:
+    """(estimates, primary fit failed) for the rows of Em under the failure policy. Linear rules never fail."""
+    Em = np.atleast_2d(np.asarray(Em, float))
+    if rule not in NONLINEAR_RULES:
+        return Em @ linear_weights_for(rule, lams), np.zeros(len(Em), bool)
+    if on_fail not in ON_FAIL:
+        raise ValueError("on_fail must be one of %s" % ", ".join(ON_FAIL))
+    est, failed = _exp_fit_many(lams, Em)
+    if on_fail == "linear" and failed.any():
+        est = np.where(failed, Em @ linear_weights(lams), est)
+    return est, failed
+
+
+def extrapolate_policy(rule: str, lams, E, on_fail: str = "linear") -> tuple:
+    """(estimate, primary fit failed) for one set of E(λ) under the failure policy."""
+    v = extrapolate(rule, lams, E)
+    if rule not in NONLINEAR_RULES or np.isfinite(v):
+        return float(v), False
+    if on_fail not in ON_FAIL:
+        raise ValueError("on_fail must be one of %s" % ", ".join(ON_FAIL))
+    return (float(extrapolate("linear", lams, E)) if on_fail == "linear" else float("nan")), True
+
+
 def weights(rule: str, lams, E) -> np.ndarray:
     if rule == "richardson":
         return richardson_weights(lams)
@@ -220,6 +274,13 @@ class ZNE(QEMMethod):
                    "(no extra shots; K× more distinct circuits).",
               when=(("folding", ("local",)), ("subset", DRAW_SUBSETS))),
         Param("rule", "extrapolation", "choice", "richardson", tuple(RULES)),
+        Param("on_fail", "if the exponential fit fails", "choice", "linear", ON_FAIL,
+              help="The exponential rule needs every sampled E(λ) to have one sign. When a sampled experiment "
+                   "violates that, linear: use the least-squares line through the same E(λ) (no extra shots; every "
+                   "experiment gives an estimate, and the share of fallbacks is reported); abstain: give no estimate "
+                   "(the reported moments are then conditional on success, next to the abstention rate). Declared "
+                   "before evaluation; part of the protocol.",
+              when=(("rule", NONLINEAR_RULES),), sparse=True),
         Param("lam_est", "noise scale λ of the fit", "choice", "gates", ("gates", "fault-rate"),
               help="gates: λ = two-qubit gates of the folded circuit ÷ those of the original (the nominal scale). "
                    "fault-rate: λ = light-cone fault rate of the folded circuit ÷ that of the original, from the noise "
@@ -234,11 +295,13 @@ class ZNE(QEMMethod):
                                else "")
         if int(p.get("fold_draws", 1) or 1) > 1 and p["folding"] == "local":
             fold += " ×%d" % int(p["fold_draws"])
-        return "ZNE %s (%s %s%s)" % (RULES[p["rule"]], fold, "·".join("%g" % s for s in p["scales"]),
-                                     ", λ from fault rate" if p.get("lam_est", "gates") == "fault-rate" else "")
+        return "ZNE %s (%s %s%s%s)" % (RULES[p["rule"]], fold, "·".join("%g" % s for s in p["scales"]),
+                                       ", λ from fault rate" if p.get("lam_est", "gates") == "fault-rate" else "",
+                                       ", abstain on failure" if (p["rule"] in NONLINEAR_RULES
+                                                                  and p.get("on_fail", "linear") == "abstain") else "")
 
     def run(self, ctx, scales=(1.0, 3.0, 5.0), folding="global", rule="richardson", lam_est="gates",
-            subset="random", fold_draws=1) -> MethodResult:
+            subset="random", fold_draws=1, on_fail="linear") -> MethodResult:
         scales = sorted(float(s) for s in scales)
         if len(scales) < 2:
             raise ValueError("ZNE needs at least two noise scales")
@@ -250,6 +313,8 @@ class ZNE(QEMMethod):
             raise ValueError("subset must be one of %s" % ", ".join(LOCAL_SUBSETS))
         if rule == "poly2" and len(set(scales)) < 3:
             raise ValueError("the quadratic fit needs at least three scales")
+        if on_fail not in ON_FAIL:
+            raise ValueError("on_fail must be one of %s" % ", ".join(ON_FAIL))
         draws = int(fold_draws)
         if draws < 1:
             raise ValueError("fold_draws must be at least 1")
@@ -293,20 +358,30 @@ class ZNE(QEMMethod):
                 raise ValueError("the folded circuits do not raise the fault rate monotonically (λ_eff = %s)"
                                  % ", ".join("%.4g" % l for l in lams_fault))
             lams = list(lams_fault)
-        est = extrapolate(rule, lams, E)
-        eta = weights(rule, lams, E) if np.isfinite(est) else np.full(len(lams), np.nan)
+        nonlinear = rule in NONLINEAR_RULES
+        # the reference: the rule (and its failure policy) applied to the exact E(λ)
+        est, ref_failed = extrapolate_policy(rule, lams, E, on_fail)
+        rule_ref = "linear" if (ref_failed and on_fail == "linear") else rule
+        eta = weights(rule_ref, lams, E) if np.isfinite(est) else np.full(len(lams), np.nan)
         # the estimate is Σ_j η_j · mean_k E_jk = Σ_jk (η_j / K_j) E_jk: one linear estimator over every circuit
+        # (for the exponential rule, η are its derivatives at the exact E: the first-order, delta-method weights)
         w = np.abs(np.asarray(eta)[where]) / K_of * sk
         var1 = float(np.sum(w)) ** 2
         alloc = w / w.sum() if np.isfinite(w).all() and w.sum() > 0 else np.full(len(w), 1 / len(w))
+        P = np.zeros((len(flat), len(groups)))                           # circuit → scale averaging matrix
+        for i, j in enumerate(where):
+            P[i, j] = 1.0 / K_of[i]
 
         def per_scale(vals) -> list:
             v = np.asarray(vals, float)
             return [float(v[[i for i, j in enumerate(where) if j == jj]].mean()) for jj in range(len(groups))]
         notes = []
-        if not np.isfinite(est):
-            notes.append("The exponential rule needs all E(λ) of one sign; here they change sign."
-                         if rule == "exponential" else "The %s fit gave no finite value at λ = 0." % RULES[rule])
+        if ref_failed and rule == "exponential":
+            notes.append("The exponential rule needs all E(λ) of one sign; here the exact E(λ) change sign. %s" % (
+                "Failure policy: the linear fit of the same E(λ) is the estimate." if on_fail == "linear"
+                else "Failure policy: abstain (no estimate)."))
+        elif not np.isfinite(est):
+            notes.append("The %s fit gave no finite value at λ = 0." % RULES[rule])
         if any(abs(l - s) > 0.05 * s for l, s in zip(lams_gates, scales)):
             notes.append("Achieved λ = %s for requested %s (folds add whole gates)." % (
                 ", ".join("%.3g" % l for l in lams_gates), ", ".join("%g" % s for s in scales)))
@@ -316,26 +391,78 @@ class ZNE(QEMMethod):
                 "used for the fit" if lam_est == "fault-rate" else "the fit uses the nominal λ = %s" % ", ".join(
                     "%.3g" % l for l in lams_gates)))
 
-        def sampler(N, B, rng):
+        def split_of(N):
             # exactly N target shots (Σ N_j = N, N_j ≥ 1): the variance-optimal integer allocation, or the
-            # largest-remainder rounding of the shares when the weights are degenerate. Fewer shots than circuits
-            # cannot give an estimate (every folded circuit needs a shot): NaN, never more shots than N.
+            # largest-remainder rounding of the shares when the weights are degenerate
+            if np.isfinite(w).all() and w.sum() > 0:
+                return optimal_integer_split(w, N)[1]
+            return largest_remainder_split(alloc, N)
+
+        def sampler(N, B, rng, theta=None, split=None, with_failures=False):
+            # Fewer shots than circuits cannot give an estimate (every folded circuit needs a shot): NaN, never more
+            # shots than N. Nonlinear rules apply their failure policy to every sampled experiment. ``theta``: one
+            # finite calibration draw per replicate (shared by every fold of that replicate); ``split``: the integer
+            # shots per circuit of a deployable allocation (default: the variance-optimal split of this run's
+            # variances, an oracle allocation in simulation); ``with_failures``: also return the primary-fit failures.
             N = int(N)
             if N < len(runs):
-                return np.full(int(B), np.nan)
-            if np.isfinite(w).all() and w.sum() > 0:
-                Nj = optimal_integer_split(w, N)[1]
+                nan = np.full(int(B), np.nan)
+                return (nan, np.ones(int(B), bool)) if with_failures else nan
+            Nj = split_of(N) if split is None else [int(x) for x in split]
+            if split is not None and (len(Nj) != len(runs) or sum(Nj) != N or min(Nj) < 1):
+                raise ValueError("split: %d positive integers summing to N = %d expected" % (len(runs), N))
+            if theta is None:
+                Ek_ = np.stack([ctx.sample_expvals(rr, nj, B, rng) for rr, nj in zip(runs, Nj)], 1)
             else:
-                Nj = largest_remainder_split(alloc, N)
-            Ek_ = np.stack([ctx.sample_expvals(rr, nj, B, rng) for rr, nj in zip(runs, Nj)], 1)
-            return np.array([extrapolate(rule, lams, per_scale(e)) for e in Ek_])
+                Ek_ = np.stack([ctx.sample_expvals_theta(rr, nj, B, rng, theta) for rr, nj in zip(runs, Nj)], 1)
+            est, failed = extrapolate_many(rule, lams, Ek_ @ P, on_fail)
+            return (est, failed) if with_failures else est
+        # what an independent re-implementation needs to execute this protocol shot by shot (1.6 validation)
+        sampler.direct = dict(runs=runs, lams=[float(x) for x in lams], P=np.asarray(P, float), rule=rule)
+
+        from ..stats import compressed_values, is_measured, moment_grid, sample_means
+        measured_ctx = is_measured(ctx) or getattr(getattr(ctx, "runner", None), "backend", None) == "hardware"
+        target_sampler, grid, flags = None, None, ()
+        if nonlinear and not measured_ctx:
+            linear_ro = ctx.recipe.readout in ("none", "tensored", "trex")
+            comp = [compressed_values(ctx.o_eff(), ctx.measured(rr)) for rr in runs] if linear_ro else None
+
+            def target_sampler(N, B, rng):
+                """(estimates, primary fit failed) of B complete experiments with N target shots: the same law as
+                ``sampler`` (multinomial counts of the distinct per-shot values), in bounded memory."""
+                N, B = int(N), int(B)
+                if N < len(runs):
+                    return np.full(B, np.nan), np.ones(B, bool)
+                Nj = split_of(N)
+                if comp is not None:
+                    Ek_ = np.stack([sample_means(v, p, nj, B, rng) for (v, p), nj in zip(comp, Nj)], 1)
+                else:                                     # M3: nonlinear readout mitigation, repeat by repeat
+                    Ek_ = np.stack([ctx.sample_expvals(rr, nj, B, rng) for rr, nj in zip(runs, Nj)], 1)
+                return extrapolate_many(rule, lams, Ek_ @ P, on_fail)
+            if np.isfinite(est):
+                grid = moment_grid(target_sampler, len(runs), est, var1,
+                                   np.random.default_rng([int(ctx.seed) % (2 ** 63), 0x5A4E, 1]),
+                                   ON_FAIL_POLICY[on_fail])
+            flags = ("budget-dependent-moments",)
+            notes.append(
+                "The %s rule is nonlinear in the sampled E(λ): its finite-shot mean differs from the fit to exact "
+                "probabilities (shown as the reference), and the fit fails when a sampled E(λ) changes sign "
+                "(policy: %s). Bias, sd and RMSE at a budget are the protocol's Monte-Carlo moments at that "
+                "budget%s." % (RULES[rule], "linear fit of the same data" if on_fail == "linear" else "abstain",
+                               "" if grid is None or grid.get("first_order_from") is None else
+                               "; from %s target shots on they agree with the first-order (delta-method) values"
+                               % f"{grid['first_order_from']:,}"))
 
         shown = specs[min(1, len(specs) - 1)]
         fs_meas = [ctx.measured(r) for r in runs]
         o_vec = ctx.obs.o
+        nl = dict(estimate_kind="reference", reference_mean=float(est), reference_var1=float(var1),
+                  failure_policy=ON_FAIL_POLICY[on_fail]) if (nonlinear and not measured_ctx) else \
+            dict(failure_policy=ON_FAIL_POLICY[on_fail] if nonlinear else None)
         return MethodResult(
             mean=est, var1=var1, circuits=len(flat),
-            **cal_fields(ctx, lambda mit: float(extrapolate(rule, lams, per_scale([o_vec @ mit(f) for f in fs_meas])))),
+            **cal_fields(ctx, lambda mit: float(extrapolate_policy(
+                rule, lams, per_scale([o_vec @ mit(f) for f in fs_meas]), on_fail)[0])),
             gamma=float(np.nansum(np.abs(eta))) * ctx.readout_gamma(),
             implemented=[("Folded, λ = %.3g" % lams[min(1, len(lams) - 1)], display_circuit(ctx, shown))]
             + [("Folded, λ = %.3g" % l, display_circuit(ctx, sp)) for l, sp in zip(lams, specs) if sp is not shown],
@@ -344,4 +471,9 @@ class ZNE(QEMMethod):
                          a_circuits=[float(x) for x in w],
                          E_draws=[[float(Ek[i]) for i, j in enumerate(where) if j == jj] for jj in range(len(groups))],
                          lams_gates=lams_gates, lams_fault=lams_fault, depths=[int(sp.depth()) for sp in specs],
-                         twoq=[int(sp.count("2q")) for sp in specs]), notes=notes, sampler=sampler)
+                         twoq=[int(sp.count("2q")) for sp in specs],
+                         on_fail=on_fail if nonlinear else None, reference_rule=rule_ref,
+                         allocation="model variances (exact noisy probabilities): an oracle allocation in simulation",
+                         split_weights=[float(x) for x in w], n_circuits=len(runs),
+                         target_moments=grid),
+            notes=notes, sampler=sampler, target_sampler=target_sampler, flags=flags, **nl)

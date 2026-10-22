@@ -50,7 +50,7 @@ def run_dir(tmp_path_factory):
     from qemx.phase.run import main as run_main
     d = tmp_path_factory.mktemp("dirA")
     mp = d / "m.yaml"
-    mp.write_text(MANIFEST)
+    mp.write_text(MANIFEST, encoding="utf-8")
     out = str(d / "out")
     run_main(["run", str(mp), "--out", out])
     run_main(["collect", out])
@@ -92,7 +92,7 @@ def test_checks_main_writes_the_report(run_dir, tmp_path):
     assert C.main([run_dir, "--out", out, "--quiet", "--eps", "0.01"]) == 0
     files = set(os.listdir(out))
     assert {"summary.csv", "report.md", "report.txt", "validation.csv", "achievability_cells.csv"} <= files
-    S = pd.read_csv(os.path.join(out, "summary.csv"))
+    S = pd.read_csv(os.path.join(out, "summary.csv"), encoding="utf-8")
     assert list(S.columns) == ["check", "result", "detail"] and len(S)
 
 

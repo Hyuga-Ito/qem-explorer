@@ -51,4 +51,5 @@ class Raw(QEMMethod):
             mean=ctx.expval(rr), var1=ctx.var_shot(rr), circuits=1, gamma=ctx.readout_gamma(),
             **cal_fields(ctx, readout_fun(ctx, rr)),
             implemented=[("Implemented circuit", display_circuit(ctx))],
-            sampler=lambda N, B, rng: ctx.sample_expvals(rr, N, B, rng))
+            sampler=lambda N, B, rng, theta=None: (ctx.sample_expvals(rr, N, B, rng) if theta is None else
+                                                    ctx.sample_expvals_theta(rr, N, B, rng, theta)))

@@ -31,8 +31,7 @@ st.markdown("A noise model built from component-level characterization predicts 
             "(Holm for the family-wise error rate).")
 
 TABS = ["Rehearsal results", "Conventions", "Distance test", "Drill-down: model mismatch"]
-S.wdefault("w_nd_tabs", ss.page_tab.get("nd", TABS[0]))
-tabs = st.tabs(TABS, key="w_nd_tabs", on_change=S.cb_tab, args=("nd", "w_nd_tabs"))
+tabs = S.page_tabs("nd", "w_nd_tabs", TABS)            # the selected tab is app state (survives page switches)
 
 
 def rehearsal_dirs() -> list:

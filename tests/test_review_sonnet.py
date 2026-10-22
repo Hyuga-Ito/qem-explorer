@@ -20,6 +20,7 @@ from qemx.noise import (NoiseSpec, _frac_power, depol_mixture, gate_noise_instru
 from qemx.backends.numpy_dm import NumpyBackend
 from qemx.recipes import compare
 from qemx.transforms import fold_global
+from qemx.textio import child_env
 
 
 def _ctx(spec, noise, obs, recipe, backend="numpy", opts=None, shots=1024):
@@ -124,7 +125,7 @@ def test_aer_works_in_a_fresh_process_without_prior_transpile():
     code = ("from qemx.circuit import parse; from qemx.noise import NoiseSpec; from qemx.engine import simulate;"
             "simulate(parse('h 0',1), NoiseSpec(p1=0.01), 'aer')")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                       cwd=str(__import__("pathlib").Path(__file__).resolve().parents[1]))
+                       cwd=str(__import__("pathlib").Path(__file__).resolve().parents[1]), encoding="utf-8", env=child_env())
     assert r.returncode == 0, r.stderr[-300:]
 
 

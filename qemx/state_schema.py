@@ -15,6 +15,8 @@ from .compile import INPUT_STATES, valid_input
 from .methods import REGISTRY, Recipe
 from .noise import NoiseSpec
 
+OP_TAGS = ("", "prep", "encode", "basis", "fold", "fold-inv", "pec", "twirl", "dd", "check", "train")
+
 COUPLINGS = {"all": "all-to-all", "line": "line", "ring": "ring", "grid": "2D grid", "heavy-hex": "heavy-hex (IBM)"}
 COMPILE_DEFAULT = dict(mode="abstract", basis_2q="cx", coupling="line", layout="sabre", opt_level=1, seed=11,
                        initial_layout="")
@@ -219,11 +221,11 @@ def _validate_state(d) -> dict:
         else:
             raise ValueError("operation %d: unknown kind" % i)
         tag = o.get("tag", "")
-        tag = tag if tag in ("", "prep", "basis", "fold", "fold-inv", "pec", "twirl", "dd", "check", "train") else ""
+        tag = tag if tag in OP_TAGS else ""
         ops.append(dict(name=name, qubits=qs, params=ps, kind=kind, tag=tag))
     inputs = d.get("inputs", ["0"] * n)
     if not (isinstance(inputs, list) and len(inputs) == n and all(valid_input(x) for x in inputs)):
-        raise ValueError("inputs must list one of %s (or ph:<turns>) per qubit" % ", ".join(INPUT_STATES))
+        raise ValueError("inputs must list one of %s (or ph:<turns>, bloch:<θ>,<φ>) per qubit" % ", ".join(INPUT_STATES))
     basis = d.get("basis", "Z" * n)
     if not (isinstance(basis, str) and len(basis) == n and set(basis) <= set("XYZ")):
         raise ValueError("basis must be %d letters from X, Y, Z" % n)

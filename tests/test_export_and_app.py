@@ -13,6 +13,7 @@ from qemx import export as EX
 from qemx import templates as T
 from qemx.noise import PRESETS
 from qemx.recipes import compare, preset
+from qemx.textio import child_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -45,8 +46,8 @@ def test_exported_script_reproduces_the_app(tmp_path):
     ideal, outs, _ = compare(comp, noise, tpl.observable, recipes)
     expected = {o.title: o.result.mean for o in outs}
     p = tmp_path / "export.py"
-    p.write_text(EX.script(_state(tpl, opts, noise, recipes), expected))
-    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=900, cwd=tmp_path)
+    p.write_text(EX.script(_state(tpl, opts, noise, recipes), expected), encoding="utf-8")
+    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=900, cwd=tmp_path, encoding="utf-8", env=child_env())
     assert out.returncode == 0, out.stderr[-2000:]
     marks = [ln for ln in out.stdout.splitlines() if ln.rstrip().endswith("✓")]
     assert len(marks) == len(recipes), out.stdout
@@ -64,8 +65,8 @@ def test_exported_script_runs_a_fake_device(tmp_path):
     ideal, outs, _ = compare(comp, PRESETS["Depolarizing"], tpl.observable, recipes, backend="fake_perth")
     expected = {o.title: o.result.mean for o in outs}
     p = tmp_path / "export_dev.py"
-    p.write_text(EX.script(_state(tpl, opts, PRESETS["Depolarizing"], recipes, backend="fake_perth"), expected))
-    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=900, cwd=tmp_path)
+    p.write_text(EX.script(_state(tpl, opts, PRESETS["Depolarizing"], recipes, backend="fake_perth"), expected), encoding="utf-8")
+    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=900, cwd=tmp_path, encoding="utf-8", env=child_env())
     assert out.returncode == 0, out.stderr[-3000:]
     assert "device model" in out.stdout
     marks = [ln for ln in out.stdout.splitlines() if ln.rstrip().endswith("✓")]

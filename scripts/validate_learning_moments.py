@@ -96,6 +96,8 @@ def run_case(label, p2, train_shots, kw, B=100_000, reps=6000, seed=13, draw_see
 
 
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--reps", type=int, default=6000)
     ap.add_argument("--out", required=True)
@@ -110,7 +112,7 @@ def main(argv=None):
         row = run_case(label, p2, s_tr, kw, reps=a.reps)
         rows.append(row)
         print(json.dumps(row), flush=True)
-        with open(a.out, "w") as f:
+        with open(a.out, "w", encoding="utf-8") as f:
             json.dump(dict(script="validate_learning_moments.py", criteria="|z| <= 4 for mean, sd and RMSE",
                            cases=rows), f, indent=1)
     bad = [r["case"] for r in rows if not r["passed"]]

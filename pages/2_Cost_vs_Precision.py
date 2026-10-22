@@ -40,8 +40,7 @@ if ss.pop("cvp_run", False) and compiled is not None:
     with st.spinner("Simulating every contender…"):
         C.run_comparison(compiled)
 TABS = ["Your circuit", "The PEC wall", "Depth sweep"]
-S.wdefault("w_cvp_tabs", ss.page_tab.get("cvp", TABS[0]))
-tabs = st.tabs(TABS, key="w_cvp_tabs", on_change=S.cb_tab, args=("cvp", "w_cvp_tabs"))
+tabs = S.page_tabs("cvp", "w_cvp_tabs", TABS)          # the selected tab is app state (survives page switches)
 figs, tables = {}, {}
 
 # ------------------------------------------------------------------ 1. RMSE vs shots for the current comparison

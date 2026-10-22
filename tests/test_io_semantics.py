@@ -162,9 +162,8 @@ def test_aqft_index_convention_against_coppersmith():
     assert all(o.name != "cp" for o in T.qft_body(list(range(n)), m=0))   # m_C = 1: the Hadamard transform
 
 
-# ------------------------------------------------------------------ the Playground: Output is read-only and derived
-@pytest.mark.slow
-def test_playground_output_panel_is_derived_and_never_changes_the_input():
+# ------------------------------------------------------------------ the Playground: one place for inputs, derived Output
+def _playground():
     import os
     try:
         import qiskit_ibm_runtime  # noqa: F401  (see tests/test_ui.py)
@@ -174,33 +173,104 @@ def test_playground_output_panel_is_derived_and_never_changes_the_input():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     at = AppTest.from_file(os.path.join(root, "app.py"), default_timeout=900).run()
     at.switch_page("pages/1_Playground.py").run()
+    return at
 
-    def w(kind, key):
-        return next(x for x in getattr(at, kind) if x.key == key)
 
-    def text():
-        return " ".join(m.value for m in at.markdown).replace("\\", "")      # undo Markdown escaping
-    w("selectbox", "w_tpl_cat").set_value("Algorithms").run()
-    w("selectbox", "w_tpl").set_value("qft").run()
-    w("number_input", "w_tp_qft_s").set_value(0).run()
-    w("button", "tpl_load").click().run()
+def _w(at, kind, key):
+    return next(x for x in getattr(at, kind) if x.key == key)
+
+
+def _text(at):
+    return " ".join([m.value for m in at.markdown] + [c.value for c in at.caption]).replace("\\", "")
+
+
+def _order(at):
+    """(kind, key or text) of every element in page order."""
+    out = []
+
+    def walk(node):
+        kind = type(node).__name__.lower()
+        out.append((kind, getattr(node, "key", None) or str(getattr(node, "value", ""))[:80]))
+        for c in getattr(node, "children", {}).values():
+            walk(c)
+    walk(at.main)
+    return out
+
+
+def _load(at, cat, key):
+    _w(at, "selectbox", "w_tpl_cat").set_value(cat).run()
+    _w(at, "selectbox", "w_tpl").set_value(key).run()
+    _w(at, "button", "tpl_load").click().run()
     assert not at.exception, [e.value for e in at.exception]
-    assert "Deterministic: |000⟩" in text()
-    ops0, inputs0 = [dict(d) for d in at.session_state["ops"]], list(at.session_state["inputs"])
-    # editing the input parameter without loading, rerunning and switching tabs change nothing
-    w("number_input", "w_tp_qft_s").set_value(3).run()
+
+
+@pytest.mark.slow
+def test_playground_inputs_are_set_in_one_place_and_the_output_is_derived():
+    at = _playground()
+    _load(at, "Algorithms", "qft")
+    n = 3
+    order = [k for _, k in _order(at)]
+    i_tpl, i_load = order.index("**Start from a template**"), order.index("tpl_load")
+    i_io = order.index("**Inputs and measurement**")
+    assert i_tpl < i_load < i_io < order.index("w_tp_qft_s") and i_io < order.index("w_tp_qft_prep")
+    assert order.count("w_tp_qft_s") == 1 and order.index("w_tp_qft_n") < i_load      # circuit parameter stays
+    tokens = IO.template_inputs("qft", dict(n=n, s=5))[0]
+    assert list(at.session_state["inputs"]) == tokens
+    assert [_w(at, "selectbox", "w_in_%d" % q).value for q in range(n)] == tokens       # shown = simulated
+    assert "Deterministic: |101⟩" in _text(at)
+    ops0 = [dict(d) for d in at.session_state["ops"]]
+    assert not any(d["tag"] == "prep" for d in ops0)                                    # prepared once, as inputs
+    # a new input applies at once, without Load, and never touches the circuit
+    _w(at, "number_input", "w_tp_qft_s").set_value(3).run()
+    assert [dict(d) for d in at.session_state["ops"]] == ops0
+    assert list(at.session_state["inputs"]) == IO.template_inputs("qft", dict(n=n, s=3))[0]
+    assert [_w(at, "selectbox", "w_in_%d" % q).value for q in range(n)] == list(at.session_state["inputs"])
+    assert "Deterministic: |011⟩" in _text(at) and at.session_state["observable"].label == "P(011)"
+    # results computed now become out of date when the input changes
+    at.session_state["run_requested"] = True
     at.run()
-    assert [dict(d) for d in at.session_state["ops"]] == ops0 and list(at.session_state["inputs"]) == inputs0
+    assert at.session_state["results"] is not None and "marked out of date" not in _text(at)
+    _w(at, "number_input", "w_tp_qft_s").set_value(6).run()
+    assert "marked out of date" in _text(at)
+    # a per-qubit edit is the input; it is reported against the template's input, never "corrected"
+    _w(at, "selectbox", "w_in_0").set_value("0").run()
+    assert at.session_state["inputs"][0] == "0" and at.session_state["tpl_params"]["s"] == 6
+    assert "differ from the template's input" in _text(at)
+    _w(at, "button", "tpl_input_apply").click().run()
+    assert list(at.session_state["inputs"]) == IO.template_inputs("qft", dict(n=n, s=6))[0]
+    # a basis-state input: the derived output becomes uniform; the circuit is still the same
+    _w(at, "selectbox", "w_tp_qft_prep").set_value("basis").run()
+    assert list(at.session_state["inputs"]) == ["0", "1", "1"] and "Uniform over all 8 outcomes" in _text(at)
+    assert [dict(d) for d in at.session_state["ops"]] == ops0
     assert not any(x.key and x.key.startswith("w_out") for x in list(at.selectbox) + list(at.number_input)
-               + list(at.text_input))
-    # a basis-state input: the derived output becomes a uniform distribution
-    w("selectbox", "w_tp_qft_prep").set_value("basis").run()
-    w("button", "tpl_load").click().run()
-    assert "Uniform over all 8 outcomes" in text()
-    assert list(at.session_state["inputs"]) == ["0", "0", "0"]
+                   + list(at.text_input))                                               # the Output has no controls
     # the cited preset selector fills the controls, Load builds it
-    w("selectbox", "w_cited_preset").set_value("qaoa-ring-p1").run()
+    _w(at, "selectbox", "w_cited_preset").set_value("qaoa-ring-p1").run()
     assert at.session_state["w_tpl"] == "qaoa" and at.session_state["w_tp_qaoa_angles"] == "fixed"
-    w("button", "tpl_load").click().run()
+    _w(at, "button", "tpl_load").click().run()
     assert not at.exception, [e.value for e in at.exception]
-    assert "Ideal ⟨O⟩ = 0.75" in text()
+    assert "ideal value **0.75**" in " ".join(m.value for m in at.markdown)        # D: the observable's value
+
+
+@pytest.mark.slow
+def test_every_template_shows_the_input_it_simulates():
+    from qemx import templates as Tm
+    at = _playground()
+    for cat, keys in Tm.CATEGORIES.items():
+        for key in keys:
+            _load(at, cat, key)
+            ss = at.session_state
+            assert ss["template"] == key, key
+            tokens, body, tpl = IO.template_inputs(key, ss["tpl_params"])
+            assert list(ss["inputs"]) == tokens and [dict(d)["name"] for d in ss["ops"]] == [o.name for o in body.ops]
+            assert [_w(at, "selectbox", "w_in_%d" % q).value for q in range(body.n)] == tokens, key
+            for p in IO.input_params(key):
+                assert _w(at, "number_input" if p.kind != "choice" else "selectbox",
+                          "w_tp_%s_%s" % (key, p.name)).value == ss["tpl_params"][p.name], (key, p.name)
+            if body.n <= 12:                 # C: the measured bits (1.7.0: the observable's value is part D)
+                comp = CP.build(body, tokens, ss["basis"], relabel=ss["relabel"])
+                d = IO.derived_output(comp.logical, ss["relabel"], ss["observable"])
+                assert IO.output_summary(dict(d, observable_value=None)).replace("\\", "") in _text(at), key
+                if d.get("observable_value") is not None:
+                    assert ("ideal value **%.6g**" % d["observable_value"]) in " ".join(
+                        m.value for m in at.markdown), key

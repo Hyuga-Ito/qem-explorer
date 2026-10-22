@@ -53,7 +53,7 @@ import numpy as np
 from .base import MethodResult, Param, QEMMethod, register
 from .raw import cal_fields, display_circuit, readout_fun
 from ..resources import check
-from ..stats import protocol_contract, training_moments
+from ..stats import moments_wanted, protocol_contract, reference_moments, training_moments
 from ..transforms import clifford_replace, non_clifford_slots
 
 
@@ -164,7 +164,8 @@ class Learning(QEMMethod):
                                 implemented=[("Implemented circuit", display_circuit(ctx))],
                                 notes=["The circuit is Clifford: its ideal value is classically computable, and "
                                        "training circuits would equal the target. Learning is not applied."],
-                                sampler=lambda N, B, rng: ctx.sample_expvals(target, N, B, rng))
+                                sampler=lambda N, B, rng, theta=None, deployable=False, s_tr=None: ctx.sample_expvals_theta(
+                                    target, N, B, rng, theta))
         span = float(np.ptp(o)) or 1.0
         need = float(min_spread) * span
         keep_eff = min(int(keep), max(len(slots) - 1, 0))     # keeping every slot would reproduce the target itself
@@ -190,7 +191,8 @@ class Learning(QEMMethod):
                              names=names, n_slots=len(slots), rank=0, n_features=int(F.shape[1]), degenerate=True,
                              warning=warning, spread=spread, spread_needed=need, keep_used=plan["keep"],
                              sampling=plan["text"], stages=tried),
-                notes=notes, sampler=lambda N, B, rng: ctx.sample_expvals(target, N, B, rng))
+                notes=notes, sampler=lambda N, B, rng, theta=None, deployable=False, s_tr=None: ctx.sample_expvals_theta(
+                    target, N, B, rng, theta))
         tr_runs = [ctx.run(s, role="training") for s in train_specs]
         feats = lambda rr: ctx.mitigate(ctx.measured(rr)) @ F
         X = np.array([feats(r) for r in tr_runs])
@@ -297,13 +299,50 @@ class Learning(QEMMethod):
                 return np.zeros(int(R), bool)
             return np.array([not ctx.theta_invertible(t) for t in thetas])
 
-        def sampler(N, B, rng, theta=None):
+        def deployable_rank(trF_b, ths_b, shots=None):
+            """The protocol's fallback rule decided from one replicate's own data (1.6): the noise edge of rank_at with
+            the per-shot feature variance estimated from the sampled training frequencies of this replicate."""
+            FE = FE_lin if (ths_b is None and linear_ro) else (FE_theta(ths_b) if ths_b is not None else Fe)
+            Xb = np.array([f_ @ FE for f_ in trF_b])
+            v_hat = max(max(float(np.max(f_ @ FE ** 2 - (f_ @ FE) ** 2)) for f_ in trF_b), 0.0)
+            sig_ = float(np.sqrt(v_hat / max(int(train_shots if shots is None else shots), 1)))
+            tol_ = max(1e-9, sig_ * (np.sqrt(T_) + np.sqrt(k)))
+            return int(np.linalg.matrix_rank(Xb - Xb.mean(0), tol=tol_)) if T_ > 1 else 0
+
+        def sampler(N, B, rng, theta=None, deployable=False, s_tr=None):
             """B complete experiments with N target shots: training features sampled with train_shots shots per
             training circuit, the target with N, the regression refitted on every replicate; with ``theta``
-            (B calibration draws θ̂) every circuit of replicate b is mitigated with θ̂_b."""
+            (B calibration draws θ̂) every circuit of replicate b is mitigated with θ̂_b. ``deployable``: the
+            fallback (no usable feature direction → the readout-mitigated target value) is decided per replicate
+            from its own sampled training data, as a deployed protocol must, instead of once from the exact
+            training features; replicates that fell back are reported by ``sampler.fallbacks`` (1.6). ``s_tr``: shots
+            per training circuit of this experiment (default: the protocol's train_shots), for budget-dependent
+            training allocations (1.6)."""
+            ts = int(train_shots if s_tr is None else s_tr)
             th = ctx.theta_rows(theta, B)
             bad = bad_rows(th, B)
             ths = None if th is None else [t if not b_ else ctx.cal_theta() for t, b_ in zip(th, bad)]
+            if deployable:
+                trF = [ctx.sample_freqs(r, ts, B, rng) for r in tr_runs]
+                tgF = ctx.sample_freqs(target, N, B, rng)
+                if ths is None:
+                    trX, tgX = [features_of(f_) for f_ in trF], features_of(tgF)
+                else:
+                    *trX, tgX = features_theta(trF + [tgF], ths)
+                ro = ctx.theta_values(tgF, None if ths is None else np.array(ths))
+                est, fb = np.empty(int(B)), np.zeros(int(B), bool)
+                for bi in range(int(B)):
+                    if bi % 16 == 0:
+                        check()
+                    if deployable_rank([trF[i][bi] for i in range(T_)], None if ths is None else ths[bi], ts) == 0:
+                        est[bi], fb[bi] = ro[bi], True
+                        continue
+                    Xb = np.array([trX[i][bi] for i in range(T_)])
+                    cb, bb = fit(Xb, y, model, alpha)
+                    est[bi] = bb + tgX[bi] @ cb
+                est[bad] = np.nan
+                sampler.fallbacks = fb
+                return est
             if degenerate:
                 fr = ctx.sample_freqs(target, N, B, rng)
                 if ths is None:
@@ -313,7 +352,7 @@ class Learning(QEMMethod):
                 est = np.asarray(est, float)
                 est[bad] = np.nan
                 return est
-            trF = [ctx.sample_freqs(r, train_shots, B, rng) for r in tr_runs]          # each (B, 2ⁿ)
+            trF = [ctx.sample_freqs(r, ts, B, rng) for r in tr_runs]                  # each (B, 2ⁿ)
             tgF = ctx.sample_freqs(target, N, B, rng)
             if ths is None:
                 trX = [features_of(f_) for f_ in trF]
@@ -373,16 +412,20 @@ class Learning(QEMMethod):
         # refitted estimates, their variance u and the mean conditional per-shot target variance — not the moments of
         # the reference fit to exact training features
         seed64 = int(ctx.seed) % (2 ** 63)
-        mom = training_moments(train_resampler, int(train_shots), np.random.default_rng([seed64, 0x4C45, 1]))
+        want = moments_wanted(ctx)
+        mom = training_moments(train_resampler, int(train_shots), np.random.default_rng([seed64, 0x4C45, 1])) \
+            if want else reference_moments(mean, var1, int(train_shots))
         u_train = mom.u
         contract = protocol_contract(ctx, mom, mean, var1, notes, degenerate)
         mean, var1 = contract.pop("mean"), contract.pop("var1")
-        if not degenerate:
+        if not want:
+            contract["flags"] = tuple(contract["flags"]) + ("moments-not-estimated",)
+        elif not degenerate:
             notes.append("Shot noise of the training data (%d × %d shots) adds a variance %.3g that more target shots "
                          "cannot remove (σ floor %.3g; %d Monte-Carlo refits)." % (T_, int(train_shots), u_train,
                                                                                    np.sqrt(u_train), mom.repeats))
         cal = cal_fields(ctx, refit)
-        if cal:
+        if cal and want:
             cal["cal_w"] = calibration_w(ctx, train_resampler, int(train_shots), MC_REPS, seed64)
             contract["flags"] = tuple(contract["flags"]) + ("calibration-mean-first-order",)
 

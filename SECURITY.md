@@ -24,7 +24,13 @@ There are deliberately no hard limits on qubits or depth. Every execution path c
 
 ## Hardware spending
 
-No command submits QPU jobs without an explicit `run-ibm`/approval step (see `docs/hardware_preflight.md`). The planner keeps its own usage ledger, because a per-job `max_execution_time` does not bound a campaign.
+No command submits QPU jobs without an explicit `run-ibm`/approval step (see `docs/hardware_preflight.md`). Real-provider submission requires the campaign ledger (`qemx.campaign`): it admits every job before submission under one shared ceiling, keeps a submission whose outcome is unknown committed until it is resolved, and sets each job's `max_execution_time` within what it reserved. A per-job limit alone does not bound a campaign.
+
+## Run files and shared data
+
+- Run files (`run.json` of a study) store the manifest path and the command line with your home folder replaced by `~`; provenance records carry digests of the source tree, the lock file and the installed packages, not paths.
+- `scripts/hardware_transfer.py` keeps the plans it submitted as local pickle files with their SHA-256 in `jobs.json`. Never load plan files you did not create: unpickling runs code.
+- A public deployment should run with modest resources: comparisons are cached per session, and the export renderer runs as one bounded process at a time whose whole process tree is stopped on a timeout. Heavy native computations (large density matrices, transpilation) are not interruptible inside one call; host them on a machine you control.
 
 ## Reporting a vulnerability
 

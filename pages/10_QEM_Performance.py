@@ -48,9 +48,9 @@ def study_dirs() -> list:
 @st.cache_data(max_entries=4, show_spinner=False)
 def load_tables(name: str, mtime: float):
     t = os.path.join(REPORTS, name, "tables")
-    W_ = pd.read_csv(os.path.join(t, "rmse_wide.csv"))
-    R_ = pd.read_csv(os.path.join(t, "regimes.csv")) if os.path.exists(os.path.join(t, "regimes.csv")) else None
-    I_ = pd.read_csv(os.path.join(t, "paired_improvement.csv")) if os.path.exists(
+    W_ = pd.read_csv(os.path.join(t, "rmse_wide.csv"), encoding="utf-8")
+    R_ = pd.read_csv(os.path.join(t, "regimes.csv"), encoding="utf-8") if os.path.exists(os.path.join(t, "regimes.csv")) else None
+    I_ = pd.read_csv(os.path.join(t, "paired_improvement.csv"), encoding="utf-8") if os.path.exists(
         os.path.join(t, "paired_improvement.csv")) else None
     ev = None
     if os.path.exists(os.path.join(t, "recommender_evaluation.json")):
@@ -59,34 +59,16 @@ def load_tables(name: str, mtime: float):
     return W_, R_, I_, ev
 
 
-def method_feasibility(name: str, methods: list, comp, noise, observable, B: int) -> list:
-    """Whether each study method can run at budget B on this circuit (the budget preflight; True when a method has
-    no fixed-cost model)."""
-    from qemx.methods import Context, Recipe, Runner
-    from qemx.recipes import preflight
-    path = os.path.join(REPORTS, name, "tables", "methods.json")
-    specs = {}
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as fh:
-            specs = json.load(fh)
-    out = []
-    for m in methods:
-        d = dict(specs.get(m) or {})
-        est = d.pop("estimator", None)
-        if est is None:
-            out.append(True)
-            continue
-        tw, dd = d.pop("twirl", "none"), d.pop("dd", "none")
-        rc = Recipe.make(est, twirl=tw, dd=dd, **d)
-        pf = preflight(rc, lambda c, o, rc=rc: Context(c, noise, o, rc, Runner("numpy"), shots=B), comp, observable, B)
-        out.append(True if pf is None else bool(pf["feasible"]))
-    return out
+def study_context(name: str):
+    """The study's resolved protocols and context (``tables/methods.json``, schema qemx.methods/2)."""
+    from qemx import rec_context as RX
+    return RX.load_study(os.path.join(REPORTS, name))
 
 
 dirs = study_dirs()
-TABS = ["Study results", "Recommend for my circuit", "Drill-down analyses", "Feature dictionary"]
-S.wdefault("w_qp_tabs", ss.page_tab.get("qp", TABS[0]))
-tabs = st.tabs(TABS, key="w_qp_tabs", on_change=S.cb_tab, args=("qp", "w_qp_tabs"))
+TABS = ["Study results", "Recommend for my circuit", "Drill-down analyses", "Feature dictionary",
+        "Protocol selection study"]
+tabs = S.page_tabs("qp", "w_qp_tabs", TABS)            # the selected tab is app state (survives page switches)
 
 with tabs[0]:
     if tabs[0].open is not False:
@@ -134,13 +116,22 @@ with tabs[0]:
                     with st.expander("Regime labels of every (cell, budget)", icon=":material/table_rows:"):
                         st.dataframe(R_, hide_index=True, width="stretch", height=320)
 
-with tabs[1]:
-    if tabs[1].open is not False:
+def legacy_recommender():
+    """The 1.5 Direction-A baseline recommender (a different model, data set, candidates and budget definition),
+    kept as a clearly identified legacy pathway during the migration to the 1.7 selection recommender."""
+    if True:
         st.markdown("A **transparent baseline**: one ridge model per method predicts log₁₀ RMSE from features that are "
-                    "known before running anything (circuit, observable, noise model, budget). It recommends a method "
-                    "only when the prediction separates it from the alternatives; it says **use raw** when no method "
-                    "is predicted to beat unmitigated results by more than 10 %, and it **abstains** outside the "
-                    "training data. It is not an optimal-QEM oracle: see its held-out evaluation in the study report.")
+                    "known before running anything (circuit, observable, noise model, budget). It recommends a "
+                    "protocol exactly as the study ran it (estimator, readout mitigation, calibration, training) only "
+                    "when the prediction separates it from the alternatives; it recommends the study's **baseline "
+                    "protocol** when no method is predicted to beat it by more than 10 %, and it **abstains** outside "
+                    "the training data or when this experiment's noise context (device model, scale, readout, "
+                    "observable, budget) is not the study's. It is not an optimal-QEM oracle: see its held-out "
+                    "evaluation in the study report.")
+        st.caption("In the bundled pilot this baseline does **not** beat simply using the best fixed method: on "
+                   "held-out base circuits its choices have a larger RMSE than the best fixed method's (study report, "
+                   "Figure 6), and neither calibrated-noise nor exact-state features change that. Treat a "
+                   "recommendation as a hypothesis to check, not as advice.")
         if not dirs:
             st.info("Needs a study report under `reports/` to learn from.", icon=":material/folder_open:")
         else:
@@ -151,50 +142,63 @@ with tabs[1]:
             name = c1.selectbox("Learn from", dirs, key="w_qp_rdir", persist_state=P)
             S.wdefault("w_qp_fs", "structural")
             fs = c2.selectbox("Features", list(FT.SETS), key="w_qp_fs", persist_state=P,
-                              help="structural: counts and fault rates; normalized: per-qubit/per-gate versions; "
-                                   "with_state: adds exact entanglement features (cost 2^n).")
+                              help="circuit_observable: circuit, observable and budget only (no noise model); "
+                                   "structural: adds light-cone fault rates, readout and scale under the selected "
+                                   "noise model; normalized: per-qubit/per-gate versions; with_state: adds exact "
+                                   "entanglement features (statevector 16·2^n bytes, time O(2^(3n/2))).")
             S.wdefault("w_qp_B", int(ss.get("shots", 4096)))
             B = c3.number_input("Total shot budget B", min_value=100, max_value=10 ** 9, step=1000, key="w_qp_B",
                                 persist_state=P)
 
             def do_recommend():
+                """Resolve the study's protocols and this experiment's noise context, check that they are compatible
+                (before any prediction), compute the features under the experiment's own noise model, cost every
+                protocol under the study's cost policy, then predict."""
+                from qemx import rec_context as RX
                 ss.qp_rec = None
                 ss.qp_err = ""
                 try:
                     mt_ = os.path.getmtime(os.path.join(REPORTS, name, "tables", "rmse_wide.csv"))
                     W_, _, _, _ = load_tables(name, mt_)
                     names = list(FT.SETS[fs])
-                    methods = [c[5:] for c in W_.columns if c.startswith("rmse_") and "feas_" + c[5:] in W_]
-                    mj = os.path.join(REPORTS, name, "tables", "methods.json")
-                    if os.path.exists(mj):                 # the study's candidates (upper-bound methods excluded)
-                        with open(mj, encoding="utf-8") as fh:
-                            cand = set(json.load(fh))
-                        methods = [m for m in methods if m in cand]
-                    W_ = W_.assign(x_log10_budget=np.log10(W_["B"].astype(float)))
-                    X = W_[["x_" + n for n in names]].to_numpy(float)
-                    Y = np.column_stack([np.log10(W_["rmse_" + m].astype(float).clip(lower=1e-12)) for m in methods])
-                    F = np.column_stack([W_["feas_" + m].astype(bool) & np.isfinite(W_["rmse_" + m].astype(float))
-                                         for m in methods])
-                    model = RC.RidgeRecommender(methods, alpha=1.0).fit(X, Y, F)
+                    study = study_context(name)
                     comp, err = C.compiled_now()
                     if comp is None:
                         raise ValueError("the circuit does not compile: %s" % err)
-                    from qemx import device as DV
-                    noise = ss.noise
-                    v, miss = FT.from_live(comp, noise, ss.observable, float(B))
+                    live = RX.live_context(comp, ss.backend, ss.noise, ss.observable)
+                    base = dict(sig=S.signature(), budget=int(B), study=name, feature_set=fs, context=live.summary(),
+                                predicted={}, interval=[math.nan, math.nan], alternatives=[], method=None,
+                                protocol="", baseline=study.baseline, baseline_protocol=(
+                                    RX.describe_protocol(study, study.baseline) if study.baseline in study.protocols
+                                    else ""), features={}, missing={}, notes=[], costs={})
+                    problems, notes = RX.compatibility(study, live, float(B), names, list(W_.columns))
+                    base["notes"] = notes
+                    if problems:                         # the model does not describe this protocol / noise context
+                        ss.qp_rec = dict(base, kind="abstain-context", reason="; ".join(problems),
+                                         problems=problems)
+                        return
+                    cols, _, _ = FT.resolve_columns(W_.columns, names, study.feature_schema)
+                    methods = [m for m in study.candidates if "rmse_" + m in W_ and "feas_" + m in W_]
+                    W_ = W_.assign(x_log10_budget=np.log10(W_["B"].astype(float)))
+                    cols["log10_budget"] = "x_log10_budget"
+                    X = W_[[cols[n] for n in names]].to_numpy(float)
+                    Y = np.column_stack([np.log10(W_["rmse_" + m].astype(float).clip(lower=1e-12)) for m in methods])
+                    F = np.column_stack([W_["feas_" + m].astype(bool) & np.isfinite(W_["rmse_" + m].astype(float))
+                                         for m in methods])
+                    # out-of-fold residuals by base circuit: group-CV conformal intervals (qemx.recommend)
+                    model = RC.RidgeRecommender(methods, alpha=1.0).fit(
+                        X, Y, F, W_["group"].to_numpy() if "group" in W_ else None)
+                    v, miss = RX.live_features(live, float(B), names)
                     x = np.array([v.get(n, math.nan) for n in names], float)
-                    # feasibility at B from each protocol's fixed cost (training + calibration), before any run
-                    feas = method_feasibility(name, methods, comp, noise, ss.observable, int(B))
-                    r = model.recommend(x, feas)
-                    ctx_note = ""
-                    if DV.is_device(ss.backend) is False:
-                        ctx_note = ("The study was simulated on a fake device model; your noise model is the "
-                                    "injector's. Treat any recommendation as an extrapolation across noise models.")
-                    ss.qp_rec = dict(kind=r.kind, method=r.method, reason=r.reason, predicted=r.predicted,
+                    # feasibility of each resolved protocol on this circuit, under the study's cost policy
+                    costs = RX.protocol_costs(study, live, int(B), methods, symmetry=ss.get("symmetry"))
+                    r = model.recommend(x, [bool(costs[m]["feasible"]) for m in methods])
+                    ss.qp_rec = dict(base, kind=r.kind, method=r.method, reason=r.reason, predicted=r.predicted,
                                      interval=list(r.interval), alternatives=list(r.alternatives),
+                                     protocol=RX.describe_protocol(study, r.method, costs.get(r.method))
+                                     if r.method else "",
                                      features={n: v.get(n) for n in names},
-                                     missing={n: miss[n] for n in names if n in miss}, note=ctx_note,
-                                     sig=S.signature(), budget=int(B), study=name, feature_set=fs)
+                                     missing={n: miss[n] for n in names if n in miss}, costs=costs)
                 except Exception as e:                   # noqa: BLE001 - never crash the page from a callback
                     ss.qp_err = "Could not compute a recommendation: %s: %s" % (type(e).__name__, str(e)[:300])
             st.button("Recommend", type="primary", icon=":material/recommend:", key="qp_go", on_click=do_recommend)
@@ -207,22 +211,60 @@ with tabs[1]:
                                icon=":material/update:")
                 if rec["kind"] in ("method",):
                     lo, hi = rec["interval"]
-                    st.success("**%s** — predicted RMSE %.3g (90 %% interval %.3g – %.3g). Alternatives: %s." % (
-                        rec["method"], 10 ** rec["predicted"][rec["method"]], 10 ** lo, 10 ** hi,
+                    st.success("**%s** — predicted RMSE %.3g (nominal 90 %% interval %.3g – %.3g, from held-out "
+                               "residuals of whole base circuits; it can undercover for an unlike circuit). "
+                               "Alternatives: %s." % (
+                        W.md_escape(rec["method"]), 10 ** rec["predicted"][rec["method"]], 10 ** lo, 10 ** hi,
                         ", ".join(rec["alternatives"]) or "none"), icon=":material/recommend:")
+                    st.caption("Protocol, exactly as the study ran it: %s." % W.md_escape(rec["protocol"]))
                 elif rec["kind"] == "raw":
-                    st.info("**Use raw results** — %s." % rec["reason"], icon=":material/do_not_disturb_on:")
+                    st.info("**Use the study's baseline protocol** — %s — %s." % (
+                        W.md_escape(rec["protocol"] or rec.get("baseline_protocol") or "RAW"), rec["reason"]),
+                        icon=":material/do_not_disturb_on:")
+                elif rec["kind"] == "abstain-context":
+                    st.warning("**No recommendation** — this experiment is outside the study's protocol or noise "
+                               "context:\n\n" + "\n".join("- " + W.md_escape(p) for p in rec.get("problems", [])),
+                               icon=":material/block:")
                 else:
                     st.warning("**No recommendation** (%s): %s." % (rec["kind"], rec["reason"]), icon=":material/help:")
-                if rec.get("note"):
-                    st.caption(rec["note"])
+                ctxs = rec.get("context") or {}
+                st.caption("Noise context of the features: %s%s." % (
+                    W.md_escape(ctxs.get("backend", "")),
+                    (" · device %s, scale s = %g, coherent fraction %g, readout %s" % (
+                        ctxs.get("device"), ctxs.get("scale"), ctxs.get("coherent_fraction"), ctxs.get("readout")))
+                    if ctxs.get("kind") == "device" else " · noise injector (no device scale)"))
+                for nt in rec.get("notes") or []:
+                    st.caption(W.md_escape(nt))
                 if rec["predicted"]:
                     st.dataframe(pd.DataFrame(sorted(rec["predicted"].items(), key=lambda kv: kv[1]),
                                               columns=["method", "predicted log10 RMSE"]), hide_index=True)
-                st.dataframe(pd.DataFrame([dict(feature=k, value=val, missing=rec["missing"].get(k, ""))
-                                           for k, val in rec["features"].items()]), hide_index=True, width="stretch")
-                st.caption("Feature weights are associations within the study's design, not causes. Feasibility here "
-                           "assumes every method can run at B; the Playground's budget preflight decides that exactly.")
+                if rec.get("costs"):
+                    st.dataframe(pd.DataFrame([dict(method=k, protocol=c.get("title", ""),
+                                                    readout=c.get("readout", ""),
+                                                    calibration_circuits=c.get("calibration_circuits"),
+                                                    training_shots=c.get("training_shots"),
+                                                    min_budget=c.get("min_budget"), feasible=c.get("feasible"),
+                                                    note=c.get("error", ""))
+                                               for k, c in rec["costs"].items()]), hide_index=True, width="stretch")
+                if rec["features"]:
+                    st.dataframe(pd.DataFrame([dict(feature=k, value=val, missing=rec["missing"].get(k, ""))
+                                               for k, val in rec["features"].items()]), hide_index=True,
+                                 width="stretch")
+                st.caption("Feature weights are associations within the study's design, not causes. Feasibility uses "
+                           "each protocol's fixed cost on this circuit under the study's cost policy (minimum budget "
+                           "m + T·s_tr + c·s_min); target circuits counted before running are a lower bound for ZNE "
+                           "and NIL.")
+
+with tabs[1]:
+    if tabs[1].open is not False:
+        from ui import recommend_view as RV
+        RV.render()
+        with st.expander("Legacy 1.5 recommender (Direction A study: another model, data, candidate set and budget "
+                         "definition)", icon=":material/history:"):
+            st.caption("Kept during the migration. It is **not** the 1.7 selection recommender above: it predicts "
+                       "RMSE of the 1.5 study's method presets from the Direction A pilot, under that study's cost "
+                       "policy.")
+            legacy_recommender()
 
 with tabs[2]:
     if tabs[2].open is not False:
@@ -243,3 +285,12 @@ with tabs[2]:
 with tabs[3]:
     if tabs[3].open is not False:
         st.markdown(FT.dictionary_markdown())
+
+with tabs[4]:
+    if tabs[4].open is not False:
+        st.markdown("The study of budget-aware **protocol selection**: complete protocols (calibration, training, "
+                    "allocation and failure handling included) compared at equal total budget on emulated "
+                    "fake-device trials, with learned and fixed selection policies. The corrected pilot of 1.7 is "
+                    "listed first; the 1.6 pilot is kept as a historical study.")
+        from ui import selection_view as SV
+        ok, _ = W.guarded("Reading the selection study", SV.render, REPORTS)

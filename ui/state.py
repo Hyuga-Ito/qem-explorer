@@ -236,13 +236,16 @@ def redo():
 
 
 def _load_template_model(key: str, params: dict):
+    """The template's input preparation becomes the per-qubit inputs and the rest is the circuit (one input model,
+    qemx/io_semantics.py), so the input is shown where it is set and prepared exactly once."""
+    from qemx import io_semantics as IO
     s = ss()
     params = T.clamp_params(key, params)
-    tpl = T.REGISTRY[key][1](**params)
+    tokens, body, tpl = IO.template_inputs(key, params)
     if "ops" in s:
         _remember()
-    s.n = tpl.spec.n
-    s.ops = _ops_dicts(tpl.spec)
+    s.n = body.n
+    s.ops = _ops_dicts(body)
     s.ops_version = s.get("ops_version", 0) + 1
     s.template = key
     s.template_ops_version = s.ops_version            # edits after this make the circuit "custom"
@@ -256,8 +259,11 @@ def _load_template_model(key: str, params: dict):
     s.observable = tpl.observable
     s.symmetry = tpl.symmetry
     s.relabel = tpl.relabel
-    s.inputs = ["0"] * tpl.spec.n
+    s.inputs = list(tokens)
+    s.tpl_inputs = list(tokens)                       # the template's own input, for the Inputs panel's comparison
+    s.tpl_input_error = ""
     s.basis = "Z" * tpl.spec.n
+    s.io_all_applied, s.io_apply_msg = None, ""
     s.var_spec = dict(version=s.ops_version, params=[dict(p) for p in tpl.variational]) if tpl.variational else None
     s.var_scan = None
     for p in T.REGISTRY[key][2]:                      # the template card shows what was loaded (Learn setups too)
@@ -390,6 +396,106 @@ def cb_template_preset(key: str):
     """Callback: set the template's parameter widgets to the chosen preset (the user then presses Load)."""
     for k, v in template_preset_values(key, ss().get("w_tpl_preset_%s" % key, "")).items():
         ss()[k] = v
+
+
+# ------------------------------------------------------------------ the template's input (Inputs and measurement)
+def template_claim():
+    """(applies, reasons) of the loaded template's formula and notes for the *current* experiment
+    (``io_semantics.template_claim``): an identity such as F F†|s⟩ = |s⟩ is a prediction only while the circuit, the
+    inputs, the bases and the bit order are the template's."""
+    from qemx import io_semantics as IO
+    s = ss()
+    if s.get("template") not in T.REGISTRY:
+        return False, ["no template is loaded"]
+    return IO.template_claim(template_input_active(), input_matches_template(), str(s.basis), bool(s.relabel),
+                             bool(s.get("template_relabel", False)))
+
+
+def template_input_active() -> bool:
+    """The loaded template's input presets apply: a template is loaded and its circuit was not edited since."""
+    s = ss()
+    return s.get("template") in T.REGISTRY and not is_custom() and s.get("tpl_inputs") is not None \
+        and len(s.get("tpl_inputs") or ()) == int(s.get("n", 0))
+
+
+def input_matches_template() -> bool:
+    """The current per-qubit inputs are the loaded template's own input (False once edited away from it)."""
+    from qemx import io_semantics as IO
+    s = ss()
+    return template_input_active() and IO.same_inputs(list(s.inputs), list(s.tpl_inputs))
+
+
+def _template_follows(key: str, params: dict, tpl):
+    """The template's description, input-parameter widgets and (while unchanged) its own observable follow a new
+    input setting. The circuit is not touched: input parameters never change it."""
+    from qemx import io_semantics as IO
+    s = ss()
+    s.tpl_params = dict(params)
+    s.tpl_tex, s.tpl_notes = tpl.tex, tpl.notes
+    for p in IO.input_params(key):
+        s["w_tp_%s_%s" % (key, p.name)] = params[p.name]
+    o = s.get("observable")
+    if o is not None and o.key == s.get("template_obs_key") and tpl.observable.n == int(s.n):
+        s.observable = tpl.observable                     # still the template's own observable: it follows
+        s.template_obs_key = tpl.observable.key
+        s.w_obs = tpl.observable.key
+
+
+def _apply_template_input(key: str, params: dict) -> bool:
+    from qemx import io_semantics as IO
+    s = ss()
+    s.tpl_input_error = ""
+    try:
+        params = T.clamp_params(key, params)
+        tokens, body, tpl = IO.template_inputs(key, params)
+    except (ValueError, ArithmeticError) as e:
+        s.tpl_input_error = "This input setting cannot be built: %s" % (str(e)[:300] or type(e).__name__)
+        return False
+    if body.n != int(s.n) or [o for o in body.ops] != list(spec().ops):
+        s.tpl_input_error = ("This input setting belongs to a circuit of another size or shape; press Load template "
+                             "to rebuild the circuit.")
+        return False
+    s.inputs = list(tokens)
+    s.tpl_inputs = list(tokens)
+    for q in range(int(s.n)):
+        s["w_in_%d" % q] = tokens[q]
+    _template_follows(key, params, tpl)
+    return True
+
+
+def cb_template_input():
+    """Callback of the template-input controls in Inputs and measurement (and of "Use the template's input"): write
+    the template's input for these settings into the per-qubit inputs. The circuit is unchanged."""
+    from qemx import io_semantics as IO
+    s = ss()
+    key = s.get("template")
+    if not template_input_active():
+        return
+    params = dict(s.get("tpl_params") or {})
+    for p in IO.input_params(key):
+        params[p.name] = s.get("w_tp_%s_%s" % (key, p.name), params.get(p.name, p.default))
+    _apply_template_input(key, params)
+
+
+def _sync_template_input():
+    """After a per-qubit input edit: when the inputs equal the template's input for some setting of its input
+    parameters (e.g. ramp:3 is the QFT's Fourier input with s = 3), show that setting; otherwise the Inputs panel says
+    that the inputs were edited. Nothing but the template's description and controls changes here."""
+    from qemx import io_semantics as IO
+    s = ss()
+    key = s.get("template")
+    if not template_input_active() or not IO.input_params(key):
+        return
+    try:
+        found = IO.infer_template_input(key, s.tpl_params, list(s.inputs))
+        if found is None:
+            return
+        params = T.clamp_params(key, dict(s.tpl_params, **found))
+        tokens, _, tpl = IO.template_inputs(key, params)
+    except Exception:                                        # noqa: BLE001 - a display convenience, never a crash
+        return
+    s.tpl_inputs = list(tokens)
+    _template_follows(key, params, tpl)
 
 
 # ------------------------------------------------------------------ derived
@@ -602,10 +708,13 @@ def cb_noise_preset():
 
 
 def cb_input(q: int):
+    """Per-qubit input edit: changes the input only (never the measurement basis)."""
     s = ss()
     inputs = list(s.inputs)
     inputs[q] = s["w_in_%d" % q]
     s.inputs = inputs
+    s.io_all_applied, s.io_apply_msg = None, ""          # the register-wide text is no longer the active setting
+    _sync_template_input()
 
 
 def cb_register_io():
@@ -624,17 +733,23 @@ def cb_register_io():
     except SW.SweepError as e:
         s.io_error = str(e)
         return
+    from qemx import io_semantics as IO
+    s.io_apply_msg = IO.apply_summary(list(s.inputs), new_in, s.basis, new_bs, bool(inp), bool(bs))
     s.inputs, s.basis = new_in, new_bs
+    s.io_all_applied = (inp, bs)                         # the text that is now the active setting
     for q in range(n):
         s["w_in_%d" % q] = new_in[q]
         s["w_bs_%d" % q] = new_bs[q]
+    _sync_template_input()
 
 
 def cb_basis(q: int):
+    """Per-qubit basis edit: changes the measurement only (never the input or the output state)."""
     s = ss()
     b = list(s.basis)
     b[q] = s["w_bs_%d" % q]
     s.basis = "".join(b)
+    s.io_all_applied, s.io_apply_msg = None, ""
 
 
 def cb_observable():
@@ -706,6 +821,23 @@ def cb_tab(page: str, key: str):
     ss().page_tab = dict(ss().get("page_tab", {}), **{page: ss()[key]})
 
 
+def page_tabs(page: str, key: str, labels: list):
+    """Lazy, stateful tabs whose selection the app owns (1.5.1). The selected tab is kept in ``page_tab[page]``
+    (explicit session state that survives page switches), set from a click (``on_change``) *and* from the value the
+    widget renders with, so a selection made programmatically (Learn setups, tests) is remembered too. Returns the
+    st.tabs containers (use ``tab.open`` to render only the selected one)."""
+    s = ss()
+    want = s.get("page_tab", {}).get(page)
+    wdefault(key, want if want in labels else labels[0])
+    if s.get(key) not in labels:                    # a stale value (a tab renamed in a later version)
+        s[key] = labels[0]
+    tabs = st.tabs(labels, key=key, on_change=cb_tab, args=(page, key))
+    cur = s.get(key)
+    if cur in labels and s.get("page_tab", {}).get(page) != cur:
+        s.page_tab = dict(s.get("page_tab", {}), **{page: cur})
+    return tabs
+
+
 # ------------------------------------------------------------------ JSON state
 def to_json() -> dict:
     """The app state as plain data. It never contains credentials: tokens are not part of the model."""
@@ -727,15 +859,23 @@ from qemx.state_schema import (  # noqa: E402,F401 - the shared schema (moved in
 
 def from_json(d: dict):
     """Callback: load a validated state."""
+    from qemx import io_semantics as IO
     v = validate_state(d)
+    sp = CircuitSpec(int(v["n"]), tuple(Op(o["name"], tuple(o["qubits"]), tuple(o["params"]), o["kind"],
+                                          o.get("tag", "")) for o in v["ops"]), v["name"])
+    inputs, body = IO.split_preparation(sp, v["inputs"])   # a preparation saved in the circuit (before 1.5.1)
+    moved = len(sp.ops) - len(body.ops)
     s = ss()
     _remember()
     s.n = v["n"]
-    s.ops = v["ops"]
+    s.ops = _ops_dicts(body)
     s.ops_version = s.get("ops_version", 0) + 1
     s.template_name = v["name"]
     s.tpl_tex, s.tpl_notes, s.var_spec = "", "", None      # the loaded circuit is not the template shown before
-    s.inputs, s.basis, s.relabel = v["inputs"], v["basis"], v["relabel"]
+    s.tpl_inputs = None
+    s.import_note = ("The saved circuit began with %d input-preparation gate%s; they are now the per-qubit inputs "
+                     "(the same state, prepared once)." % (moved, "" if moved == 1 else "s")) if moved else ""
+    s.inputs, s.basis, s.relabel = list(inputs), v["basis"], v["relabel"]
     s.compile = v["compile"]
     s.noise = NoiseSpec(**v["noise"])
     match = [k for k, spec_ in PRESETS.items() if spec_ == s.noise]
@@ -838,6 +978,7 @@ def apply_setup(setup: dict, mode: str = "replace"):
             set_circuit(parse(text, int(n), name))
             s.template_name = name
             s.inputs, s.basis = ["0"] * int(n), "Z" * int(n)
+            s.tpl_inputs = None
             s.symmetry, s.relabel = None, False
             s.var_spec, s.tpl_tex, s.tpl_notes = None, "", ""
         ob = setup.get("observable")

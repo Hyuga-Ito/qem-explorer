@@ -14,7 +14,12 @@ Several lines give every combination. **Register inputs** (all product states, p
 * ``ramp:k`` — the phase ramp :math:`|{\rm ramp}{:}k\rangle=F^\dagger|k\rangle=\frac1{\sqrt N}\sum_j
   e^{-2\pi ijk/N}|j\rangle`, i.e. qubit q in :math:`(|0\rangle+e^{-2\pi i k2^q/N}|1\rangle)/\sqrt2`; ``ramp:0`` is
   :math:`|{+}\cdots{+}\rangle`, and the exact QFT maps ``ramp:k`` to :math:`|k\rangle`;
-* ``bits:0101`` — a basis state written like the app's bitstrings (q_{n-1} … q_0).
+* ``bits:0101`` — a basis state written like the app's bitstrings (q_{n-1} … q_0);
+* ``ph:t`` (a phase in turns) on every qubit, and — in the Playground's register-wide box, where commas do not separate
+  values — ``bloch:θ,φ`` on every qubit or one state per qubit separated by spaces, q0 first (``0 + 1``).
+
+A register input *replaces* the input, including a template's own one (the QFT's Fourier state, BV's ancilla |−⟩):
+the input is prepared once (qemx/io_semantics.py).
 
 Parsing is strict: names and values are checked against a whitelist, numbers go through the app's safe expression
 reader (never ``eval``), and the text is limited in size. Nothing is executed.
@@ -27,7 +32,7 @@ from dataclasses import dataclass
 
 from . import templates as T
 from .circuit import eval_expr
-from .compile import INPUT_STATES, phase_token
+from .compile import INPUT_STATES, phase_token, valid_input
 from .noise import NoiseSpec
 
 MAX_TEXT = 2000
@@ -57,8 +62,17 @@ def input_tokens(value: str, n: int) -> list:
     """Per-qubit input tokens for a register input (see the module docstring)."""
     v = str(value).strip()
     v = _ALIASES.get(v.lower(), v)
-    if v in INPUT_STATES:
+    if v in INPUT_STATES or valid_input(v):              # one state on every qubit (also ph:t, bloch:θ,φ)
         return [v] * n
+    parts = v.split()
+    if len(parts) > 1:                                   # one state per qubit, q0 first
+        toks = [_ALIASES.get(x.lower(), x) for x in parts]
+        bad = [x for x in toks if not valid_input(x)]
+        if bad:
+            raise SweepError("unknown input %r in the per-qubit list" % bad[0][:30])
+        if len(toks) != n:
+            raise SweepError("%d per-qubit inputs for %d qubits (list one state per qubit, q0 first)" % (len(toks), n))
+        return toks
     m = re.fullmatch(r"ramp:(-?\d{1,9})", v.replace(" ", ""), flags=re.I | re.ASCII)
     if m:
         k = int(m.group(1))
@@ -69,7 +83,8 @@ def input_tokens(value: str, n: int) -> list:
         if len(b) != n:
             raise SweepError("bits:%s has %d bits, the circuit has %d qubits" % (b, len(b), n))
         return ["1" if b[n - 1 - q] == "1" else "0" for q in range(n)]
-    raise SweepError("unknown input %r: use 0, 1, +, -, +i, -i, plus, minus, ramp:k or bits:0101" % v[:30])
+    raise SweepError("unknown input %r: use 0, 1, +, -, +i, -i, plus, minus, ph:t, bloch:θ,φ, ramp:k, bits:0101 or "
+                     "one state per qubit separated by spaces" % v[:30])
 
 
 def basis_string(value: str, n: int) -> str:

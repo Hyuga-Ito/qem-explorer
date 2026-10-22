@@ -282,10 +282,10 @@ def to_markdown(tex: str) -> str:
 
 def build(name: str, body: str, workdir: str) -> str:
     tex = os.path.join(workdir, name + ".tex")
-    with open(tex, "w") as f:
+    with open(tex, "w", encoding="utf-8") as f:
         f.write(PREAMBLE + body + "\n\\end{document}\n")
     r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", name + ".tex"], cwd=workdir,
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=180, encoding="utf-8")
     if r.returncode != 0:
         err = [l for l in r.stdout.splitlines() if l.startswith("!")]
         raise RuntimeError("%s: %s" % (name, "; ".join(err[:3]) or r.stdout[-400:]))
@@ -295,6 +295,9 @@ def build(name: str, body: str, workdir: str) -> str:
 
 
 def main(names=None):
+    for _s in (sys.stdout, sys.stderr):       # printed text is UTF-8 on every platform
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
     os.makedirs(OUT, exist_ok=True)
     work = tempfile.mkdtemp(prefix="qxfig_")
     cap_path = os.path.join(OUT, "captions.json")
@@ -305,7 +308,7 @@ def main(names=None):
                 continue
             body, cap = split_caption(name, body)
             captions[name] = cap
-            with open(os.path.join(OUT, name + ".tex"), "w") as f:      # the source, next to the SVG
+            with open(os.path.join(OUT, name + ".tex"), "w", encoding="utf-8") as f:      # the source, next to the SVG
                 f.write(PREAMBLE + body + "\n\\end{document}\n")
             print("built", build(name, body, work))
     finally:

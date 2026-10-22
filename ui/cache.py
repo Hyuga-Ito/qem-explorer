@@ -1,6 +1,7 @@
 """Streamlit caches around the engine. Keys are content hashes, JSON strings or signatures, so a cache hit needs the
-exact same circuit, compilation, noise, backend and recipes. These caches are shared by every session of the
-server, so a key must always describe what the cached value was computed from."""
+exact same circuit, compilation, noise, backend and recipes. The resource caches below are shared by every session of
+the server, so a key must always describe what the cached value was computed from, and only values that are not
+mutated after they are built are shared; comparisons (mutable runners and outcomes) are cached per session."""
 from __future__ import annotations
 
 import dataclasses
@@ -53,11 +54,33 @@ def timeline(sig: str, compiled_, noise_json: str, kind: str, lam: float, foldin
     return _timeline(sig, circuit_key(compiled_), compiled_, noise_json, kind, float(lam), folding, dd, backend)
 
 
-@st.cache_resource(max_entries=12, show_spinner=False)
+SESSION_COMPARISONS = 4          # comparisons kept per session (Playground, Bias–variance A and B, one spare)
+
+
 def comparison(sig: str, _compiled, noise_json: str, _observable: Observable, _recipes: tuple, backend: str,
                shots: int, _symmetry):
-    return compare(_compiled, NoiseSpec(**json.loads(noise_json)), _observable, list(_recipes), backend, shots,
-                   _symmetry, check_budget=True)       # budget preflight: unaffordable protocols are not run
+    """The comparison (ideal, outcomes, runner) for this state, cached **per session** (1.5.1, review 6.3).
+
+    A comparison holds mutable objects — the runner's memo of simulations, outcomes and their resamplers — that
+    later views keep using. 1.5.0 kept them in a server-wide ``st.cache_resource``, shared by every session; no
+    corruption was reproduced, but nothing guaranteed that two sessions never mutated the same objects at once. Each
+    session now owns its comparisons (a small LRU in its own state); compiled circuits and time-travel traces, which
+    are not mutated after they are built, stay shared."""
+    key = (sig, noise_json, tuple(r.key() if hasattr(r, "key") else repr(r) for r in _recipes), backend, int(shots))
+    store = st.session_state.get("_qemx_comparisons")
+    if store is None:
+        from collections import OrderedDict
+        store = OrderedDict()
+        st.session_state["_qemx_comparisons"] = store
+    if key in store:
+        store.move_to_end(key)
+        return store[key]
+    val = compare(_compiled, NoiseSpec(**json.loads(noise_json)), _observable, list(_recipes), backend, shots,
+                  _symmetry, check_budget=True)        # budget preflight: unaffordable protocols are not run
+    store[key] = val
+    while len(store) > SESSION_COMPARISONS:
+        store.popitem(last=False)
+    return val
 
 
 def noise_json(noise: NoiseSpec) -> str:

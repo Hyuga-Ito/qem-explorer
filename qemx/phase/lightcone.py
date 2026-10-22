@@ -148,7 +148,7 @@ def _noise_instructions(spec: CircuitSpec, noise, *, layout=None, twirl="none", 
 
 
 def calculate_lambda_lc(circuit, noise_model, observable=None, measure_map: dict | None = None, *, layout=None,
-                        twirl: str = "none", dd: str = "none") -> LambdaReport:
+                        twirl: str = "none", dd: str = "none", support=None) -> LambdaReport:
     """λ_LC (and λ, λ_ro) of a compiled circuit under a noise model.
 
     circuit       a :class:`~qemx.compile.Compiled` (its implemented circuit, measurement map and physical layout
@@ -157,6 +157,8 @@ def calculate_lambda_lc(circuit, noise_model, observable=None, measure_map: dict
                   :class:`~qemx.device.DeviceModel`
     observable    an Observable or o-vector over classical bits; None = every measured qubit
     twirl, dd     the recipe's transforms (twirling replaces gate errors by their Pauli twirl; DD adds pulses)
+    support       (1.5.1) the observable's support as physical (compact) qubits, given directly — e.g. one term of
+                  a Pauli sum (``qemx.features.noise_features``); overrides ``observable``
     """
     from ..compile import Compiled
     if isinstance(circuit, Compiled):
@@ -165,7 +167,9 @@ def calculate_lambda_lc(circuit, noise_model, observable=None, measure_map: dict
     else:
         spec, mm = circuit, measure_map
     n = spec.n
-    if observable is None:
+    if support is not None:
+        support = tuple(sorted({int(q) for q in support}))
+    elif observable is None:
         support = tuple(sorted({int(v) for v in (mm or {i: i for i in range(n)}).values()}))
     else:
         support = observable_support(observable, mm, n)

@@ -59,11 +59,14 @@ st.segmented_control("Where", ["local", "ibm"], key="w_hw_mode", persist_state=P
                                   "ibm": "IBM Quantum hardware"}.get)
 mode = ss.get("w_hw_mode") or "local"
 c = st.columns(3)
-c[0].number_input("PEC sampled circuits K", min_value=K_LO, max_value=K_HI, step=8, key="w_hw_pec_inst",
+c[0].number_input("PEC: at most K sampled circuits", min_value=K_LO, max_value=K_HI, step=8, key="w_hw_pec_inst",
                   persist_state=P,
-                  help="PEC's target shots $N_t$ are split evenly over $K$ sampled circuits: $s=N_t/K$ shots each. "
-                       "The estimator's variance includes the instance-to-instance term $(s-1)\\,\\mathrm{Var}_{\\rm inst}$, "
-                       "so fewer circuits cost precision, not correctness.")
+                  help="A hardware limit, not part of the recipe. PEC keeps its configured shots per sampled circuit "
+                       "$s$ (1 by default: the textbook estimator) and needs $N_t/s$ sampled circuits. Only when that "
+                       "exceeds $K$ does the plan raise $s$ so that at most $K$ circuits are sent — a different "
+                       "protocol, whose variance includes the instance-to-instance term "
+                       "$(s-1)\\,\\mathrm{Var}_{\\rm inst}$. The plan's protocol table shows the requested and the "
+                       "effective values side by side; both are exported.")
 c[1].select_slider("transpiler optimization level", [0, 1, 2, 3], key="w_hw_opt", persist_state=P)
 c[2].metric("shot budget per contender", f"{int(ss.shots):,}",
             help="The sidebar's budget $B$: each contender's target, training and calibration circuits share it, "
@@ -71,17 +74,16 @@ c[2].metric("shot budget per contender", f"{int(ss.shots):,}",
 
 
 def hw_recipes():
-    """The contenders with the page's K for PEC. Contenders that become identical (PEC recipes that differed only
-    in K) are sent once: each would otherwise be measured, and billed, separately."""
-    from qemx.methods import Recipe
+    """The contenders as configured. PEC's "instances" is a simulation setting (Aer's Monte-Carlo pool) that a
+    hardware plan does not use, so contenders that differ only in it are sent once: each would otherwise be measured,
+    and billed, separately. The page's K is passed to the planner as a hardware limit (``pec_max_circuits``)."""
+    import json
     out, seen = [], set()
     for r, ok, _ in support:
-        if r.estimator == "pec":
-            p = dict(r.p)
-            p["instances"] = int(ss.w_hw_pec_inst)
-            r = Recipe.make("pec", r.twirl, r.dd, r.readout, **p)
-        if r.key() not in seen:
-            seen.add(r.key())
+        p = {k: v for k, v in r.p.items() if not (r.estimator == "pec" and k == "instances")}
+        key = json.dumps([r.estimator, r.twirl, r.dd, r.readout, p], sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
             out.append(r)
     return out
 
@@ -138,12 +140,18 @@ def plan_view(plan, key):
     with st.expander("Shot allocation: how each contender spends the budget", icon=":material/account_balance:",
                      key="exp_plan_" + key):
         st.dataframe(pd.DataFrame(plan.table()), hide_index=True, width="stretch")
-        st.caption("Planned from the device's calibrated error rates: ZNE splits its target shots N_j ∝ |η_j|σ_j, "
-                   "readout mitigation gives each calibration circuit s* shots, PEC runs K circuits with N_t/K "
-                   "shots each (identical sampled circuits are merged into one with their shots added, so "
-                   "*circuits* counts what is actually sent), CDR / FR / NIL spend their training shots. Contenders never "
-                   "share counts. "
+        st.caption("Planned from the device's calibrated error rates (supplied calibration, not oracle knowledge), in "
+                   "integers that add up to each contender's budget: ZNE splits its target shots N_j ∝ |η_j|σ_j, "
+                   "readout mitigation gives each calibration circuit an integer s near s*, PEC keeps its configured "
+                   "s shots per sampled circuit and runs ⌊N_t/s⌋ sampled circuits (identical sampled circuits are "
+                   "merged into one with their shots added, so *circuits* counts what is actually sent), CDR / FR / "
+                   "NIL spend their training shots. Contenders never share counts. An *effective budget* below the "
+                   "declared one is explained in its row. "
                    + " ".join(plan.notes))
+        prot = plan.protocol_table() if hasattr(plan, "protocol_table") else []
+        if any(not r.get("same", True) for r in prot):
+            st.markdown("**Protocol: requested vs executed**")
+            st.dataframe(pd.DataFrame(prot), hide_index=True, width="stretch")
 
 
 def results_view(res, plan, title, key, extra=None, state=None, sig=None):
@@ -153,6 +161,8 @@ def results_view(res, plan, title, key, extra=None, state=None, sig=None):
                    "that was sent.")
     plan_view(plan, key)
     tables = {"hardware_plan": pd.DataFrame(plan.table()), "hardware_requests": pd.DataFrame(plan.request_table())}
+    if hasattr(plan, "protocol_table"):
+        tables["hardware_protocol"] = pd.DataFrame(plan.protocol_table())
     tables.update(extra or {})
     RES.render(res, kp=key + "_", bundle=RES.bundle_factory(res, state or S.to_json(), title, title=title,
                                                             extra_tables=tables),
@@ -180,7 +190,7 @@ if mode == "local":
                              ss.w_hw_fake) if okb else (False, None)
         if ok:
             ok, plan = W.guarded("Planning", H.make_plan, comp, ss.observable, hw_recipes(), int(ss.shots), ss.symmetry,
-                                 0, b)
+                                 0, b, pec_max_circuits=int(ss.w_hw_pec_inst))
             if ok:
                 bar = st.progress(0.0, text="Running the Sampler locally…")
                 ok, freqs = W.guarded("The local run", H.run_local, plan, ss.w_hw_fake, 0,
@@ -217,28 +227,37 @@ else:
         from qiskit_ibm_runtime import QiskitRuntimeService
         return QiskitRuntimeService(channel=channel, token=token, instance=instance or None)
 
-    def _campaign_ledger():
-        """The thesis campaign's QPU ledger when one is configured (QEMX_CAMPAIGN_LEDGER), else None."""
-        import os
-        path = os.environ.get("QEMX_CAMPAIGN_LEDGER", "")
-        if not path or not os.path.exists(path):
-            return None
+    def _ledger_state():
+        """(ledger, "") or (None, problem): the campaign QPU ledger named by QEMX_CAMPAIGN_LEDGER. An unset variable,
+        a path that does not exist or an invalid file is a problem to show — never "no ledger" — and nothing is
+        submitted without the ledger."""
         from qemx import campaign as CG
-        return CG.Ledger.load(path)
+        try:
+            return CG.ledger_from_env(), ""
+        except (CG.LedgerError, CG.LedgerBusy) as e:
+            return None, str(e)
 
     def submit_cb():
-        """Runs before the rerun: read the token, clear the field, connect, compile, submit. Nothing secret is kept.
-        The sidebar's time limit bounds the planning; jobs submitted before a failure are always kept."""
+        """Runs before the rerun: read the token, clear the field, check the campaign ledger, connect, compile,
+        submit. Nothing secret is kept. The sidebar's time limit bounds the planning; jobs submitted before a failure
+        are always kept, and every job id reaches the ledger and this session as soon as its job exists."""
+        from qemx import campaign as CG
         token = (ss.get("hw_token") or "").strip()
         ss["hw_token"] = ""
         ss.hw_msg, ss.hw_err = "", ""
+        ledger, problem = _ledger_state()                # no ledger: no login and no submission
+        if ledger is None:
+            ss.hw_err = "Not submitted — campaign QPU ledger: %s" % problem
+            return
         if not token:
             ss.hw_err = "Enter an API token."
             return
         channel = ss.get("hw_channel") or "ibm_quantum_platform"
+        exec_mode = ss.get("hw_exec_mode") or "job"
         sent_sig, sent_state = S.signature(), S.to_json()
         ctx = {}
         try:
+            CG.check_no_unresolved(ledger)
             with deadline(ss.get("time_limit", 0)):
                 service = _connect(token, channel, (ss.get("hw_instance") or "").strip())
                 name = (ss.get("hw_backend") or "").strip()
@@ -246,44 +265,54 @@ else:
                 b = service.backend(name) if name else service.least_busy(operational=True, simulator=False,
                                                                           min_num_qubits=n)
                 comp = compile_for(b, b.name)
-                plan = H.make_plan(comp, ss.observable, hw_recipes(), int(ss.shots), ss.symmetry, 0, b)
+                plan = H.make_plan(comp, ss.observable, hw_recipes(), int(ss.shots), ss.symmetry, 0, b,
+                                   pec_max_circuits=int(ss.w_hw_pec_inst))
                 if not plan.requests:
                     ss.hw_err = "Nothing to run: " + "; ".join("%s: %s" % kv for kv in plan.skipped.items())
                     return
                 ctx.update(plan=plan, backend=b.name, phys=comp.info["phys"])
-            ledger = _campaign_ledger()
-            if ledger is not None and ledger.unsubmitted_reservations():
-                ss.hw_err = ("The campaign ledger holds a reservation without a job id (an interrupted submission). "
-                             "Resolve it first: python -m qemx.campaign status/resolve.")
-                return
-            recs = H.submit(plan, b, max_execution_time=int(ss.get("hw_maxtime") or 0) or None, ledger=ledger)
-            ss.hw_jobs = dict(records=recs, plan=plan, backend=b.name, phys=comp.info["phys"], channel=channel,
-                              sig=sent_sig, state=sent_state, note=comp.info.get("layout_note", ""))
+
+            def keep(recs):                              # this session holds every job id at once
+                ss.hw_jobs = dict(records=list(recs), unknown=[], channel=channel, sig=sent_sig, state=sent_state,
+                                  note=comp.info.get("layout_note", ""), mode=exec_mode, **ctx)
+                ss.hw_res, ss.hw_cache = None, {}
+            recs = H.submit(plan, b, max_execution_time=int(ss.get("hw_maxtime") or 0) or None, ledger=ledger,
+                            mode=exec_mode, on_record=keep)
+            keep(recs)
+            ss.hw_msg = "Submitted %d job(s) to %s in %s mode: %s" % (
+                len(recs), b.name, recs[0].get("mode", exec_mode) if recs else exec_mode,
+                ", ".join(r["job_id"] for r in recs))
+        except H.SubmitError as e:                       # some jobs went through, or one's outcome is unknown
+            ss.hw_jobs = dict(records=e.records, unknown=list(e.unknown), channel=channel, sig=sent_sig,
+                              state=sent_state, note="", mode=exec_mode, **ctx)
             ss.hw_res, ss.hw_cache = None, {}
-            ss.hw_msg = "Submitted %d job(s) to %s: %s" % (len(recs), b.name, ", ".join(r["job_id"] for r in recs))
-        except H.SubmitError as e:                       # some jobs went through: keep them, say which
-            ss.hw_jobs = dict(records=e.records, channel=channel, sig=sent_sig, state=sent_state, note="", **ctx)
-            ss.hw_res, ss.hw_cache = None, {}
-            ss.hw_err = scrub("Submission stopped after %d job(s) (%s). The submitted jobs below still run and can be "
-                              "collected; the contenders whose jobs were not sent will report missing counts." % (
-                                  len(e.records), str(e)[:300]), token)
+            if e.unknown:
+                ss.hw_err = scrub("Submission stopped after %d job(s): the outcome of the next submission is unknown "
+                                  "(the provider may have created the job). Its QPU time stays committed in the "
+                                  "campaign ledger and nothing more is submitted until it is resolved; \"Check status "
+                                  "and fetch results\" looks for it by its tag. %s" % (len(e.records), str(e)[:400]),
+                                  token)
+            else:
+                ss.hw_err = scrub("Submission stopped after %d job(s) (%s). The submitted jobs below still run and can "
+                                  "be collected; the contenders whose jobs were not sent will report missing counts." % (
+                                      len(e.records), str(e)[:300]), token)
             LOG.warning("hardware submission stopped part-way: %s", scrub(str(e), token))
-        except Exception as e:                           # noqa: BLE001 - the campaign ledger refused the first job
-            from qemx.campaign import CampaignLimit
-            if not isinstance(e, CampaignLimit):
+        except Exception as e:                           # noqa: BLE001 - incl. the ledger refusing the first job
+            if isinstance(e, (CG.CampaignLimit, CG.LedgerError, CG.LedgerBusy)):
+                ss.hw_err = scrub("Not submitted — campaign QPU ledger: %s" % str(e)[:500], token)
+            elif isinstance(e, CG.SubmissionUnknown):
+                ss.hw_err = scrub("The outcome of the submission is unknown: %s" % str(e)[:500], token)
+            else:
                 title, msg = explain(e, "the submission")
                 ss.hw_err = scrub("%s. %s" % (title, msg), token)
                 LOG.warning("hardware submission failed: %s", scrub(type(e).__name__ + ": " + str(e), token))
-            else:
-                ss.hw_err = "Not submitted — campaign QPU ledger: %s" % str(e)[:300]
-        except RunTimeout as e:                           # never let the token reach a message
-            title, msg = explain(e, "the submission")
-            ss.hw_err = scrub("%s. %s" % (title, msg), token)
-            LOG.warning("hardware submission failed: %s", scrub(type(e).__name__ + ": " + str(e), token))
         finally:
             token = None                                 # noqa: F841 - drop the last reference
 
     def fetch_cb():
+        """Check the jobs, reconcile every ended job's reported QPU usage into the campaign ledger (the CLIs' step,
+        qemx.campaign.reconcile_job), look up submissions whose outcome was unknown by their tag, then analyze."""
+        from qemx import campaign as CG
         token = (ss.get("hw_token2") or "").strip()
         ss["hw_token2"] = ""
         ss.hw_err = ""
@@ -294,38 +323,88 @@ else:
         if not token:
             ss.hw_err = "Enter the API token again to read the results (it is not kept between steps)."
             return
+        ledger, problem = _ledger_state()
         try:
             with deadline(ss.get("time_limit", 0)):
                 service = _connect(token, jobs["channel"], (ss.get("hw_instance2") or "").strip())
+                if jobs.get("unknown") and ledger is not None:
+                    CG.resolve_unknown(ledger, CG.ibm_tag_lookup(service))     # a job found by its tag is attached
+                    got, gone, still = CG.sync_pending(ledger, jobs["unknown"])
+                    jobs["records"], jobs["unknown"] = list(jobs["records"]) + got, still
                 cache = ss.setdefault("hw_cache", {})
-                freqs, status = H.collect(service, jobs["records"], jobs["plan"].compiled.implemented.n, cache=cache)
+                freqs, status = H.collect(service, jobs["records"], jobs["plan"].compiled.implemented.n, cache=cache,
+                                          ledger=ledger)
                 ss.hw_status = status
                 failed = [x for x in status if x.get("failed")]
+                notes = []
+                if ledger is None:
+                    notes.append("QPU usage NOT reconciled into the campaign ledger: %s" % problem)
+                if jobs.get("unknown"):
+                    ss.hw_err = " ".join(notes + [
+                        "%d submission(s) still have an unknown outcome (tags %s): no job with that tag is listed "
+                        "yet. Resolve them with `python -m qemx.campaign resolve`; results are shown once every "
+                        "submission is settled." % (len(jobs["unknown"]), ", ".join(
+                            str(u.get("client_tag")) for u in jobs["unknown"]))])
+                    return
+                if not jobs["records"]:
+                    ss.hw_err = " ".join(notes + ["No job was created: the ledger shows the submission as not "
+                                                  "submitted."])
+                    return
                 if freqs is None:
                     if failed and len(failed) == len(status):
-                        ss.hw_err = "Every job ended without results: " + ", ".join(
-                            "%s %s" % (x["job_id"], x["status"]) for x in failed)
+                        ss.hw_err = " ".join(notes + ["Every job ended without results: " + ", ".join(
+                            "%s %s" % (x["job_id"], x["status"]) for x in failed)])
                     else:
                         ss.hw_msg = "Not finished yet: " + ", ".join("%s %s" % (x["job_id"], x["status"])
                                                                      for x in status)
+                        if notes:
+                            ss.hw_err = " ".join(notes)
                     return
                 ss.hw_res = with_simulation(H.analyze(jobs["plan"], freqs, float(ss.t_shot_us),
                                                       label="IBM Quantum %s" % jobs["backend"]), jobs.get("sig"))
-                ss.hw_msg = "Results received."
+                ss.hw_msg = "Results received." + (" QPU usage reconciled into the campaign ledger." if ledger
+                                                   is not None else "")
                 if failed:
-                    ss.hw_err = ("%d job(s) ended without results (%s); the contenders they measured report missing "
-                                 "counts." % (len(failed), ", ".join("%s %s" % (x["job_id"], x["status"])
-                                                                     for x in failed)))
+                    notes.append("%d job(s) ended without results (%s); the contenders they measured report "
+                                 "missing counts." % (len(failed), ", ".join("%s %s" % (x["job_id"], x["status"])
+                                                                            for x in failed)))
+                if notes:
+                    ss.hw_err = " ".join(notes)
         except (Exception, RunTimeout) as e:
             title, msg = explain(e, "reading the results")
             ss.hw_err = scrub("%s. %s" % (title, msg), token)
         finally:
             token = None                                 # noqa: F841
 
+    led_now, led_problem = _ledger_state()
+    if led_now is None:
+        st.error(W.md_escape("Submission is disabled until the campaign QPU ledger is set up: %s. Every real-hardware "
+                             "job is admitted against the thesis campaign's shared QPU ceiling; start the app with "
+                             "QEMX_CAMPAIGN_LEDGER pointing to an existing ledger file." % led_problem),
+                 icon=":material/block:")
+    else:
+        lst = led_now.status(refresh=False)
+        st.info(W.md_escape("Campaign QPU ledger %s: %.1f s committed, %.1f s remaining (ceiling %.0f s, reserve "
+                            "%.0f s). Each job is admitted on its high usage estimate before it is sent." % (
+                                led_now.path, lst["committed_s"], lst["remaining_s"], lst["ceiling_s"],
+                                lst["reserve_s"])), icon=":material/account_balance_wallet:")
+        if lst["unresolved"]:
+            st.warning(W.md_escape("The ledger holds %d submission(s) whose outcome is unknown (client tags %s). "
+                                   "Nothing is submitted until they are resolved: python -m qemx.campaign status / "
+                                   "resolve." % (len(lst["unresolved"]), ", ".join(
+                                       str(u["client_tag"]) for u in lst["unresolved"]))),
+                       icon=":material/help:")
     st.markdown("**1 · Submit**")
     for k, v in (("hw_channel", "ibm_quantum_platform"), ("hw_instance", ""), ("hw_backend", ""), ("hw_maxtime", 0),
-                 ("hw_instance2", "")):
+                 ("hw_instance2", ""), ("hw_exec_mode", "job")):
         S.wdefault(k, v)
+    st.segmented_control("execution mode", ["job", "batch"], key="hw_exec_mode", persist_state=P,
+                         format_func={"job": "Job mode (each job stands alone)",
+                                      "batch": "Batch mode"}.get,
+                         help="Job mode is the default, as in the divergence CLI (--mode). A batch's maximum time "
+                              "is elapsed time from its first job (10 min on the Open plan), queue waits included, "
+                              "and can fail queued jobs; it is not a QPU-usage budget. If a batch cannot be opened, "
+                              "the jobs are sent in job mode and the job table says so.")
     c = st.columns([1.2, 2, 1.4, 1.4])                  # settings (not secret) live outside the form and persist
     c[0].selectbox("channel", ["ibm_quantum_platform", "ibm_cloud"], key="hw_channel", persist_state=P)
     c[1].text_input("instance CRN (optional)", key="hw_instance", max_chars=300, persist_state=P)
@@ -341,8 +420,11 @@ else:
     jobs = ss.get("hw_jobs")
     if jobs:
         st.markdown("**Submitted:** %s on %s (physical qubits %s)" % (
-            ", ".join("`%s`" % r["job_id"] for r in jobs["records"]), jobs["backend"],
+            ", ".join("`%s`" % r["job_id"] for r in jobs["records"]) or "no job yet", jobs["backend"],
             ", ".join(map(str, jobs["phys"]))))
+        if jobs.get("unknown"):
+            st.caption("Outcome unknown (may be a job; QPU time stays committed): %s" % ", ".join(
+                "tag `%s`" % u.get("client_tag") for u in jobs["unknown"]))
         sm = jobs["plan"].summary()
         st.caption("%d circuits, %s shots in total. Skipped: %s" % (
             sm["circuits"], f"{sm['shots']:,}", "; ".join("%s (%s)" % kv for kv in jobs["plan"].skipped.items())
@@ -363,5 +445,6 @@ else:
         results_view(ss.hw_res, jobs["plan"], "IBM Quantum %s" % jobs["backend"], "hw_real",
                      state=jobs.get("state"), sig=jobs.get("sig"), extra={"hardware_jobs": pd.DataFrame([dict(job_id=r["job_id"], backend=r["backend"],
                                                                 group=" / ".join(r["group"]), shots=r.get("shots"),
-                                                                pubs=len(r["pubs"]))
+                                                                pubs=len(r["pubs"]), mode=r.get("mode", ""),
+                                                                client_tag=r.get("client_tag", ""))
                                                            for r in jobs["records"]])})

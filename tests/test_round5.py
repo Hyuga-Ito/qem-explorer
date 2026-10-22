@@ -288,6 +288,8 @@ def test_empty_and_failed_runs_and_stale_results_do_not_break_the_panel():
     at.run()
     assert not at.exception and at.session_state["results"] is None
     at.session_state["ops"] = [dict(name="depol", qubits=[0], params=[0.1], kind="noise", tag="")]  # no gates:
+    at.session_state["inputs"] = ["0"] * int(at.session_state["n"])   # and no input preparation (1.5.1: the QFT's
+                                                                       # input is its per-qubit states, not the circuit)
     at.session_state["recipe_names"] = ["ZNE · Richardson", "ZNE · linear"]
     at.session_state["run_requested"] = True
     at.run()
@@ -355,6 +357,9 @@ def test_qiskit_entry_points_share_one_process_wide_lock():
 def test_streamlit_runs_do_not_overlap():
     """fastReruns is off: an interrupted run finishes before the next one starts (no two runs of one session)."""
     import pathlib
-    import tomllib
-    cfg = tomllib.loads((pathlib.Path(__file__).parents[1] / ".streamlit" / "config.toml").read_text())
+    try:
+        import tomllib
+    except ModuleNotFoundError:                  # Python 3.10: the tomli backport (requirements-dev.txt), same API
+        import tomli as tomllib
+    cfg = tomllib.loads((pathlib.Path(__file__).parents[1] / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
     assert cfg["runner"]["fastReruns"] is False

@@ -20,6 +20,7 @@ from qemx.phase import families as FAM
 from qemx.phase import ledger as L
 from qemx.phase import lightcone as LC
 from qemx.phase import scaling as SC
+from qemx.textio import child_env
 
 
 @pytest.fixture(scope="module")
@@ -36,9 +37,13 @@ def ising4():
 
 # ------------------------------------------------------------------ device specifications
 def test_device_spec_parsing():
-    assert D.parse_device("fake_fez") == ("fake_fez", {"s": 1.0, "ro": 1.0, "eng": "aer", "hom": 0.0, "chi": 0.0})
+    comp = {"g1": 1.0, "g2": 1.0, "t": 1.0}    # 1.7.0: component scales (noise composition), defaults 1
+    assert D.parse_device("fake_fez") == ("fake_fez", {"s": 1.0, "ro": 1.0, "eng": "aer", "hom": 0.0, "chi": 0.0,
+                                                      **comp})
     assert D.parse_device("fake_fez@s=2.5,ro=0,eng=exact") == ("fake_fez", {"s": 2.5, "ro": 0.0, "eng": "exact",
-                                                                            "hom": 0.0, "chi": 0.0})
+                                                                            "hom": 0.0, "chi": 0.0, **comp})
+    assert D.parse_device("fake_fez@g2=3,t=2")[1] == {"s": 1.0, "ro": 1.0, "eng": "aer", "hom": 0.0, "chi": 0.0,
+                                                      "g1": 1.0, "g2": 3.0, "t": 2.0}
     assert D.device_spec("fake_fez", 2.0, 1.0, "exact", hom=True, chi=0.25) == "fake_fez@hom=1,chi=0.25,s=2.0,eng=exact"
     assert D.is_device("fake_fez@s=2") and not D.is_device("numpy") and not D.is_device("aer")
     assert D.base_name("fake_fez@s=2,eng=exact") == "fake_fez"
@@ -385,7 +390,7 @@ def test_store_roundtrip_and_collect(tmp_path, cell_record):
     assert n["tables"]["methods"]["rows"] == len(rec["methods"])
     assert n["tables"]["winners"]["rows"] == 12                         # 3 budgets × 2 policies × 2 candidate sets
     import pandas as pd
-    led = pd.read_csv(tmp_path / "tables" / "ledger.csv")
+    led = pd.read_csv(tmp_path / "tables" / "ledger.csv", encoding="utf-8")
     ok = led[led.feasible]
     assert (ok.rmse > 0).all()
 
@@ -549,14 +554,14 @@ method_sets: {one: [RAW]}
 circuits: {c: [{family: ghz, n: 4, theta: 1.0471975511965976}, {family: ising, n: 4, steps: 1}]}
 stages:
   - {name: S, engine: E2, circuits: c, methods: one, scales: [1.0, 2.0], readout: "on"}
-''')
+''', encoding="utf-8")
     from qemx.phase.manifest import expand, load
     cells = expand(load(str(man)))
     victim = cells[0].cell_id
     env = dict(os.environ, QEMX_PHASE_CRASH_CELL=victim, PYTHONPATH=os.path.dirname(os.path.dirname(__file__)))
     out = tmp_path / "out"
     r = subprocess.run([sys.executable, "-m", "qemx.phase.run", "run", str(man), "--out", str(out), "--workers", "2"],
-                       env=env, capture_output=True, text=True, timeout=900)
+                       env=child_env(env), capture_output=True, text=True, timeout=900, encoding="utf-8")
     assert r.returncode == 0, r.stderr[-2000:]
     from qemx.phase.store import read_cell
     st = {c.cell_id: read_cell(str(out), c.cell_id)["status"] for c in cells}

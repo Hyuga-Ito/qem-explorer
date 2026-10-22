@@ -154,7 +154,7 @@ def test_hardware_plan_and_replay_on_exact_frequencies():
     assert len(res["rows"]) == 4 and res["hardware"]
     for r in res["rows"]:
         assert abs(r["estimate"] - 1.0) < 1e-9, r
-        assert r["target shots"] + r["training shots"] + r["calibration shots"] <= 1000 + 4
+        assert r["target shots"] + r["training shots"] + r["calibration shots"] == 1000      # exact (review F08)
 
 
 @pytest.mark.slow

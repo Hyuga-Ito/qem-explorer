@@ -15,7 +15,7 @@ Part 1 runs the pre-registered acceptance checks of the design document (§3.6) 
 
   env          package versions recorded by the run (run.json and every cell record) against requirements-lock.txt
   master       each cell's compiled circuit (two-qubit count, depth, layout, λ_LC) against the pre-registered master
-               list docs/v13/direction_A_v1_cells.csv — differences mean the circuit is not the pre-registered one
+               list docs/research/direction_A_v1_cells.csv — differences mean the circuit is not the pre-registered one
   errors       failed cells, methods, training levels and checks, grouped by message (check 1: every entry explained)
   missing      winner rows decided while a method of that cell had failed (those tiles may show the wrong winner)
   validation   identity, KS against N(0, 1) at p > 0.01, |z| > 4 in fewer than 1 % of checks (check 2), worst rows
@@ -668,11 +668,13 @@ def run_checks(R: Run, eps=(0.01, 0.03), lock_text: str | None = None, master: p
 
 # ------------------------------------------------------------------ driver: input → computation → output
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("run", help="the run directory (contains tables/, cells/, run.json)")
-    ap.add_argument("--master", default=os.path.join(root, "docs", "v13", "direction_A_v1_cells.csv"))
+    ap.add_argument("--master", default=os.path.join(root, "docs", "research", "direction_A_v1_cells.csv"))
     ap.add_argument("--lock", default=os.path.join(root, "requirements-lock.txt"))
     ap.add_argument("--eps", type=float, nargs="+", default=[0.01, 0.03])
     ap.add_argument("--out", default=None, help="directory for the CSV tables and the report (default: RUN/checks)")

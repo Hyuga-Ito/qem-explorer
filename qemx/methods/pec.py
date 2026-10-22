@@ -30,6 +30,7 @@ import numpy as np
 
 from .base import MethodResult, Param, QEMMethod, register
 from .raw import cal_fields, display_circuit
+from ..budget import ORACLE, SUPPLIED
 from ..circuit import Op, is_clifford, layer_order
 from ..noise import (Instruction, gate_noise_instructions, instr_superop, pauli_labels, pauli_matrix,
                      pauli_probs_from_eigs, ptm)
@@ -100,6 +101,24 @@ def gamma_of(qs) -> float:
     return float(sum(abs(v) for v, _ in qs))
 
 
+def information_regime(ctx, model: str, p1, p2, scope: str = "all") -> str:
+    """What PEC's noise model was allowed to know (review §5.5; qemx.budget.ORACLE / SUPPLIED):
+
+    * ``oracle`` — the simulator's own noise: the *learned* model on an injected NoiseSpec (the exact Pauli-twirled
+      channel, not a finite-shot noise-learning experiment), or depolarizing rates left blank (= the injector's true
+      values);
+    * ``supplied-calibration`` — a device calibration snapshot (the learned model and blank rates on a device model or
+      on hardware use the calibrated per-gate errors / their medians) or rates the user typed in.
+
+    Neither charges characterization shots to the budget; a ``learned-with-cost`` PEC protocol does not exist yet."""
+    if ctx.runner.device_model is not None or getattr(ctx.runner, "backend", None) == "hardware":
+        return SUPPLIED                      # a device snapshot, or (hardware without one) an assumed model
+    if model == "learned":
+        return ORACLE
+    blank = (p2 is None) or (p1 is None and scope != "2q")
+    return ORACLE if blank else SUPPLIED
+
+
 @register
 class PEC(QEMMethod):
     key = "pec"
@@ -167,6 +186,12 @@ class PEC(QEMMethod):
                 notes.append("Not twirled (%s): only Clifford gates can be twirled exactly%s, so non-Pauli parts of "
                              "these gates' noise stay uncorrected." % (", ".join(untw), "" if ctx.recipe.twirl == "all"
                                                                         else ", and twirl = 2q leaves one-qubit gates"))
+        regime = information_regime(ctx, model, p1, p2, scope)
+        if regime == ORACLE:
+            notes.append("Oracle noise model: PEC inverts the simulator's own noise (%s), which a finite experiment would "
+                         "have to learn; compare with assumed or learned-with-cost rates before claiming a finite-budget "
+                         "result." % ("the exact Pauli-twirled channel of every gate" if model == "learned"
+                                      else "the injected depolarizing rates"))
         cache = {}
 
         def q_of(o):
@@ -195,8 +220,8 @@ class PEC(QEMMethod):
         backend_neg = device.supports_negative(ctx.runner.backend)       # numpy, or a device with eng=exact
         exec_ops = [o for o in layer_order(ctx.spec)[0] if o.kind != "barrier"]   # the steps resolve() uses
 
-        def sample_instances(count, seed):
-            """count sampled circuits: (Γ·sign, run result) each."""
+        def sample_instances(count, seed, keys=None):
+            """count sampled circuits: (Γ·sign, run result) each; ``keys`` (a list) receives each draw's identity."""
             rng_i = np.random.default_rng(seed)
             out = []
             for _ in range(int(count)):
@@ -214,7 +239,10 @@ class PEC(QEMMethod):
                 def fix(o, step, _d=dict(draw)):
                     l = _d.get(step)
                     return [Instruction("unitary", o.qubits, pauli_matrix(l), step, "pec", "PEC Pauli")] if l else []
-                out.append((G * sign, ctx.run(corrections=fix, corr_key=ckey + (tuple(sorted(draw.items())),))))
+                dkey = tuple(sorted(draw.items()))
+                if keys is not None:
+                    keys.append(dkey)
+                out.append((G * sign, ctx.run(corrections=fix, corr_key=ckey + (dkey,))))
             return out
         inst = None
         if backend_neg:
@@ -224,11 +252,16 @@ class PEC(QEMMethod):
             mc_err = 0.0
         else:
             # Aer cannot apply negative weights: sample instances (each a CPTP circuit), weight by Γ·sign
-            inst = sample_instances(instances, ctx.seed + 17)
+            inst_keys = []
+            inst = sample_instances(instances, ctx.seed + 17, inst_keys)
             vals = np.array([w * ctx.expval(rr) for w, rr in inst])
             mean = float(vals.mean())
             mc_err = float(vals.std(ddof=1) / np.sqrt(len(vals))) if len(vals) > 1 else 0.0
-            notes.append("Aer: mean from %d sampled instances (± %.3g Monte Carlo)." % (len(vals), mc_err))
+            if getattr(ctx.runner, "backend", None) == "hardware":
+                notes.append("Hardware protocol: the mean of %d sampled circuits, %d shot%s each." % (
+                    len(vals), spc, "" if spc == 1 else "s"))
+            else:
+                notes.append("Aer: mean from %d sampled instances (± %.3g Monte Carlo)." % (len(vals), mc_err))
             net = absr = None
         g_ro = ctx.readout_gamma()
         o_eff = ctx.o_eff()
@@ -242,29 +275,58 @@ class PEC(QEMMethod):
             m2 = G ** 2 * float(np.mean([np.clip(ctx.measured(rr), 0, None) @ o_eff ** 2 for _, rr in inst]))
         var1 = max(m2 - mean ** 2, 0.0)              # one shot per sampled circuit (spc = 1)
         var_inst = 0.0
+        measured = bool(getattr(ctx.runner, "returns_measured_counts", False))
         if spc > 1:
             # s shots per circuit, M = N/s circuits: Var = Var_inst/M + (E[X²|shot] − E[X_i²])/N
             #   = [Var1 + (s − 1) Var_inst] / N, with Var_inst = Var over instances of Γ·sign·⟨o⟩_i
             pool = inst if inst is not None else sample_instances(max(int(instances), 2), ctx.seed + 29)
             xi = np.array([w * ctx.expval(rr) for w, rr in pool])
-            var_inst = float(np.var(xi, ddof=1)) if len(xi) > 1 else 0.0
-            var1 = var1 + (spc - 1) * var_inst
-            notes.append("%d shots per sampled circuit: the instance-to-instance variance %.3g (a Monte-Carlo estimate "
-                         "from %d sampled instances) adds (s − 1)·Var_inst = %.3g to the per-shot variance." % (
-                             spc, var_inst, len(xi), (spc - 1) * var_inst))
+            if measured and inst is not None and len(xi) > 1:
+                # measured counts (hardware replay): x̂_i is the mean of the n_i shots of its circuit (n_i = s, or μ·s
+                # when μ identical draws were merged into one circuit), so the spread of the x̂_i is
+                # Var_inst + E[v_w/n_i]. Using it as Var_inst, as for exact instance values, would count the
+                # within-circuit shot noise again; subtract its unbiased estimate v̂_w,i/n_i (from each circuit's
+                # own measured frequencies, Bessel-corrected) first.
+                from collections import Counter
+                mult = Counter(inst_keys)
+                noise = []
+                for (w_, rr), k_ in zip(inst, inst_keys):
+                    f = np.clip(ctx.measured(rr), 0, None)
+                    f = f / f.sum() if f.sum() > 0 else f
+                    n_ = mult[k_] * spc
+                    vw = G ** 2 * max(float(f @ o_eff ** 2 - (f @ o_eff) ** 2), 0.0) * (n_ / (n_ - 1) if n_ > 1 else 0.0)
+                    noise.append(vw / n_)
+                var_inst = max(float(np.var(xi, ddof=1)) - float(np.mean(noise)), 0.0)
+                var1 = var1 + (spc - 1) * var_inst
+                notes.append("%d shots per sampled circuit, measured: the instance-to-instance variance %.3g is the "
+                             "spread of the %d measured circuit means minus their own shot noise; it adds (s − 1)·Var_inst "
+                             "= %.3g to the per-shot variance." % (spc, var_inst, len(xi), (spc - 1) * var_inst))
+            else:
+                var_inst = float(np.var(xi, ddof=1)) if len(xi) > 1 else 0.0
+                var1 = var1 + (spc - 1) * var_inst
+                notes.append("%d shots per sampled circuit: the instance-to-instance variance %.3g (a Monte-Carlo "
+                             "estimate from %d sampled instances) adds (s − 1)·Var_inst = %.3g to the per-shot variance."
+                             % (spc, var_inst, len(xi), (spc - 1) * var_inst))
 
-        def sampler(N, B, rng):
+        def sampler(N, B, rng, theta=None):
             if net is None or spc > 1:
+                if theta is not None:
+                    raise ValueError("this PEC protocol has no exact per-shot law (several shots per sampled circuit "
+                                     "or a Monte-Carlo mean): a finite calibration cannot be applied shot by shot")
                 return rng.normal(mean, np.sqrt(var1 / max(N, 1)), size=B)
             # exact sampling: each shot is one instance, a (sign, outcome) pair
             pn, pa = ctx.measured(net), ctx.measured(absr)
             pos, neg = np.clip((pa + pn) / 2, 0, None), np.clip((pa - pn) / 2, 0, None)
             joint = np.concatenate([pos, neg])
             joint = joint / joint.sum()
-            vals = np.concatenate([G * o_eff, -G * o_eff])
             N = max(int(N), 1)
             cnt = rng.multinomial(N, joint, size=B)
-            return cnt @ vals / N
+            if theta is None:
+                vals = np.concatenate([G * o_eff, -G * o_eff])
+                return cnt @ vals / N
+            d = len(pos)                                  # signed frequencies, mitigated with θ̂ of each replicate
+            return G * ctx.theta_values((cnt[:, :d] - cnt[:, d:]) / N, theta)
+        sampler.sample_instances = sample_instances       # explicit instance circuits, for validation (1.6)
 
         # one sampled instance, for display
         rng = np.random.default_rng(ctx.seed + 3)
@@ -293,7 +355,9 @@ class PEC(QEMMethod):
         return MethodResult(
             mean=mean, var1=var1, circuits=1, shots_per_circuit=spc, gamma=G * g_ro, **cal_fields(ctx, cal_fun),
             implemented=[("Sampled instance · sign %+d · %d Pauli insertions" % (sign, nins), display_circuit(ctx, disp_inst))],
+            flags=(("oracle-noise-model",) if regime == ORACLE else ()),
             details=dict(gamma_path=np.array(gam_path), quasi=example, sign=sign, mc_err=mc_err, var_inst=var_inst,
-                         shots_per_circuit=spc,
+                         shots_per_circuit=spc, information_regime=regime,
+                         sampled_circuits=None if inst is None else len(inst),
                          p_net=None if net is None else ctx.measured(net), p_abs=None if absr is None else ctx.measured(absr)),
             notes=notes, sampler=sampler)

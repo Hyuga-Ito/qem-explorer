@@ -76,7 +76,7 @@ class Op:
     qubits: tuple
     params: tuple = ()
     kind: str = "gate"            # gate | noise | barrier | box (drawn only, never simulated)
-    tag: str = ""                 # "" | prep | basis | fold | fold-inv | pec | twirl | dd | check
+    tag: str = ""                 # "" | prep (input) | encode | basis | fold | fold-inv | pec | twirl | dd | check
 
     @property
     def k(self) -> int:

@@ -15,14 +15,36 @@ METRICS = {
                          "\n\nCompare it with the ideal value: the difference is the bias. On hardware it is the "
                          "value computed from the measured counts — one experiment, including its shot noise."),
     "estimate kind": (None, "What **estimate** is: *exact* (exact probabilities), *protocol* (Monte-Carlo expectation "
-                            "of the finite-training protocol), *measured* (one hardware experiment) or *not run* "
-                            "(insufficient budget)."),
+                            "of the finite-shot protocol: finite training data for CDR / FR / NIL, finite target "
+                            "shots at this budget for exponential ZNE and symmetry verification), *measured* (one "
+                            "hardware experiment) or *not run* (insufficient budget)."),
+    "signed error to reference": ("%+.4f", r"**Signed error** $e=\hat O-\langle O\rangle_{\rm ideal}$ of *one* measured "
+                                           r"experiment against the trusted ideal value: one draw of bias plus noise, "
+                                           r"not the estimator's bias $\mathbb E[\hat O]-\langle O\rangle_{\rm ideal}$, "
+                                           r"which needs independently repeated complete experiments."),
+    "absolute error": ("%.4f", r"**Absolute error** $|e|$ of one measured experiment. $e^2$ is an unbiased observation "
+                               r"of the mean squared error under the repeated-experiment law; $|e|$ itself is not an "
+                               r"unbiased RMSE estimate."),
+    "bootstrap sd": ("%.4f", "**Bootstrap standard error** of this one experiment's estimate, from resampling its "
+                             "measured counts. It does not include calibration drift or retraining across days."),
+    "fit failures": ("%.3f", r"Share of simulated complete experiments at this budget in which the **nonlinear fit "
+                             r"failed** (exponential ZNE: a sampled $E(\lambda)$ changed sign; symmetry verification: "
+                             r"no accepted shot). The *failure policy* says what happened then."),
+    "failure policy": (None, "What the protocol does when its nonlinear fit fails, declared before evaluation: "
+                             "*fallback* (exponential ZNE: the linear fit of the same data, no extra shots; moments are "
+                             "unconditional) or *abstain* (no estimate; estimate, sd and RMSE are conditional on "
+                             "success and the status gives the abstention rate)."),
+    "MC experiments": ("%d", "Complete simulated experiments behind this row's protocol moments (adaptive until the "
+                             "mean's Monte-Carlo error is at most 0.0025)."),
     "exact-fit value": ("%.4f", r"**Reference fit** of a learning method: the regression fitted to *exact* training "
                                 r"features — an oracle quantity no experiment sees. With finite training shots the fit "
                                 r"is a nonlinear function of noisy data, so the protocol's expected value (*estimate*) "
-                                r"differs: $\mathbb E_D[\hat f_D(x)]\neq f_{\mathbb E[D]}(x)$."),
+                                r"differs: $\mathbb E_D[\hat f_D(x)]\neq f_{\mathbb E[D]}(x)$."
+                                "\n\nFor exponential ZNE and symmetry verification it is the estimator applied to "
+                                "exact probabilities: the large-budget limit, not the finite-shot mean at this budget."),
     "bias MC ±": ("%.4f", r"**Monte-Carlo standard error** of the protocol mean (and so of the bias) from the finite "
-                          r"number of training-data draws: $\sqrt{u/R}$. It is not experimental shot noise."),
+                          r"number of simulated training-data draws ($\sqrt{u/R}$) or complete target experiments. "
+                          r"It is not experimental shot noise."),
     "flags": (None, "Approximations and validity conditions of this result, e.g. *calibration-mean-first-order* (the "
                     "readout calibration enters the variance to first order; its O(1/s) effect on the mean is not "
                     "included), *conditional-on-success* (failed refits excluded), *measured*."),
@@ -40,8 +62,8 @@ METRICS = {
                              r"$B=120$ simulated experiments with $N$ shots each."
                              "\n\nShould agree with **sd**; a large difference flags a non-linear estimator."),
     "RMSE": ("%.4f", r"**Root-mean-square error** $\mathrm{RMSE}=\sqrt{b^2+\sigma^2}$ at the common budget $B$ "
-                     r"(simulation). For one *measured* hardware run it is $|\hat O-\langle O\rangle_{\rm ideal}|$, "
-                     r"whose square is an unbiased estimate of the MSE."
+                     r"(simulation). One *measured* hardware run has no RMSE: its tables show the *absolute error* "
+                     r"$|\hat O-\langle O\rangle_{\rm ideal}|$ instead (its square is an unbiased observation of the MSE)."
                      "\n\nThe error you should expect from one run. *Lowest RMSE = best method at this shot budget*; "
                      "with more shots the variance shrinks and low-bias methods win."),
     "γ": ("%.3f", r"**Sampling overhead** $\gamma$: the factor by which mitigation inflates the standard deviation, "

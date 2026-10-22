@@ -47,6 +47,19 @@ class Param:
     help: str = ""
     when: tuple = ()               # ((other param, (values…)), …): shown only if every listed param has one of the
                                    # values (controls of composite methods); a hidden param keeps its default
+    sparse: bool = False           # stored in a Recipe only while its ``when`` conditions hold (a parameter added
+                                   # in a later version leaves the identity of recipes it does not apply to unchanged)
+
+
+def when_holds(p: "Param", params: dict) -> bool:
+    """Whether every (other parameter, allowed values) condition of ``p.when`` holds for ``params``."""
+    for other, vals in (p.when or ()):
+        v = params.get(other)
+        if isinstance(v, list):
+            v = tuple(v)
+        if v not in tuple(vals):
+            return False
+    return True
 
 
 @dataclass
@@ -71,7 +84,10 @@ class MethodResult:
     sampler: Callable | None = None       # (N, B, rng) -> B estimates at N target shots
     train_resampler: Callable | None = None   # (s_tr, R, rng) -> R estimates with resampled training data and
                                               # the exact target (learning methods; training-shot noise)
-    cal_w: float | None = None            # calibration coefficient measured by Monte Carlo (learning methods): it
+    target_sampler: Callable | None = None    # (N, B, rng) -> (B estimates, B bools "primary fit failed"): estimators
+                                              # nonlinear in their *target* data (qemx.stats budget-dependent moments)
+    failure_policy: str | None = None     # "fallback" | "abstain": what such an estimator does when its fit fails
+    cal_w: float | None = None           # calibration coefficient measured by Monte Carlo (learning methods): it
                                           # replaces the first-order w = Σ g²θ(1−θ) where the refit is nonlinear
     joint_calibration: bool = False       # sampler(N, B, rng, theta=…) and train_resampler(…, theta=…) accept
                                           # per-replicate calibration draws θ̂ and apply them to every circuit
@@ -169,6 +185,9 @@ class Recipe:
         m = REGISTRY[estimator]
         full = m.defaults()
         full.update(migrate_params(estimator, params)[0])
+        for p in m.params:                                   # sparse parameters: only where they apply
+            if p.sparse and p.name in full and not when_holds(p, full):
+                del full[p.name]
         return Recipe(estimator, tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in full.items())),
                       twirl, dd, readout)
 
@@ -593,6 +612,26 @@ class Context:
         if self.recipe.readout in ("none", "tensored", "trex"):
             return freqs @ self.o_eff(o)
         return np.array([o @ self.mitigate(f) for f in freqs])
+
+    def theta_values(self, freqs, theta, o=None) -> np.ndarray:
+        """Row r of ``freqs`` (B, 2ⁿ) mitigated with calibration draw θ̂_r: the per-replicate estimates o·M(θ̂_r)f_r
+        of a finite calibration (1.6). ``theta`` None: this context's calibration (``freqs @ o_eff``). A draw that is
+        not invertible gives NaN (the protocol's failure policy decides what replaces it)."""
+        freqs = np.asarray(freqs, float)
+        if theta is None or self.recipe.readout == "none":
+            if self.recipe.readout in ("none", "tensored", "trex"):
+                return freqs @ self.o_eff(o)
+            oo = self.obs.o if o is None else o
+            return np.array([oo @ self.mitigate(f) for f in freqs])
+        th = self.theta_rows(theta, len(freqs))
+        out = np.empty(len(freqs))
+        for r, (f, t) in enumerate(zip(freqs, th)):
+            out[r] = f @ self.o_eff_theta(t, o) if self.theta_invertible(t) else np.nan
+        return out
+
+    def sample_expvals_theta(self, rr: RunResult, N: int, B: int, rng, theta=None, o=None) -> np.ndarray:
+        """``sample_expvals`` with a finite readout calibration: replicate r uses draw θ̂_r (``theta`` (B, d))."""
+        return self.theta_values(self.sample_freqs(rr, N, B, rng), theta, o)
 
 
 def m3_solve(p_meas: np.ndarray, A_list: list, n: int, hamming: int | None = None, tol: float = 1e-12) -> np.ndarray:

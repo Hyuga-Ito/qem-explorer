@@ -13,6 +13,7 @@ from qemx import device  # noqa: E402
 from qemx import hamiltonian as HM  # noqa: E402
 from qemx import export as EX  # noqa: E402
 from qemx import insight as IN  # noqa: E402
+from qemx import io_semantics as IO  # noqa: E402
 from qemx import layout_search as LS  # noqa: E402
 from qemx import resources as RS  # noqa: E402
 from qemx import stages as STG  # noqa: E402
@@ -113,7 +114,8 @@ def analysis_data(outs, runner) -> dict | None:
         return dict(series={}, notes=["Distributions unavailable: %s" % W.plain(str(e), 160)], readout=[], n=n)
     custom = S.is_custom()
     logical = (not custom and getattr(obs, "key", None) == ss.get("template_obs_key")
-               and bool(ss.relabel) == bool(ss.get("template_relabel")))
+               and bool(ss.relabel) == bool(ss.get("template_relabel"))
+               and (S.input_matches_template() or not ss.get("tpl_inputs")))   # the code's own input
     tpl, prm = ss.get("template"), dict(ss.get("tpl_params") or {})
     d["series"]["ideal"] = np.clip(d["series"]["ideal"], 0.0, None) if "ideal" in d["series"] else None
     d.update(n=n, values=None if hasattr(obs, "terms") else [float(v) for v in obs.values],
@@ -142,8 +144,7 @@ if compile_error:
 
 HALF_PX, FULL_PX = 560, 1150              # expected widths of a half-page and a full-page figure (text/marker scale)
 TABS = ["Build", "Circuits", "Topology & layout", "Time travel", "Mitigate & compare", "Export"]
-S.wdefault("w_pg_tabs", ss.page_tab.get("playground", "Build"))
-tabs = st.tabs(TABS, key="w_pg_tabs", on_change=S.cb_tab, args=("playground", "w_pg_tabs"))
+tabs = S.page_tabs("playground", "w_pg_tabs", TABS)     # the selected tab is app state (survives page switches)
 
 
 # ================================================================== Build
@@ -199,62 +200,76 @@ def _template_card_body():
                           "benchmark algorithm (what is fault-tolerant in it is stated in the notes after loading). "
                           "Press Load template to build it.")
     cur = dict(ss.tpl_params) if tkey == ss.template else {}
-    vals = {}
+    vals = {k_: ss.get("w_tp_%s_%s" % (tkey, p_.name), cur.get(p_.name, p_.default))
+            for p_ in IO.input_params(tkey) for k_ in (p_.name,)}       # input parameters: set under Inputs
     ncol = 4
     grid = None
-    for i, p in enumerate(schema):
+    for i, p in enumerate([p_ for p_ in schema if p_.role != "input"]):   # genuine circuit parameters only
         if i % ncol == 0:
             grid = st.columns(ncol, vertical_alignment="bottom")
-        box = grid[i % ncol]
-        k = "w_tp_%s_%s" % (tkey, p.name)
-        S.wdefault(k, cur.get(p.name, p.default))
-        if p.kind == "choice":
-            if ss[k] not in p.options:
-                ss[k] = p.default
-            fmt = str
-            if tkey in ("qft", "aqft") and p.name == "mode":
-                fmt = lambda v: T._BITS.get(v, str(v))        # noqa: E731
-            elif tkey in ("qft", "aqft") and p.name == "prep":
-                fmt = lambda v: T.QFT_PREP_LABELS.get(v, str(v))   # noqa: E731
-            vals[p.name] = box.selectbox(p.label, p.options, key=k, persist_state=P, help=p.help or None,
-                                         format_func=fmt)
-        else:
-            lo, hi = p.bound(p.lo, {**T.defaults(tkey), **vals}), p.bound(p.hi, {**T.defaults(tkey), **vals})
-            if p.kind == "int":                 # bounds such as s < 2^n exceed what a number widget can show
-                lo = None if lo is None else max(int(lo), -S.JS_SAFE_INT)
-                hi = None if hi is None else min(int(hi), S.JS_SAFE_INT)
-            v = ss[k]
-            v = int(v) if p.kind == "int" else float(v)
-            if lo is not None and v < lo:
-                v = lo
-            if hi is not None and v > hi:
-                v = hi
-            if p.kind == "int":
-                v = min(max(int(v), -S.JS_SAFE_INT), S.JS_SAFE_INT)
-            ss[k] = int(v) if p.kind == "int" else float(v)
-            if p.kind == "int":
-                vals[p.name] = int(box.number_input(p.label, min_value=int(lo) if lo is not None else None,
-                                                    max_value=int(hi) if hi is not None else None,
-                                                    step=int(p.step or 1), key=k, persist_state=P,
-                                                    help=p.help or None))
-            else:
-                vals[p.name] = float(box.number_input(p.label, min_value=float(lo) if lo is not None else None,
-                                                      max_value=float(hi) if hi is not None else None,
-                                                      step=float(p.step or 0.01), format="%.4f", key=k,
-                                                      persist_state=P, help=p.help or None))
+        vals[p.name] = param_widget(grid[i % ncol], tkey, p, cur, vals)
+    ips = IO.input_params(tkey)
+    if ips:
+        st.caption("This template's input — %s — is set in **Inputs and measurement** once it is loaded: it becomes "
+                   "the per-qubit input states, not part of the circuit." % ", ".join(
+                       p_.label.replace(" (integer)", "") for p_ in ips))
     st.button("Load template", icon=":material/download:", key="tpl_load", type="primary",
               on_click=S.load_template, args=(tkey,))
     if ss.get("tpl_error"):
         st.error(W.md_escape(ss.tpl_error), icon=":material/error:")
-    if ss.get("tpl_tex"):
-        st.latex(ss.tpl_tex)
-    if ss.get("tpl_notes"):
-        st.caption(W.md_escape(ss.tpl_notes))
+    if (ss.get("tpl_tex") or ss.get("tpl_notes")) and tkey == ss.get("template"):
+        applies, why = S.template_claim()
+        if applies:
+            st.caption(":material/check_circle: **Prediction for this experiment** (the template's identity; its "
+                       "assumptions hold — template circuit, its input, Z measurement, its bit order):")
+        else:
+            st.caption(":material/info: **Template property — not a prediction for the current experiment** ("
+                       + W.md_escape("; ".join(why)) + "). The experiment's own ideal prediction is in **Output**.")
+        if ss.get("tpl_tex"):
+            st.latex(ss.tpl_tex)
+        if ss.get("tpl_notes"):
+            st.caption(W.md_escape(ss.tpl_notes))
     n_new = T.clamp_params(tkey, vals)
     if tkey in ("shor", "hea_vqe", "qaoa") or n_new.get("n", 0) >= 10 or n_new.get("t", 0) >= 8:
         st.caption("Loading replaces the circuit (Undo in the composer brings it back)."
                    + (" Variational angles are optimized when you press Load; this takes longer for many qubits."
                       if tkey in ("hea_vqe", "qaoa") else ""))
+
+
+def param_widget(box, tkey: str, p, cur: dict, vals: dict, on_change=None):
+    """One template-parameter widget (key w_tp_<template>_<name>), clamped to the parameter's current bounds."""
+    k = "w_tp_%s_%s" % (tkey, p.name)
+    S.wdefault(k, cur.get(p.name, p.default))
+    if p.kind == "choice":
+        if ss[k] not in p.options:
+            ss[k] = p.default
+        fmt = str
+        if tkey in ("qft", "aqft") and p.name == "mode":
+            fmt = lambda v: T._BITS.get(v, str(v))        # noqa: E731
+        elif tkey in ("qft", "aqft") and p.name == "prep":
+            fmt = lambda v: T.QFT_PREP_LABELS.get(v, str(v))   # noqa: E731
+        return box.selectbox(p.label, p.options, key=k, persist_state=P, help=p.help or None, format_func=fmt,
+                             on_change=on_change)
+    lo, hi = p.bound(p.lo, {**T.defaults(tkey), **cur, **vals}), p.bound(p.hi, {**T.defaults(tkey), **cur, **vals})
+    if p.kind == "int":                 # bounds such as s < 2^n exceed what a number widget can show
+        lo = None if lo is None else max(int(lo), -S.JS_SAFE_INT)
+        hi = None if hi is None else min(int(hi), S.JS_SAFE_INT)
+    v = ss[k]
+    v = int(v) if p.kind == "int" else float(v)
+    if lo is not None and v < lo:
+        v = lo
+    if hi is not None and v > hi:
+        v = hi
+    if p.kind == "int":
+        v = min(max(int(v), -S.JS_SAFE_INT), S.JS_SAFE_INT)
+    ss[k] = int(v) if p.kind == "int" else float(v)
+    if p.kind == "int":
+        return int(box.number_input(p.label, min_value=int(lo) if lo is not None else None,
+                                    max_value=int(hi) if hi is not None else None, step=int(p.step or 1), key=k,
+                                    persist_state=P, help=p.help or None, on_change=on_change))
+    return float(box.number_input(p.label, min_value=float(lo) if lo is not None else None,
+                                  max_value=float(hi) if hi is not None else None, step=float(p.step or 0.01),
+                                  format="%.4f", key=k, persist_state=P, help=p.help or None, on_change=on_change))
 
 
 def editors():
@@ -323,13 +338,13 @@ def register_io():
     S.wdefault("w_io_all_in", "")
     S.wdefault("w_io_all_bs", "")
     c = st.columns(2, vertical_alignment="bottom")
-    c[0].text_input("All qubits: input", key="w_io_all_in", max_chars=60, persist_state=P,
-                    placeholder="plus · ramp:1 · bits:0101",
-                    help=r"`0 1 + - +i -i` (also `plus`, `minus`) on every qubit; `ramp:k` for the phase ramp "
-                         r"$\lvert{\rm ramp}{:}k\rangle=F^\dagger\lvert k\rangle=\tfrac1{\sqrt N}\sum_j "
-                         r"e^{-2\pi ijk/N}\lvert j\rangle$ (a product state: qubit q gets the phase "
-                         r"$-2\pi k2^q/N$); `bits:0101` for a basis state written $q_{n-1}\cdots q_0$. "
-                         r"Leave empty to keep the inputs.")
+    c[0].text_input("All qubits: input", key="w_io_all_in", max_chars=400, persist_state=P,
+                    placeholder="plus · ramp:1 · bits:0101 · 0 + 1",
+                    help=r"`0 1 + - +i -i` (also `plus`, `minus`), `ph:t` or `bloch:θ,φ` on every qubit; `ramp:k` "
+                         r"for the phase ramp $\lvert{\rm ramp}{:}k\rangle=F^\dagger\lvert k\rangle=\tfrac1"
+                         r"{\sqrt N}\sum_j e^{-2\pi ijk/N}\lvert j\rangle$ (a product state: qubit q gets the phase "
+                         r"$-2\pi k2^q/N$); `bits:0101` for a basis state written $q_{n-1}\cdots q_0$; or one state "
+                         r"per qubit separated by spaces, q0 first (`0 + 1`). Leave empty to keep the inputs.")
     c[1].text_input("All qubits: basis", key="w_io_all_bs", max_chars=64, persist_state=P, placeholder="X · ZZXY",
                     help="One letter for every qubit, or one letter per qubit (q0 first). Leave empty to keep the "
                          "bases.")
@@ -337,15 +352,59 @@ def register_io():
               width="stretch")
     if ss.get("io_error"):
         st.error(W.md_escape(ss.io_error), icon=":material/error:")
-    if any(x not in INPUT_STATES for x in ss.inputs):
+    typed = (str(ss.get("w_io_all_in") or "").strip(), str(ss.get("w_io_all_bs") or "").strip())
+    if any(typed) and typed != tuple(ss.get("io_all_applied") or ("", "")):
+        st.caption(":material/pending: Not applied yet — the experiment uses the per-qubit settings below until you "
+                   "press **Apply to all qubits**.")
+    elif ss.get("io_apply_msg") and any(typed):
+        st.caption(":material/done: Applied: " + W.md_escape(ss.io_apply_msg) + ".")
+    if any(x.startswith("ph:") for x in ss.inputs):
         st.caption(r"$\lvert\varphi t\rangle=(\lvert0\rangle+e^{2\pi it}\lvert1\rangle)/\sqrt2$, the phase $t$ in "
                    r"turns (φ.875: $t=0.875$).")
+    if any(x.startswith("bloch:") for x in ss.inputs):
+        st.caption(r"$\lvert\theta,\varphi\rangle=\cos\tfrac\theta2\lvert0\rangle+e^{i\varphi}\sin\tfrac\theta2"
+                   r"\lvert1\rangle$ (radians), prepared as $P(\varphi)\,R_Y(\theta)\lvert0\rangle$.")
+
+
+def template_input():
+    """The loaded template's input, set here and nowhere else: its input parameters (QFT input index and preparation,
+    the QPE eigenstate, the codes' logical θ) write the per-qubit inputs below; the circuit does not change."""
+    key = ss.get("template")
+    if key not in T.REGISTRY:
+        return
+    ips = IO.input_params(key)
+    name = T.REGISTRY[key][0]
+    declared = list(ss.get("tpl_inputs") or [])
+    if not S.template_input_active():
+        if ips or any(t != "0" for t in declared):
+            st.caption("The circuit was edited after loading %s, so its input settings no longer apply; the per-qubit "
+                       "inputs below are the input." % W.md_escape(name))
+        return
+    if ips:
+        cur = dict(ss.tpl_params)
+        for p in sorted(ips, key=lambda p_: p_.kind != "choice"):         # one row each: the card is narrow
+            param_widget(st, key, p, cur, {}, on_change=S.cb_template_input)
+    if ss.get("tpl_input_error"):
+        st.error(W.md_escape(ss.tpl_input_error), icon=":material/error:")
+    text = T.input_text(key, ss.tpl_params)
+    if not text and not any(t != "0" for t in declared):
+        return
+    if S.input_matches_template():
+        st.caption(":material/check_circle: Template input: %s — the per-qubit states below." % W.md_escape(text or
+                   ", ".join("q%d %s" % (q, input_label(t)) for q, t in enumerate(declared) if t != "0")))
+    else:
+        c = st.columns([4, 1.3], vertical_alignment="center")
+        c[0].caption(":material/edit: The per-qubit inputs below were changed and differ from the template's input "
+                     "(%s). The output follows the inputs as they are." % W.md_escape(text or "its own input"))
+        c[1].button("Use the template's input", key="tpl_input_apply", on_click=S.cb_template_input,
+                    icon=":material/undo:", type="tertiary")
 
 
 def io_card():
     with st.container(border=True):
         st.markdown("**Inputs and measurement**")
         n = int(ss.n)
+        template_input()
         per = min(n, 4)                      # four per row keeps "|+i⟩" readable next to the arrow
         nonstd = sum(1 for q in range(n) if ss.inputs[q] != "0" or ss.basis[q] != "Z")
         box = st.expander("Input state and measurement basis of each qubit (%d not |0⟩ / Z)" % nonstd,
@@ -405,34 +464,59 @@ def io_card():
 
 
 def output_card():
-    """The experiment's output: read-only, derived from the input, the circuit and the measurement (never edited)."""
+    """The experiment's output: read-only, derived from the input, the circuit and the measurement (never edited).
+    Four things are kept apart (1.7.0): A the input state, B the ideal output state before measurement (independent of
+    the bases), C the distribution of the measured bits in the selected bases, D the observable on those bits."""
     from qemx import io_semantics as IO
     with st.container(border=True):
         st.markdown("**Output** · derived, read-only")
         if compiled is None:
             st.caption("No output: the circuit does not compile yet.")
             return
+        n = int(ss.n)
+        obs = ss.observable
+        body = S.spec()
+        key = IO.experiment_key(body, ss.inputs, ss.basis, bool(ss.relabel), obs)
         try:
-            obs = ss.observable
-            okey = getattr(obs, "key", "?")
-            d = S.memo(compiled, "ideal_output_%s" % okey,
-                       lambda: IO.derived_output(compiled.logical, bool(ss.relabel), obs))
-            inp = S.memo(compiled, "input_description", lambda: IO.describe_input(S.spec(), ss.inputs))
+            inp = S.memo(compiled, "input_description", lambda: IO.describe_input(body, ss.inputs))
+            B = S.memo(body, "output_state_%s" % IO.experiment_key(body, ss.inputs, "Z" * n, False),
+                       lambda: IO.output_state(body, ss.inputs))
+            C = S.memo(compiled, "measured_%s" % key,
+                       lambda: IO.measurement_distribution(body, ss.inputs, ss.basis, bool(ss.relabel), obs))
         except Exception as e:                                # noqa: BLE001 - a display never breaks the page
             st.caption("The ideal output could not be derived (%s)." % W.md_escape(str(e)[:200]))
             return
         parts = []
         if inp["nonzero"]:
-            parts.append("input states %s" % ", ".join("q%d %s" % (q, inp["per_qubit"][q]) for q in inp["nonzero"][:6])
-                         + (" …" if len(inp["nonzero"]) > 6 else ""))
+            parts.append(", ".join("q%d %s" % (q, inp["per_qubit"][q]) for q in inp["nonzero"][:6])
+                         + (" …" if len(inp["nonzero"]) > 6 else "") + (", the other qubits |0⟩"
+                                                                         if len(inp["nonzero"]) < n else ""))
         if inp["prep_gates"]:
-            parts.append("template preparation %s" % inp["prep_summary"])
-        st.caption("Input: %s. Change it with the template's *input* parameters or the per-qubit inputs above; this "
-                   "panel only reads it." % ("; ".join(parts) if parts else "|0…0⟩"))
-        st.markdown("**Ideal prediction** (noiseless): " + W.md_escape(IO.output_summary(d)))
-        if d.get("available") and not d.get("deterministic") and d["support"] <= 64 and len(d["top"]) > 1:
-            st.dataframe(pd.DataFrame(d["top"], columns=["outcome c(n-1)…c0", "ideal probability"]), hide_index=True,
-                         width="stretch", height=min(35 * (len(d["top"]) + 1) + 3, 320))
+            parts.append("then the %s tagged as preparation at the start of the circuit" % inp["prep_summary"])
+        st.markdown("**A · Input state** (prepared once, before the circuit): " +
+                    W.md_escape("; ".join(parts) if parts else "|0…0⟩"))
+        if B["status"] == "exact":
+            st.markdown("**B · Output state before measurement** (ideal, exact; the circuit applied to the input — "
+                        "the same for every measurement basis): " + W.md_escape(B["text"]) + ".")
+        else:
+            st.markdown("**B · Output state before measurement:** not computed — " + W.md_escape(B["reason"]) + ".")
+        st.markdown("**C · Measured bits** in %s, %s (ideal, %s): %s" % (
+            W.md_escape(IO.basis_text(ss.basis)), W.md_escape(IO.bit_order_text(n, bool(ss.relabel))),
+            "exact" if C.get("available") else "not computed", W.md_escape(IO.output_summary(dict(
+                C, observable_value=None)))))
+        if C.get("available") and not C.get("deterministic") and C["support"] <= 64 and len(C["top"]) > 1:
+            st.dataframe(pd.DataFrame(C["top"], columns=["measured bits c(n-1)…c0", "ideal probability"]),
+                         hide_index=True, width="stretch", height=min(35 * (len(C["top"]) + 1) + 3, 320))
+        meaning = IO.observable_meaning(obs, ss.basis, bool(ss.relabel), n)
+        val = C.get("observable_value")
+        st.markdown("**D · Observable** %s%s" % (
+            W.md_escape(getattr(obs, "label", "")),
+            (": ideal value **%.6g**" % val) if val is not None else ""))
+        if meaning:
+            st.caption(W.md_escape(meaning))
+        if ss.results is not None and stale:
+            st.caption(":material/history: The noisy and mitigated results in **Mitigate & compare** belong to earlier "
+                       "settings and are marked out of date until you press Run simulation.")
         st.caption("The *noisy simulation prediction* and *sampled outcomes* of each method are in **Mitigate & "
                    "compare** (labeled there). Bitstrings are written c(n−1)…c0, little-endian integers.")
 
@@ -1309,7 +1393,7 @@ with tabs[5]:
         if ss.get("import_error"):
             st.error(ss.import_error)
         elif ss.pop("import_ok", False):
-            st.success("State loaded.")
+            st.success("State loaded." + ((" " + ss.import_note) if ss.get("import_note") else ""))
         if ss.get("export_code"):
             st.download_button("Download script (.py)", ss.export_code, "qem_explorer_export.py", "text/x-python",
                                key="ex_py", icon=":material/download:")

@@ -25,7 +25,27 @@ A mitigation result can refer to four different quantities, and QEM Explorer kee
 ==============  ==================================================================================================
 
 Bias and RMSE in tables, budget curves and exports are always computed from the ``protocol`` (or ``exact``) mean of
-a *simulated* result. A ``measured`` hardware result has no bias unless a trusted ideal reference exists.
+a *simulated* result. A ``measured`` hardware result has no bias: against a trusted ideal value it has one *signed
+error to reference* e = Ô − O₀, and its absolute value |e| is one observation of the squared-error scale (e² is an
+unbiased observation of the MSE under the repeated-experiment law; |e| is not an unbiased RMSE estimate).
+
+**Estimators that are nonlinear in their target data** (1.5.1). Exponential ZNE fits log|E(λ)| to the sampled
+expectations; symmetry verification divides two sampled sums. Their finite-shot mean depends on the number of target
+shots :math:`N_t` (a bias of order :math:`1/N_t`) and their fit can fail on sampled data (a sign change of E(λ), no
+accepted shot). For them the result is a ``reference``: ``mean`` = ``reference_mean`` is the estimator applied to
+exact probabilities (under the declared failure policy), and the protocol's moments are **budget dependent**:
+
+.. math:: \mu(N_t)=\mathbb E[\hat O_{N_t}],\qquad \sigma^2(N_t)=\operatorname{Var}[\hat O_{N_t}],
+
+estimated by Monte Carlo over complete target experiments (:func:`target_moments`, adaptive to the same tolerance on
+the mean's Monte-Carlo standard error as the learning moments) at the evaluated budget, and on a grid of target-shot
+counts (:func:`moment_grid`) for budget curves. The failure policy is part of the protocol and is declared before
+evaluation: *fallback* (a shot-free fallback estimator on the same data, so every experiment has an estimate and the
+moments are unconditional) or *abstain* (no estimate; the moments are conditional on success and the abstention
+probability is reported next to them). Beyond the target-shot count from which the Monte-Carlo moments agree with
+the first-order (delta-method) ones within the declared criteria (:data:`FIRST_ORDER_CRITERIA`), curves use the
+first-order formula and say so; where that agreement was not established, the curve is labeled
+"first-order (not validated)".
 
 Readout calibration enters the variance to first order (:math:`w/s`, measured by Monte Carlo for learning methods);
 its :math:`O(1/s)` effect on the mean of a nonlinear refit is not included in :math:`\mu` and the result carries the
@@ -151,6 +171,22 @@ def training_moments(train_resampler, train_shots: int, rng, *, repeats: int = R
         batch = min(total, int(max_repeats) - total)
 
 
+def moments_wanted(ctx) -> bool:
+    """Whether a learning method should estimate its protocol moments by Monte Carlo (the default). The protocol-
+    selection emulator turns this off (``Context.protocol_moments = False``) for the extra training designs it draws:
+    their trials use only the method's sampler, never the moments, which cost most of a design's preparation time
+    (1.7.0). A result made without them carries the flag ``moments-not-estimated``."""
+    return bool(getattr(ctx, "protocol_moments", True))
+
+
+def reference_moments(mean: float, var1: float, train_shots: int) -> Moments:
+    """Placeholder moments when Monte-Carlo moments were not requested: the exact-feature fit's mean and per-shot
+    variance, no training-data variance estimate (``u`` = nan) and no refits."""
+    nan = math.nan
+    return Moments(mean=float(mean), var1=float(var1), u=nan, train_shots=int(train_shots), repeats=0, finite=0,
+                   mean_mcse=nan, var1_mcse=nan, u_se=nan, tol=nan, kind="reference (moments not estimated)")
+
+
 def is_measured(ctx) -> bool:
     """True when the context replays measured hardware data (not a simulation and not a hardware *recording*, which
     answers with predictions to plan the allocation)."""
@@ -185,6 +221,223 @@ def protocol_contract(ctx, mom: Moments, ref_mean: float, ref_var1: float, notes
                          "reference." % (mom.train_shots, mom.mean, mom.mean_mcse, ref_mean))
     return dict(mean=float(mom.mean), var1=float(mom.var1), estimate_kind="protocol", reference_mean=float(ref_mean),
                 reference_var1=float(ref_var1), moments=mom.as_dict(), flags=tuple(flags))
+
+
+# ------------------------------------------------------------------ budget-dependent (target-nonlinear) protocols
+TARGET_REPEATS_START = 2000      # complete target experiments per Monte-Carlo batch (doubles adaptively)
+TARGET_REPEATS_MAX = 64000       # cap on experiments at one target-shot count (always recorded)
+TARGET_GRID_MAX_SHOTS = 10 ** 7  # the moment grid stops here (or where first order is validated, if earlier)
+TARGET_GRID_PER_DECADE = 4       # grid points per decade of target shots
+TARGET_BLOCK_BYTES = 32 * 2 ** 20    # memory bound of one sampling block (repeats × categories × 8 bytes)
+FIRST_ORDER_CRITERIA = dict(
+    sd_rel=0.05,                 # |σ(N)·√N / √var1 − 1| ≤ 0.05 + 3·(its Monte-Carlo SE)
+    bias_frac=0.10,              # |μ(N) − reference| ≤ 0.10·σ(N) + 3·mean_mcse
+    fit_failure_max=1e-3,        # the primary fit failed in at most 0.1 % of experiments
+    consecutive=2,               # at two consecutive grid points
+)
+POLICIES = ("fallback", "abstain")
+
+
+@dataclass(frozen=True)
+class TargetMoments:
+    """Monte-Carlo moments of a complete target experiment of a target-nonlinear estimator at ``target_shots``."""
+    target_shots: int
+    mean: float               # expected estimate (conditional on an estimate existing when the policy abstains)
+    var: float                # variance of one estimate (same conditioning)
+    repeats: int              # complete experiments simulated
+    finite: int               # experiments that produced an estimate
+    fit_failures: int         # experiments whose primary (nonlinear) fit failed: fallback used, or abstained
+    mean_mcse: float          # Monte-Carlo SE of ``mean``
+    var_se: float             # Monte-Carlo SE of ``var`` (fourth-moment formula)
+    policy: str               # "fallback" | "abstain"
+    tol: float                # tolerance on mean_mcse that stopped the adaptive repeats
+    kind: str = "target-protocol"
+
+    @property
+    def fit_failure_rate(self) -> float:
+        return self.fit_failures / self.repeats if self.repeats else math.nan
+
+    @property
+    def abstention_rate(self) -> float:
+        return (self.repeats - self.finite) / self.repeats if self.repeats else math.nan
+
+    @property
+    def conditional(self) -> bool:
+        return self.finite < self.repeats
+
+    @property
+    def sd(self) -> float:
+        return math.sqrt(max(self.var, 0.0)) if math.isfinite(self.var) else math.nan
+
+    def as_dict(self) -> dict:
+        d = asdict(self)
+        d.update(fit_failure_rate=self.fit_failure_rate, abstention_rate=self.abstention_rate,
+                 conditional=self.conditional, sd=self.sd)
+        return d
+
+
+def target_moments(draw, target_shots: int, rng, policy: str, *, repeats: int = TARGET_REPEATS_START,
+                   max_repeats: int = TARGET_REPEATS_MAX, tol: float = MEAN_MCSE_TOL) -> TargetMoments:
+    """Moments of ``draw(N, R, rng) -> (estimates, primary_fit_failed)`` at N = ``target_shots``: R complete target
+    experiments per batch, doubling (fresh draws from the same generator) until the mean's Monte-Carlo SE is at most
+    ``tol`` or ``max_repeats`` experiments were simulated. Non-finite estimates are abstentions; they are counted, never
+    averaged. Fewer than two estimates: mean and var are NaN (recorded, not raised)."""
+    if policy not in POLICIES:
+        raise ValueError("failure policy must be one of %s" % ", ".join(POLICIES))
+    N = int(target_shots)
+    ests, fails = [], []
+    total, batch = 0, int(repeats)
+    while True:
+        e, f = draw(N, int(batch), rng)
+        e, f = np.asarray(e, float).ravel(), np.asarray(f, bool).ravel()
+        if e.shape != (batch,) or f.shape != (batch,):
+            raise ValueError("unexpected target-sampler shape %s, %s (expected %d)" % (e.shape, f.shape, batch))
+        ests.append(e)
+        fails.append(f)
+        total += batch
+        x = np.concatenate(ests)
+        ok = x[np.isfinite(x)]
+        n = len(ok)
+        if n >= 2:
+            var = float(np.var(ok, ddof=1))
+            mcse = float(math.sqrt(var / n))
+        else:
+            var, mcse = math.nan, math.inf
+        if not (math.isfinite(tol) and mcse > tol and total < int(max_repeats)):
+            break
+        batch = min(total, int(max_repeats) - total)
+    return TargetMoments(target_shots=N, mean=float(np.mean(ok)) if n >= 2 else math.nan, var=var, repeats=total,
+                         finite=n, fit_failures=int(np.concatenate(fails).sum()), mean_mcse=mcse,
+                         var_se=_se_var(ok, var) if n >= 4 else math.nan, policy=policy, tol=float(tol))
+
+
+def _first_order_ok(m: TargetMoments, ref_mean: float, var1: float, n_eff: float | None = None) -> bool:
+    c = FIRST_ORDER_CRITERIA
+    if not (math.isfinite(m.mean) and math.isfinite(m.var) and math.isfinite(ref_mean) and math.isfinite(var1)):
+        return False
+    if m.fit_failure_rate > c["fit_failure_max"] or m.conditional:
+        return False
+    sd1 = math.sqrt(max(var1, 0.0) / (n_eff or m.target_shots))
+    if sd1 <= 0:
+        return m.var <= 1e-24 and abs(m.mean - ref_mean) <= 3 * max(m.mean_mcse, 1e-12)
+    sd_rel = m.sd / sd1 - 1.0
+    sd_rel_se = (m.var_se / (2 * max(m.var, 1e-300))) if math.isfinite(m.var_se) else math.inf
+    return (abs(sd_rel) <= c["sd_rel"] + 3 * sd_rel_se
+            and abs(m.mean - ref_mean) <= c["bias_frac"] * m.sd + 3 * m.mean_mcse)
+
+
+LATTICE_WINDOW = 4               # adjacent target-shot counts averaged at every grid point (see moment_grid)
+
+
+def moment_grid(draw, n_min: int, ref_mean: float, var1: float, rng, policy: str, *,
+                n_max: int = TARGET_GRID_MAX_SHOTS, tol: float = MEAN_MCSE_TOL, window: int = LATTICE_WINDOW) -> dict:
+    """Budget-dependent moments of a target-nonlinear estimator on a geometric grid of target-shot counts from
+    ``n_min`` (the fewest shots that can give an estimate) up to ``n_max``, stopping once the first-order moments
+    (``ref_mean``, ``var1/N``) are validated by :data:`FIRST_ORDER_CRITERIA` at consecutive grid points. The record
+    is plain data (lists), so it can be stored in rows, records and exports.
+
+    Lattice effects. At small budgets the moments of such an estimator are not a smooth function of N: counts are
+    integers, so whether a sampled E(λ) can be exactly 0 (an even number of shots on a circuit), or a ratio's
+    denominator can vanish, changes from one N to the next (exponential ZNE at a few hundred shots: the SD moves by
+    ~20 % between N and N + 2). Every grid point therefore averages the ``window`` adjacent counts N … N+window−1 and
+    records the spread of their SDs (``sd_range``); curves between grid points are this local average, while a table
+    at one budget uses the moments at exactly that budget."""
+    n_min = max(int(n_min), 1)
+    n_max = max(int(n_max), n_min)
+    w = max(int(window), 1)
+    k = max(int(math.ceil(TARGET_GRID_PER_DECADE * math.log10(n_max / n_min))) + 1, 2)
+    grid = sorted({int(round(x)) for x in np.geomspace(n_min, n_max, k)} | {n_min})
+    pts, agree, from_n = [], 0, None
+    for N in grid:
+        sub = [target_moments(draw, N + i, rng, policy, tol=tol * math.sqrt(w)) for i in range(w)] if w > 1 else None
+        if sub is None:
+            m = target_moments(draw, N, rng, policy, tol=tol)
+            rng_sd = 0.0
+        else:
+            m = TargetMoments(target_shots=int(N), mean=float(np.mean([s.mean for s in sub])),
+                              var=float(np.mean([s.var for s in sub])), repeats=int(sum(s.repeats for s in sub)),
+                              finite=int(sum(s.finite for s in sub)), fit_failures=int(sum(s.fit_failures for s in sub)),
+                              mean_mcse=float(math.sqrt(sum(s.mean_mcse ** 2 for s in sub)) / w),
+                              var_se=float(math.sqrt(sum(s.var_se ** 2 for s in sub)) / w), policy=policy,
+                              tol=float(tol))
+            sds = [s.sd for s in sub if math.isfinite(s.sd)]
+            rng_sd = float(max(sds) - min(sds)) if len(sds) > 1 else math.nan
+        n_eff = 1.0 / float(np.mean([1.0 / (N + i) for i in range(w)]))     # var1/n_eff = mean of var1/(N+i)
+        ok = _first_order_ok(m, ref_mean, var1, n_eff)
+        pts.append(dict(m.as_dict(), first_order_ok=bool(ok), sd_range=rng_sd, n_eff=n_eff))
+        agree = agree + 1 if ok else 0
+        if agree >= FIRST_ORDER_CRITERIA["consecutive"]:
+            from_n = int(pts[-FIRST_ORDER_CRITERIA["consecutive"]]["target_shots"])
+            break
+    return dict(kind="target-moment-grid", policy=policy, reference_mean=float(ref_mean), var1=float(var1),
+                n_min=n_min, n_max=n_max, first_order_from=from_n, criteria=dict(FIRST_ORDER_CRITERIA),
+                tol=float(tol), window=w, N=[p["n_eff"] for p in pts], N_start=[p["target_shots"] for p in pts],
+                mean=[p["mean"] for p in pts],
+                var=[p["var"] for p in pts], mean_mcse=[p["mean_mcse"] for p in pts], var_se=[p["var_se"] for p in pts],
+                sd_range=[p["sd_range"] for p in pts], fit_failure_rate=[p["fit_failure_rate"] for p in pts],
+                abstention_rate=[p["abstention_rate"] for p in pts], repeats=[p["repeats"] for p in pts],
+                first_order_ok=[p["first_order_ok"] for p in pts])
+
+
+def grid_at(grid: dict, N: float) -> dict:
+    """Moments of the protocol at N target shots from a :func:`moment_grid` record: Monte Carlo at a grid point,
+    log-linear interpolation of μ and N·σ² between grid points, the first-order formula where the grid validated it
+    (``source`` says which), and NaN below the smallest usable N."""
+    nan = math.nan
+    Ns = np.asarray(grid.get("N") or [], float)
+    if not len(Ns) or not (N >= float(grid.get("n_min", Ns[0]))):
+        return dict(mean=nan, var=nan, fit_failure_rate=nan, abstention_rate=nan, source="infeasible")
+    if N < Ns[0]:                                    # inside the first averaging window: its moments, scaled in N·σ²
+        return dict(mean=float(grid["mean"][0]), var=float(grid["var"][0]) * Ns[0] / N,
+                    fit_failure_rate=float(grid["fit_failure_rate"][0]),
+                    abstention_rate=float(grid["abstention_rate"][0]),
+                    sd_range=float((grid.get("sd_range") or [nan])[0]), source="monte-carlo (first window)")
+    fo = grid.get("first_order_from")
+    ref, v1 = float(grid["reference_mean"]), float(grid["var1"])
+    if fo is not None and N >= fo:
+        return dict(mean=ref, var=v1 / N, fit_failure_rate=0.0, abstention_rate=0.0, source="first-order (validated)")
+    if N > Ns[-1]:
+        return dict(mean=ref, var=v1 / N, fit_failure_rate=nan, abstention_rate=nan,
+                    source="first-order (not validated)")
+    mu, var = np.asarray(grid["mean"], float), np.asarray(grid["var"], float)
+    ff, ab = np.asarray(grid["fit_failure_rate"], float), np.asarray(grid["abstention_rate"], float)
+    sr = np.asarray(grid.get("sd_range") or [nan] * len(Ns), float)
+    i = int(np.searchsorted(Ns, N, side="right") - 1)
+    if Ns[i] == N or i == len(Ns) - 1:
+        return dict(mean=float(mu[i]), var=float(var[i]), fit_failure_rate=float(ff[i]),
+                    abstention_rate=float(ab[i]), sd_range=float(sr[i]), source="monte-carlo")
+    t = (math.log(N) - math.log(Ns[i])) / (math.log(Ns[i + 1]) - math.log(Ns[i]))
+    nv = (1 - t) * var[i] * Ns[i] + t * var[i + 1] * Ns[i + 1]
+    return dict(mean=float((1 - t) * mu[i] + t * mu[i + 1]), var=float(nv / N),
+                fit_failure_rate=float((1 - t) * ff[i] + t * ff[i + 1]),
+                abstention_rate=float((1 - t) * ab[i] + t * ab[i + 1]),
+                sd_range=float(np.nanmax([sr[i], sr[i + 1]])) if np.isfinite([sr[i], sr[i + 1]]).any() else nan,
+                source="interpolated")
+
+
+def compressed_values(values, probs):
+    """(distinct per-shot values, their total probabilities): the sum of N per-shot values depends only on how many
+    shots took each distinct value, so a multinomial over these few categories has exactly the distribution of the
+    N-shot sum (and needs far less memory than one over all 2^n bitstrings)."""
+    v = np.asarray(values, float)
+    p = np.clip(np.asarray(probs, float), 0, None)
+    p = p / p.sum()
+    key = np.round(v, 12)
+    u, inv = np.unique(key, return_inverse=True)
+    vals = np.array([v[inv == j][0] for j in range(len(u))])
+    return vals, np.bincount(inv, weights=p, minlength=len(u))
+
+
+def sample_means(vals, probs, N: int, R: int, rng) -> np.ndarray:
+    """R sample means of N i.i.d. shots with per-shot values ``vals`` taken with probabilities ``probs``, in blocks
+    of bounded memory (:data:`TARGET_BLOCK_BYTES`)."""
+    N, R = max(int(N), 1), int(R)
+    block = max(16, int(TARGET_BLOCK_BYTES // (8 * max(len(vals), 1))))
+    out = np.empty(R)
+    for a in range(0, R, block):
+        b = min(R, a + block)
+        out[a:b] = rng.multinomial(N, probs, size=b - a) @ vals / N
+    return out
 
 
 def rmse_with_mc(bias: float, sd: float, bias_mcse: float = 0.0) -> tuple:

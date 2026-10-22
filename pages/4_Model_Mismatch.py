@@ -42,8 +42,7 @@ for k, v in (("w_mm_rmin", 0.0), ("w_mm_rmax", 2.0), ("w_mm_pts", 11), ("w_mm_co
              ("w_mm_dmax", 0.5), ("w_mm_eps", "0, 0.02, 0.04, 0.06, 0.08, 0.1")):
     S.wdefault(k, v)
 TABS = ["Assumed vs true rate", "Mismatch map", "Readout drift", "Unmodeled noise"]
-S.wdefault("w_mm_tabs", ss.page_tab.get("mm", TABS[0]))
-tabs = st.tabs(TABS, key="w_mm_tabs", on_change=S.cb_tab, args=("mm", "w_mm_tabs"))
+tabs = S.page_tabs("mm", "w_mm_tabs", TABS)            # the selected tab is app state (survives page switches)
 figs, tables = {}, {}
 
 with tabs[0]:

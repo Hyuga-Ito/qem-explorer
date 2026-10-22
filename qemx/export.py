@@ -93,6 +93,11 @@ Requirements
     pip install "qiskit>=1.0" "qiskit-aer>=0.13" numpy scipy scikit-learn psutil
     (+ qiskit-ibm-runtime for --ibm and for fake-device backends)
 
+Campaign ledger (only for --ibm)
+    Real hardware is used only through QEM Explorer's campaign QPU ledger: the qemx package must be importable
+    and QEMX_CAMPAIGN_LEDGER must name a ledger (python -m qemx.campaign init). The job is admitted on its high
+    usage estimate, tagged, recorded and reconciled like the app's jobs; without the ledger nothing is submitted.
+
 Credentials (only for --ibm)
     A token is a password. Before this notebook goes into a repository or an appendix, clear it and use one of
     the other two. This script never contains a token: it reads IBM_QUANTUM_TOKEN (or QISKIT_IBM_TOKEN) from
@@ -155,6 +160,12 @@ def build_state():
 
 def main(argv=None):
     """Terminal: python this_file.py [--aer | --numpy | --ibm NAME]. Notebook: main(["--aer"])."""
+    for _s in (sys.stdout, sys.stderr):              # printed text is UTF-8 on every platform (labels use ⟨⟩, λ, γ)
+        if hasattr(_s, "reconfigure") and (getattr(_s, "encoding", "") or "").lower().replace("_", "-") != "utf-8":
+            try:
+                _s.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
     if argv is None:
         argv = [] if _in_ipython() else sys.argv[1:]      # a kernel's own argv (-f kernel.json) is not ours
     argv = [str(a) for a in argv]
@@ -222,9 +233,30 @@ def _to_measured_qiskit(spec, measure_map):
     return qc
 
 
+def _campaign_ledger():
+    """QEM Explorer's campaign QPU ledger (QEMX_CAMPAIGN_LEDGER): real hardware is never used without it. Returns
+    (qemx.campaign, ledger), or (None, None) after saying why nothing can be submitted."""
+    try:
+        from qemx import campaign as CG
+    except ImportError:
+        print("not submitted: --ibm admits the job against QEM Explorer's campaign QPU ledger; run this script where "
+              "the qemx package is importable and set QEMX_CAMPAIGN_LEDGER (python -m qemx.campaign init ...)")
+        return None, None
+    try:
+        ledger = CG.ledger_from_env()
+        CG.check_no_unresolved(ledger)
+    except (CG.LedgerError, CG.LedgerBusy, CG.CampaignLimit) as e:
+        print("not submitted:", e)
+        return None, None
+    return CG, ledger
+
+
 def run_on_ibm(backend_name=None):
     from qiskit import transpile
-    from qiskit_ibm_runtime import Batch, QiskitRuntimeService, SamplerV2
+    from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2
+    CG, ledger = _campaign_ledger()                       # before any login: no ledger, no submission
+    if ledger is None:
+        return 2
     token = os.environ.get("IBM_QUANTUM_TOKEN") or os.environ.get("QISKIT_IBM_TOKEN")
     if token:
         service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token)
@@ -268,11 +300,23 @@ def run_on_ibm(backend_name=None):
             print("skipped on hardware in this version:", rc.title())
     # optimization_level=0 keeps folded U†U pairs (a higher level would cancel them)
     isa = transpile(circuits, backend=backend, optimization_level=0)
-    with Batch(backend=backend) as batch:
-        sampler = SamplerV2(mode=batch)
-        job = sampler.run(isa, shots=shots)
-        print("job id:", job.job_id())
-        result = job.result()
+    est = CG.estimate_usage(shots * len(isa), len(isa), 1)
+    met = CG.default_max_execution_time(est)
+    sampler = SamplerV2(mode=backend)                     # job mode, the campaign default
+
+    def prepare(tag):
+        sampler.options.max_execution_time = met
+        return CG.tag_sampler(sampler, tag)
+    try:
+        job, job_id, _, _ = CG.submit_one(ledger, "exported script: %d circuits x %d shots on %s" % (
+            len(isa), shots, backend.name), est, lambda tag: sampler.run(isa, shots=shots), "exported-script",
+            prepare=prepare, max_execution_time=met)
+    except (CG.CampaignLimit, CG.SubmissionRejected, CG.SubmissionUnknown) as e:
+        print("not submitted" if not isinstance(e, CG.SubmissionUnknown) else "outcome unknown", "-", e)
+        return 2
+    print("job id:", job_id)
+    result = job.result()
+    print("campaign ledger:", CG.reconcile_job(ledger, job_id, job))
 
     def probs(i):
         counts = result[i].data.c.get_counts()
@@ -302,7 +346,7 @@ def run_on_ibm(backend_name=None):
         if rc.estimator == "zne":                # E(λ) of every scale (the mean over its fold draws), then the fit
             lams = [lam for _, lam in idx]
             E = [float(np.mean([o @ mitigate(probs(i), rc.readout) for i in ii])) for ii, _ in idx]
-            est = extrapolate(rc.p["rule"], lams, E)
+            est = extrapolate_policy(rc.p["rule"], lams, E, rc.p.get("on_fail", "linear"))[0]   # with its failure policy
         else:
             ps = [mitigate(probs(i), rc.readout) for i in idx]
             if rc.estimator == "raw":

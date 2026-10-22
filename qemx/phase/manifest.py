@@ -32,7 +32,7 @@ import math
 from .cell import CellSpec, MethodSpec
 
 ALLOWED_TOP = {"manifest_version", "study", "description", "defaults", "methods", "method_sets", "circuits", "stages",
-               "qpu", "budgets"}
+               "qpu", "budgets", "confirmatory"}
 ALLOWED_STAGE = {"name", "engine", "circuits", "methods", "scales", "readout", "readout_mit", "coherent_fraction",
                  "devices", "layout", "opt_levels", "validate", "description", "train_levels", "train_reps",
                  "train_reps_other", "design", "confirmatory"}
@@ -41,7 +41,7 @@ DESIGN_KINDS = ("grid", "maximin")
 
 def load(path: str) -> dict:
     import yaml
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         m = yaml.safe_load(f)
     check(m)
     for note in migrations(m):
@@ -133,8 +133,8 @@ def check(m: dict) -> None:
             if dz.get("kind") == "maximin" and not (isinstance(dz.get("per_stratum"), int) and dz["per_stratum"] >= 1):
                 raise ValueError("stage %s: design.per_stratum must be an integer >= 1" % st["name"])
         cf = st.get("confirmatory")
-        if cf is not None and not (isinstance(cf, dict) and _num(cf.get("fraction")) and 0 < cf["fraction"] < 1):
-            raise ValueError("stage %s: confirmatory.fraction must be in (0, 1)" % st["name"])
+        if cf is not None:
+            _check_confirmatory(cf, "stage %s" % st["name"])
         names.add(st["name"])
         if st["engine"] not in ("E1", "E2", "E3"):
             raise ValueError("stage %s: engine must be E1, E2 or E3" % st["name"])
@@ -213,6 +213,7 @@ def check(m: dict) -> None:
                                      "which PyYAML reads as a string)" % (st["name"], b))
             if not (_num(val.get("fraction", 0)) and 0 <= val.get("fraction", 0) <= 1):
                 raise ValueError("stage %s: validate.fraction must be in [0, 1]" % st["name"])
+    split_policy(m)                  # one explore/confirm policy for the whole study (conflicts rejected before a run)
 
 
 def _check_budgets(b) -> None:
@@ -378,22 +379,132 @@ def _maximin(kws: list, per_stratum: int, seed: int) -> list:
     return sorted(keep)
 
 
+def _check_confirmatory(cf, where: str) -> None:
+    if not (isinstance(cf, dict) and _num(cf.get("fraction")) and 0 < cf["fraction"] < 1):
+        raise ValueError("%s: confirmatory.fraction must be in (0, 1)" % where)
+    bad = set(cf) - {"fraction", "seed"}
+    if bad:
+        raise ValueError("%s: unknown confirmatory keys %s" % (where, sorted(bad)))
+    if "seed" in cf and not (_num(cf["seed"]) and int(cf["seed"]) == cf["seed"]):
+        raise ValueError("%s: confirmatory.seed must be an integer" % where)
+
+
+def _policy_key(cf: dict) -> tuple:
+    return float(cf["fraction"]), int(cf.get("seed", 0))
+
+
+def split_policy(m: dict) -> dict | None:
+    """The study's one explore/confirm policy {fraction, seed} (1.5.1), or None (no confirmatory split).
+
+    A split is a property of the base circuit for the whole study: every stage, device, noise scale and readout arm
+    of a base circuit must land on the same side. So the policy is study-wide: a top-level ``confirmatory`` key, or —
+    for manifests written before 1.5.1 — the stage-level policies, which must then all be identical (stages without
+    one follow it too). Conflicting policies are rejected before anything runs."""
+    top = m.get("confirmatory")
+    if top is not None:
+        _check_confirmatory(top, "manifest")
+    stage = {}
+    for st in m.get("stages") or ():
+        cf = st.get("confirmatory")
+        if cf is not None:
+            stage.setdefault(_policy_key(cf), []).append(st["name"])
+    if top is not None:
+        other = {k: v for k, v in stage.items() if k != _policy_key(top)}
+        if other:
+            raise ValueError("stage confirmatory policies %s conflict with the study-level policy %s: one base circuit "
+                             "must belong to one split across the whole study" % (
+                                 "; ".join("%s → fraction %g, seed %d" % (", ".join(v), *k) for k, v in other.items()),
+                                 "fraction %g, seed %d" % _policy_key(top)))
+        return dict(fraction=float(top["fraction"]), seed=int(top.get("seed", 0)))
+    if len(stage) > 1:
+        raise ValueError("conflicting confirmatory policies across stages (%s): a base circuit must belong to one "
+                         "split across the whole study; declare one study-level 'confirmatory: {fraction, seed}'" %
+                         "; ".join("%s → fraction %g, seed %d" % (", ".join(v), *k) for k, v in stage.items()))
+    if stage:
+        (frac, seed), = stage.keys()
+        return dict(fraction=frac, seed=seed)
+    return None
+
+
+def _canon(v):
+    """Canonical value for grouping base circuits: 2 and 2.0 are the same parameter value; bools stay bools."""
+    if isinstance(v, bool) or v is None or isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return int(f) if f.is_integer() else f
+    if isinstance(v, (list, tuple)):
+        return [_canon(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _canon(x) for k, x in v.items()}
+    return str(v)
+
+
+def base_circuit_key(family: str, n: int, fparams) -> str:
+    """The canonical identity of a base circuit (family, width, parameters) used to group cells."""
+    fp = fparams.items() if isinstance(fparams, dict) else fparams
+    return json.dumps([family, int(n), sorted([str(k), _canon(v)] for k, v in fp)], sort_keys=True, default=str)
+
+
+def _split_hash_key(c) -> str:
+    # the hash input of 1.5.0 (kept byte for byte, so a frozen split never moves)
+    return json.dumps([c.family, c.n, list(c.fparams)], sort_keys=True, default=str)
+
+
 def confirmatory_split(m: dict) -> dict:
-    """{cell id: "confirm" | "explore"} for the stages with ``confirmatory: {fraction, seed}``. The split is by base
-    circuit (family, n, parameters) — every noise scale, device and readout arm of a circuit lands on the same side,
-    so no circuit is seen in exploration and then 'confirmed' — and is a hash of the circuit's identity and the
-    seed, fixed before any outcome exists."""
+    """{cell id: "confirm" | "explore"} under the study's one policy (:func:`split_policy`). The split is by base
+    circuit (family, n, parameters) — every stage, noise scale, device and readout arm of a circuit lands on the same
+    side, so no circuit is seen in exploration and then 'confirmed' — and is a hash of the circuit's identity and the
+    seed, fixed before any outcome exists. The result is checked for global disjointness (:func:`check_split`)."""
+    pol = split_policy(m)
+    out, cells = {}, expand(m)
+    for c in cells:
+        side = "explore"
+        if pol:
+            h = int(hashlib.sha256(("confirm|%s|%s" % (pol["seed"], _split_hash_key(c))).encode()).hexdigest()[:8], 16)
+            side = "confirm" if h / 0xFFFFFFFF < float(pol["fraction"]) else "explore"
+        out[c.cell_id] = side
+    check_split([(c.cell_id, base_circuit_key(c.family, c.n, c.fparams)) for c in cells], out)
+    return out
+
+
+def check_split(cells, split: dict) -> None:
+    """Raise if any base circuit has cells on both sides of the split. ``cells``: [(cell id, base-circuit key)]."""
+    sides = {}
+    for cid, key in cells:
+        if cid in split:
+            sides.setdefault(key, set()).add(split[cid])
+    leak = sorted(k for k, v in sides.items() if len(v) > 1)
+    if leak:
+        raise ValueError("%d base circuit(s) have cells in both the exploration and the confirmatory split (e.g. %s); "
+                         "the held-out evaluation would leak" % (len(leak), leak[0]))
+
+
+def base_circuits(m: dict) -> dict:
+    """{base-circuit key: [stage names]} of every base circuit a manifest's stages use."""
     out = {}
     for st in m["stages"]:
-        conf = st.get("confirmatory")
-        for c in expand(m, [st["name"]]):
-            side = "explore"
-            if conf:
-                key = json.dumps([c.family, c.n, list(c.fparams)], sort_keys=True, default=str)
-                h = int(hashlib.sha256(("confirm|%s|%s" % (conf.get("seed", 0), key)).encode()).hexdigest()[:8], 16)
-                side = "confirm" if h / 0xFFFFFFFF < float(conf["fraction"]) else "explore"
-            out[c.cell_id] = side
+        for cname in _as_list(st["circuits"]):
+            for fam, n, fp in expand_circuits(m["circuits"][cname]):
+                out.setdefault(base_circuit_key(fam, n, fp), []).append(st["name"])
     return out
+
+
+def check_disjoint(holdout: dict, *development: dict) -> dict:
+    """Raise if any base circuit of the ``holdout`` manifest is also used by a ``development`` manifest (the final
+    holdout must not share a base circuit with anything used to build or tune the method). Returns a summary.
+    Identity is the declared (family, width, parameters): equal circuits written with different parameters (an
+    explicit value equal to a default) are not detected, so a holdout should use explicit, non-default values."""
+    h = base_circuits(holdout)
+    shared = {}
+    for d in development:
+        for k in set(h) & set(base_circuits(d)):
+            shared.setdefault(k, []).append(d.get("study", "?"))
+    if shared:
+        k = sorted(shared)[0]
+        raise ValueError("%d holdout base circuit(s) are also in development manifests (e.g. %s in %s)" % (
+            len(shared), k, ", ".join(shared[k])))
+    return dict(holdout=holdout.get("study"), base_circuits=len(h), development=[d.get("study") for d in development])
 
 
 def expand(m: dict, stages=None) -> list:

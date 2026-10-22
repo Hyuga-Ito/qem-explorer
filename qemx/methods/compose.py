@@ -204,8 +204,8 @@ class Chain(QEMMethod):
 
     # ------------------------------------------------------------------ outer: ZNE
     def _zne(self, ctx, ev, scales=(1.0, 3.0, 5.0), folding="global", rule="richardson",
-             lam_est="gates", subset="random") -> MethodResult:
-        from .zne import (LOCAL_SUBSETS, RULES, extrapolate, fault_rate_lambdas, largest_remainder_split,
+             lam_est="gates", subset="random", on_fail="linear") -> MethodResult:
+        from .zne import (LOCAL_SUBSETS, NONLINEAR_RULES, ON_FAIL, ON_FAIL_POLICY, RULES, extrapolate_many, extrapolate_policy, fault_rate_lambdas, largest_remainder_split,
                           local_fold_weights, weights)
         from ..transforms import achieved_lambda, fold_global, fold_local
         scales = sorted(float(s) for s in scales)
@@ -233,16 +233,24 @@ class Chain(QEMMethod):
                 raise ValueError("the folded circuits do not raise the fault rate monotonically (λ_eff = %s)"
                                  % ", ".join("%.4g" % l for l in lams_fault))
             lams = list(lams_fault)
+        if on_fail not in ON_FAIL:
+            raise ValueError("on_fail must be one of %s" % ", ".join(ON_FAIL))
         rs = [ev(fs) for fs in specs]
         E = [float(r.mean) for r in rs]
         sig = [math.sqrt(max(float(r.var1), 0.0)) for r in rs]
-        est = extrapolate(rule, lams, E)
-        eta = weights(rule, lams, E) if np.isfinite(est) else np.full(len(lams), np.nan)
+        nonlinear = rule in NONLINEAR_RULES
+        est, ref_failed = extrapolate_policy(rule, lams, E, on_fail)
+        rule_ref = "linear" if (ref_failed and on_fail == "linear") else rule
+        eta = weights(rule_ref, lams, E) if np.isfinite(est) else np.full(len(lams), np.nan)
         w = np.abs(eta) * np.asarray(sig)
         var1 = float(np.sum(w)) ** 2
         alloc = w / w.sum() if np.isfinite(w).all() and w.sum() > 0 else np.full(len(w), 1 / len(w))
         notes = []
-        if not np.isfinite(est):
+        if ref_failed and rule == "exponential":
+            notes.append("The exponential rule needs all E(λ) of one sign; here the exact inner values change sign. "
+                         + ("Failure policy: the linear fit of the same values is the estimate." if on_fail == "linear"
+                            else "Failure policy: abstain (no estimate)."))
+        elif not np.isfinite(est):
             notes.append("The %s fit gave no finite value at λ = 0." % RULES[rule])
         if lams_fault is not None:
             notes.append("Effective noise scale (light-cone fault rate ÷ original): λ_eff = %s; %s." % (
@@ -250,17 +258,43 @@ class Chain(QEMMethod):
                 "used for the fit" if lam_est == "fault-rate" else "the fit uses the nominal λ = %s" % ", ".join(
                     "%.3g" % l for l in lams_gates)))
 
+        def split_of(N):
+            return optimal_integer_split(w, N)[1] if np.isfinite(w).all() and w.sum() > 0 else \
+                largest_remainder_split(alloc, N)
+
         def sampler(N, B, rng):
             N = int(N)
             if N < len(rs):
                 return np.full(int(B), np.nan)
-            Nj = optimal_integer_split(w, N)[1] if np.isfinite(w).all() and w.sum() > 0 else \
-                largest_remainder_split(alloc, N)
-            Ej = np.stack([np.asarray(r.sampler(int(nj), int(B), rng), float) for r, nj in zip(rs, Nj)], 1)
-            return np.array([extrapolate(rule, lams, e) for e in Ej])
+            Ej = np.stack([np.asarray(r.sampler(int(nj), int(B), rng), float) for r, nj in zip(rs, split_of(N))], 1)
+            return extrapolate_many(rule, lams, Ej, on_fail)[0]
+
+        from ..stats import TARGET_BLOCK_BYTES, is_measured, moment_grid
+        target_sampler, grid, contract = None, None, {}
+        if nonlinear and not is_measured(ctx) and all(r.sampler is not None for r in rs):
+            block = max(16, int(TARGET_BLOCK_BYTES // (16 * max(2 ** int(ctx.n), 1))))
+
+            def target_sampler(N, B, rng):
+                N, B = int(N), int(B)
+                if N < len(rs):
+                    return np.full(B, np.nan), np.ones(B, bool)
+                Nj = split_of(N)
+                est, fail = np.empty(B), np.empty(B, bool)
+                for s0 in range(0, B, block):
+                    bs = min(B, s0 + block) - s0
+                    Ej = np.stack([np.asarray(r.sampler(int(nj), bs, rng), float) for r, nj in zip(rs, Nj)], 1)
+                    est[s0:s0 + bs], fail[s0:s0 + bs] = extrapolate_many(rule, lams, Ej, on_fail)
+                return est, fail
+            if np.isfinite(est):
+                grid = moment_grid(target_sampler, len(rs), est, var1,
+                                   np.random.default_rng([int(ctx.seed) % (2 ** 63), 0x435A, 1]),
+                                   ON_FAIL_POLICY[on_fail])
+            contract = dict(estimate_kind="reference", reference_mean=float(est), reference_var1=float(var1),
+                            failure_policy=ON_FAIL_POLICY[on_fail], flags=("budget-dependent-moments",))
         cal = {}
         if all(r.cal_fun is not None for r in rs) and ctx.cal_circuits():
-            cal = cal_fields(ctx, lambda mit: float(extrapolate(rule, lams, [r.cal_fun(mit) for r in rs])))
+            cal = cal_fields(ctx, lambda mit: float(extrapolate_policy(rule, lams, [r.cal_fun(mit) for r in rs],
+                                                                      on_fail)[0]))
         notes += _inner_notes(rs)
         return MethodResult(
             mean=float(est), var1=var1, circuits=int(sum(int(r.circuits or 1) for r in rs)), **cal,
@@ -271,8 +305,9 @@ class Chain(QEMMethod):
                          lam_est=lam_est, lams_gates=lams_gates, lams_fault=lams_fault,
                          subset=subset if folding == "local" else None,
                          depths=[int(sp.depth()) for sp in specs], twoq=[int(sp.count("2q")) for sp in specs],
-                         accept=[float(r.accept) for r in rs], inner_gamma=[float(r.gamma) for r in rs]),
-            notes=notes, sampler=sampler)
+                         accept=[float(r.accept) for r in rs], inner_gamma=[float(r.gamma) for r in rs],
+                         on_fail=on_fail if nonlinear else None, reference_rule=rule_ref, target_moments=grid),
+            notes=notes, sampler=sampler, target_sampler=target_sampler, **contract)
 
     # ------------------------------------------------------------------ outer: CDR / NIL
     def _learn(self, ctx, ev, outer: str, p: dict) -> MethodResult:

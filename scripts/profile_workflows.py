@@ -100,8 +100,8 @@ def run_one(root: str, name: str, timeout: float) -> dict:
     env = dict(os.environ)
     env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     t0 = time.perf_counter()
-    p = subprocess.run([sys.executable, "-c", CODE[name] + TAIL], cwd=root, env=env, capture_output=True, text=True,
-                       timeout=timeout)
+    p = subprocess.run([sys.executable, "-c", CODE[name] + TAIL], cwd=root, env=dict(env, PYTHONIOENCODING="utf-8"), capture_output=True, text=True,
+                       timeout=timeout, encoding="utf-8")
     wall = time.perf_counter() - t0
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("@@RESULT@@")]
     if p.returncode != 0 or not line:
@@ -112,6 +112,9 @@ def run_one(root: str, name: str, timeout: float) -> dict:
 
 
 def main(argv=None) -> int:
+    for _s in (sys.stdout, sys.stderr):       # printed text is UTF-8 on every platform
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", default=".")
     ap.add_argument("--out", required=True)

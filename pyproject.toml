@@ -1,6 +1,6 @@
 [project]
 name = "qem-explorer"
-version = "1.5.0"
+version = "1.7.0"
 description = "Interactive exploration of quantum error mitigation (ZNE, PEC, learning, VD, symmetry verification, readout, twirling, DD) with Streamlit, Plotly and Qiskit"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,6 +15,9 @@ phase = ["pyarrow>=14"]          # Parquet tables of qemx.phase (CSV is always w
 
 [tool.setuptools.packages.find]
 include = ["qemx*"]
+
+[tool.setuptools.package-data]
+"qemx.selection" = ["bundles/*/bundle.json", "bundles/*/arrays.npz"]   # the shipped recommender bundles
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

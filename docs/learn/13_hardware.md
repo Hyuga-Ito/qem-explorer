@@ -96,5 +96,6 @@ except the network call, so a mistake costs nothing.
 ## Try it
 
 Press **IBM Quantum · rehearse locally**: a GHZ circuit on fake_fez with raw, TREX and both ZNE foldings. Run it in
-local mode and compare the results with the Playground's simulation of the same state. The research plan
-(`docs/v14/research_plan_divergence.md`) and *Theory & sources* §15 and §21.6 have the details.
+local mode and compare the results with the Playground's simulation of the same state. The current hardware
+plan (`docs/hardware_preflight.md`), the divergence research plan (`docs/research/divergence_research_plan.md`) and
+*Theory & sources* §15 and §21.6 have the details.

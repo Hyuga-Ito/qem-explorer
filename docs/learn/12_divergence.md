@@ -146,6 +146,7 @@ three predictors.
 
 ## Try it
 
-Press **Model mismatch · QFT on fake_fez** and run *the mismatch curve*. Then read the figures of an emulated
-analysis in `docs/v14/results_1.4.2/`, starting with `divergence_gap_depolarizing` and the diagnostic matrix
-`v2_recovery`. The theory is in *Theory & sources* §19–21.
+Press **Model mismatch · QFT on fake_fez** and run *the mismatch curve*. Then run an emulated analysis yourself
+(`python scripts/rehearse_divergence.py manifests/direction_A_divergence_v3_qpu600.yaml --out data/reh_v3`) and read
+its figures, starting with the divergence gap and the diagnostic matrix; the *Noise Models & Discrepancy* page shows
+the bundled rehearsal. The theory is in *Theory & sources* §19–21.

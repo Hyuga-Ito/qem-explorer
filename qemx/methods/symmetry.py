@@ -128,18 +128,64 @@ class Symmetry(QEMMethod):
 
         linear_ro = ctx.recipe.readout in ("none", "tensored", "trex")
 
-        def sampler(N, B, rng):
+        def sampler(N, B, rng, theta=None, with_freqs=False):
             """B ratio estimates from N target shots each (rejected shots included in N); NaN when no shot is kept.
             Linear readout mitigations fold into per-shot values (one product for all repeats); M3 is nonlinear in
-            the sampled data and is applied repeat by repeat."""
+            the sampled data and is applied repeat by repeat. ``theta``: a finite calibration draw per replicate;
+            ``with_freqs``: also return the sampled frequencies (a declared fallback can reuse the same counts)."""
             freqs = ctx.sample_freqs(rr, N, B, rng)
+            if theta is not None:
+                num = ctx.theta_values(freqs, theta, mask * o)
+                den = ctx.theta_values(freqs, theta, mask.astype(float))
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    est = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+                return (est, freqs) if with_freqs else est
             if linear_ro:
                 num, den = freqs @ a, freqs @ b
             else:
                 g = np.array([ctx.mitigate(fr) * mask for fr in freqs])
                 num, den = g @ o, g.sum(1)
             with np.errstate(divide="ignore", invalid="ignore"):
-                return np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+                est = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+            return (est, freqs) if with_freqs else est
+
+        # budget-dependent protocol moments (qemx/stats.py): the ratio's finite-shot mean has an O(1/N) bias and a
+        # repeat without any accepted shot has no estimate (policy: abstain — the moments are then conditional on
+        # success and the abstention rate is reported); simulation only (a measured replay is one experiment)
+        from ..stats import TARGET_BLOCK_BYTES, is_measured, moment_grid
+        target_sampler, grid, contract = None, None, {}
+        if not (is_measured(ctx) or getattr(getattr(ctx, "runner", None), "backend", None) == "hardware"):
+            if linear_ro:
+                pairs = np.stack([a, b], 1)
+                pm = p_meas / p_meas.sum() if p_meas.sum() > 0 else p_meas
+                _, inv = np.unique(np.round(pairs, 12), axis=0, return_inverse=True)
+                inv = np.asarray(inv).ravel()
+                k = int(inv.max()) + 1 if len(inv) else 0
+                vals = np.array([pairs[np.flatnonzero(inv == j)[0]] for j in range(k)])
+                probs = np.bincount(inv, weights=pm, minlength=k)
+
+                def target_sampler(N, B, rng):
+                    N, B = max(int(N), 1), int(B)
+                    est = np.empty(B)
+                    block = max(16, int(TARGET_BLOCK_BYTES // (8 * max(k, 1))))
+                    for s0 in range(0, B, block):
+                        c = rng.multinomial(N, probs, size=min(B, s0 + block) - s0)
+                        num, den = c @ vals[:, 0], c @ vals[:, 1]
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            est[s0:s0 + len(c)] = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+                    return est, ~np.isfinite(est)
+            else:
+                def target_sampler(N, B, rng):              # M3: repeat by repeat, in bounded blocks
+                    B = int(B)
+                    block = max(16, int(TARGET_BLOCK_BYTES // (16 * max(len(p_meas), 1))))
+                    est = np.concatenate([np.asarray(sampler(N, min(B, s0 + block) - s0, rng), float)
+                                          for s0 in range(0, B, block)])
+                    return est, ~np.isfinite(est)
+            if np.isfinite(mean) and np.isfinite(var1):
+                grid = moment_grid(target_sampler, 1, mean, var1,
+                                   np.random.default_rng([int(ctx.seed) % (2 ** 63), 0x5359, 1]), "abstain")
+            contract = dict(estimate_kind="reference", reference_mean=float(mean), reference_var1=float(var1),
+                            failure_policy="abstain", flags=("budget-dependent-moments",))
 
         disp = display_circuit(ctx)
         disp = disp.replace(ops=tuple(disp.ops) + (Op("barrier", tuple(qubits), (), "barrier", "check"),),
@@ -153,5 +199,5 @@ class Symmetry(QEMMethod):
                             gamma=float(1 / np.sqrt(max(acc_meas, 1e-12))) * ctx.readout_gamma(), accept=acc_meas,
                             implemented=[("Implemented circuit + classical parity check", disp)],
                             details=dict(accept=acc_meas, qubits=qubits, eigenvalue=eigenvalue,
-                                         more=[list(g) for g in groups]), notes=notes,
-                            sampler=sampler)
+                                         more=[list(g) for g in groups], target_moments=grid), notes=notes,
+                            sampler=sampler, target_sampler=target_sampler, **contract)

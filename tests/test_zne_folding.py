@@ -188,7 +188,7 @@ stages:
 def run_dir(tmp_path_factory):
     from qemx.phase.run import main as run_main
     d = tmp_path_factory.mktemp("fold")
-    (d / "m.yaml").write_text(MINI)
+    (d / "m.yaml").write_text(MINI, encoding="utf-8")
     out = str(d / "out")
     run_main(["run", str(d / "m.yaml"), "--out", out])
     run_main(["collect", out])

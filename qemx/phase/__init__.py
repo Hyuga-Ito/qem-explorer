@@ -2,7 +2,7 @@
 
 Backend only (no Streamlit): a cell runner that measures, for every method on one grid coordinate, the ledger
 primitives (b, v, w, u, …), an exact integer budget ledger, Monte-Carlo validation, a manifest-driven batch runner
-and a versioned record schema. See docs/v13_direction_A_design.md.
+and a versioned record schema. See docs/research/direction_A_v1_design.md.
 """
 from .ledger import Cost, Policy, allocate, rmse, rmse_curve, budget_for, winners, crossovers   # noqa: F401
 from .lightcone import calculate_lambda_lc, LambdaReport                                 # noqa: F401

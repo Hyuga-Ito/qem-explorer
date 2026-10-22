@@ -154,11 +154,17 @@ def distributions(compiled, noise, outs, runner, backend: str = "numpy") -> dict
         p = zne.recipe.p
         ctx = Context(compiled, noise, None, zne.recipe, runner)
         ps, lams = [], []
+        from .methods.zne import draw_seed, is_fractional, local_fold_weights
+        sub = p.get("subset", "random")
+        fw = local_fold_weights(ctx, spec) if sub == "balanced" else None
         for lam in sorted(float(s) for s in p.get("scales", (1, 3, 5))):
-            fs = fold_global(spec, lam) if p.get("folding", "global") == "global" else fold_local(spec, lam, 0)
-            rr = ctx.run(fs)
-            ps.append(np.asarray(ctx.mitigate(ctx.measured(rr)), float))
-            lams.append(achieved_lambda(spec, fs))
+            if p.get("folding", "global") == "global":
+                folds = [fold_global(spec, lam)]
+            else:                                       # the same folded circuits the estimator averages (1.5.1)
+                K = int(p.get("fold_draws", 1) or 1) if is_fractional(lam) else 1
+                folds = [fold_local(spec, lam, draw_seed(ctx.seed, k), sub, fw) for k in range(K)]
+            ps.append(np.mean([np.asarray(ctx.mitigate(ctx.measured(ctx.run(fs))), float) for fs in folds], 0))
+            lams.append(achieved_lambda(spec, folds[0]))
         if len(set(np.round(lams, 9))) == len(lams):
             eta = richardson_weights(lams) if p["rule"] == "richardson" else linear_weights(lams)
             series["ZNE-extrapolated"] = np.tensordot(eta, np.stack(ps), axes=1)

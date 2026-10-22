@@ -54,7 +54,7 @@ def _rate(k: int, n: int) -> dict:
 
 
 def summarize(table: str, predictor: str, alpha: float = 0.05) -> pd.DataFrame:
-    D = pd.read_csv(table)
+    D = pd.read_csv(table, encoding="utf-8")
     d = D[(D["status"] == "ok") & (D["predictor"] == predictor)]
     rows = []
     for m, g in d.groupby("method"):
@@ -70,6 +70,8 @@ def summarize(table: str, predictor: str, alpha: float = 0.05) -> pd.DataFrame:
 
 
 def main(argv=None) -> int:
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("manifest")
     ap.add_argument("--out", required=True)
@@ -110,7 +112,7 @@ def main(argv=None) -> int:
         S.insert(1, "tag", tag)
         results.append(S)
     R = pd.concat(results, ignore_index=True)
-    R.to_csv(os.path.join(a.out, "rehearsal_rows.csv"), index=False)
+    R.to_csv(os.path.join(a.out, "rehearsal_rows.csv"), index=False, encoding="utf-8")
     null = R[R["scenario"] == "null"]
     n = int(null["circuits"].sum())
     fp = dict(abs_z_gt_3=_rate(int(null["flag_abs_z_gt_3"].sum()), n),

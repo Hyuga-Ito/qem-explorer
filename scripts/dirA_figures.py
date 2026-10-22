@@ -2102,6 +2102,8 @@ def make_figures(T: Tables, sink, rep: Report, *, only=None, eps=None, methods="
 
 
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("data", help="the run directory (contains tables/)")
     ap.add_argument("--out", default="figs")

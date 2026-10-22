@@ -20,8 +20,10 @@ qem-explorer/
 │   ├── 7_IBM_Quantum.py          Local rehearsal on a fake device, then real hardware (token in a password field);
 │   │                             the results view and ZIP are the Playground's (ui/results.py)
 │   ├── 8_Batch_Run.py            algorithms × methods × noise × scales × simulators, one Run-all button
-│   └── 9_Learn.py                guides (one-click setups), fundamentals, algorithm walkthroughs, research topics
-│                                 (docs/learn/*.md)
+│   ├── 9_Learn.py                guides (one-click setups), fundamentals, algorithm walkthroughs, research topics
+│   │                             (docs/learn/*.md)
+│   ├── 10_QEM_Performance.py     study reports (regime maps, paired comparisons, costs) and the live recommendation
+│   └── 11_Noise_Discrepancy.py   calibrated discrepancy tests and the emulated rehearsal
 ├── qemx/                         The engine (no Streamlit imports)
 │   ├── circuit.py                Op, CircuitSpec, gate table, safe expression reader, text parser, Qiskit I/O
 │   ├── templates.py              Template families (basics, algorithms, NISQ variational, QEC, deep FTQC);
@@ -29,7 +31,10 @@ qem-explorer/
 │   ├── observables.py            Diagonal observables: Z strings, projectors, magnetization, custom vectors
 │   ├── hamiltonian.py            Pauli-sum parser (no eval), qubit-wise commuting settings, exact combination
 │   ├── noise.py                  NoiseSpec, presets, channels; resolve(): circuit + noise → instruction list
-│   ├── compile.py                prep → circuit → basis change → (ISA, lattice or device transpile) → measurement map
+│   ├── compile.py                input tokens → prep, circuit, basis change → (ISA, lattice or device transpile) →
+│   │                             measurement map; the input-token grammar (0 1 + - +i -i, ph:t, bloch:θ,φ)
+│   ├── io_semantics.py           one input model: a template's preparation → per-qubit inputs, input-role
+│   │                             parameters, the derived (read-only) ideal output
 │   ├── stages.py                 logical → routed → native stages with provenance; the aligned logical/physical diff
 │   ├── layout_search.py          device calibration, VF2 placements of the compiled circuit, expected success F
 │   ├── device.py                 Fake IBM devices: target filtering, compilation, ALAP schedule, Aer noise model
@@ -72,11 +77,31 @@ qem-explorer/
 │   ├── context_noise.py          context features of an as-executed circuit (ALAP schedule, spectators, parallel
 │   │                             adjacent gates, idle time, calibrated error), Chen et al.'s plurality vote, weighted
 │   │                             NNLS attribution (divergence budget, per-qubit), heavy-hex drawing coordinates
+│   ├── stats.py                  The statistical contract: exact / protocol / reference / measured; Monte-Carlo
+│   │                             moments of finite training and of target-nonlinear protocols (moment grids)
+│   ├── features.py               Feature dictionary (qemx.features/2): structural, observable, noise and optional
+│   │                             state extractors, acquisition tiers, aliases of older tables
+│   ├── rec_context.py            Resolved study context (qemx.methods/2) and the live recommendation's context,
+│   │                             compatibility check and protocol costs
+│   ├── recommend.py              Ridge recommender with abstention, group-CV conformal intervals, evaluation
+│   ├── study.py                  Study analysis from stored records: regime maps, paired changes, cost to ε,
+│   │                             recommender evaluation, Monte-Carlo label stability, holdout evaluation, figures
+│   ├── discrepancy.py            Validated distances, matched-shot and mixture nulls, multiplicity adjustment
+│   ├── decision.py               Diagnostic-conditioned decisions with the diagnostic's cost inside
+│   ├── campaign.py               QPU usage model and the transactional campaign ledger (one shared ceiling)
+│   ├── transfer.py               The hardware transfer test: paired blocks, power, preflight, emulation, analysis
+│   ├── provenance.py             Source-tree, lock and package-inventory digests for results and records
+│   ├── experiment.py             One experiment document (YAML/state/CLI), validation, configuration hash
 │   ├── export.py                 Standalone script (terminal + Jupyter entry point) with the engine inlined
 │   ├── bundle.py                 "Download all" ZIP: CSV/LaTeX tables in sub-folders, PNG/SVG figures (Plotly JSON
 │   │                             without a renderer; never HTML), state, script
 │   ├── resources.py              Memory estimates, cooperative deadline, readable errors, secret scrubbing
 │   ├── explain.py                "Why this happens?" texts (TeX)
+│   ├── selection/                1.6.0 protocol-selection study (no Streamlit): task (𝒯 and its record), protocols
+│   │                             (complete candidates, integer ledgers), emulate (trial-level emulation, direct
+│   │                             execution), labels (two halves, per-trial data, resumable), features, dataset,
+│   │                             models, policies, evaluate (splits, bootstrap), certify, mismatch, analysis,
+│   │                             figures, report, schemas, design (configs, final-test hash), run, __main__ (CLI)
 │   └── viz/                      theme, composer (collision-free columns, stacked diff, gate-only time cursor),
 │                                 states (Bloch grid, projections, density, landscapes), charts (incl. histograms,
 │                                 syndromes, logical error), analysis_charts, batch_charts, topology
@@ -85,6 +110,8 @@ qem-explorer/
 │   ├── widgets.py                Typed-number sliders, method forms, guarded execution, Markdown escaping
 │   ├── composer_dnd.py (+ composer_assets/)  Drag-and-drop composer (components v2); every edit validated in Python;
 │   │                             input preparation and basis changes drawn as locked boxes
+│   ├── selection_view.py         the QEM Performance page's "Protocol selection (1.6)" tab: bundled studies,
+│   │                             policy tables, task drill-down, figures (reads saved tables only)
 │   ├── results.py                The results view of a comparison (figures, analysis views, cost table, internals,
 │   │                             Download all), shared by the Playground and the IBM Quantum page
 │   ├── tooltips.py               plain(): TeX in help texts → Unicode math; install() patches every widget once
@@ -236,4 +263,30 @@ DirectorySource / MemorySource  →  Run / Tables  →  run_checks · make_figur
                                                                                              →  DirectoryReportSink
                                                                                              →  DirectoryFigureSink
 ```
+
+## 9. The protocol-selection pipeline (1.6.0)
+
+`qemx.selection` is a separate, Streamlit-free pipeline; it reuses the engine's methods and devices but none of the
+Direction A records. Every stage writes files that the next one reads, so each can be rerun alone:
+
+```
+config (YAML) → design.plan → task.build → emulate.prepare → labels.label_task → dev/<task>.npz + .json
+                                                                   │  (resumable; one configuration per run directory)
+dataset.build → models.RiskModel → policies.* → evaluate.evaluate / analysis.*  → analysis/*.csv, results.json
+                                                                   │
+plots.* + figures.* (saved tables only; configs/selection/figures.yaml) → figures/*.pdf|svg|png + source CSV + notes,
+                                                     tables/*.csv|md;  report.write → RESULTS_TABLES.md
+freeze → final/ (labeled and evaluated once);  mismatch.* → mismatch/ (diagnostics, policies)
+regimes: label into regimes/ → run.regime_analyze (frozen model, development threshold) → regimes/analysis/*.csv
+profile → analysis/runtime.csv
+```
+
+Task devices may carry modifiers (`fake_fez@s=2`: every calibrated error rate × 2); the supplied snapshot and the
+execution law then share the modifier (`task.with_modifiers`), while mismatch modifiers reach only the truth runner.
+
+Information classes are enforced where data cross into a model: `features.matrix` refuses oracle columns, allocations
+read only the supplied snapshot (`TaskSpec.supplied_backend`), and the truth runner (device modifiers, crosstalk,
+mixtures) is reachable only from the emulator. The UI tab reads `reports/<study>/` and never simulates; its
+drill-down opens a task's label files only after validating the task id (20 hex digits), loads arrays without
+pickle, and rebuilds the logical circuit only on request.
 

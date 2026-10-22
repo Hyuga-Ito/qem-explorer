@@ -59,8 +59,11 @@ def load(path: str) -> dict:
     """Read a YAML or JSON experiment document safely."""
     if os.path.getsize(path) > MAX_DOC_BYTES:
         raise ExperimentError("", "the file is larger than %d MB" % (MAX_DOC_BYTES // 2 ** 20))
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
+    from .textio import TextEncodingError, read_config_text
+    try:
+        text = read_config_text(path)                 # UTF-8; a byte-order mark is accepted (textio)
+    except TextEncodingError as e:
+        raise ExperimentError("", str(e)) from None
     return loads(text, json_hint=path.lower().endswith(".json"))
 
 
@@ -90,7 +93,9 @@ def _scan_secrets(obj, path=""):
 
 # ------------------------------------------------------------------ short form → state document
 def _circuit_state(c, path="circuit") -> tuple:
-    """(circuit dict, observable dict, relabel, symmetry) from the short ``circuit`` field."""
+    """(circuit dict, observable dict, relabel, symmetry, input tokens) from the short ``circuit`` field. A template's
+    input preparation becomes the input tokens and the circuit holds the rest (``io_semantics.split_preparation``),
+    as in the Playground, so the input is prepared once."""
     from . import templates as T
     from .circuit import parse
     if not isinstance(c, dict):
@@ -114,7 +119,8 @@ def _circuit_state(c, path="circuit") -> tuple:
             raise ExperimentError(path + ".params", "values outside the template's domain: %s" % ", ".join(
                 "%s=%r (nearest valid %r)" % (k, a, b) for k, (a, b) in changed.items()))
         try:
-            tpl = T.build(key, clamped)
+            from .io_semantics import template_inputs
+            tokens, body, tpl = template_inputs(key, clamped)
         except ValueError as e:
             raise ExperimentError(path + ".params", str(e)) from None
         from .observables import Observable
@@ -124,9 +130,9 @@ def _circuit_state(c, path="circuit") -> tuple:
         sym = None
         if tpl.symmetry:
             sym = list(tpl.symmetry[0]) + [tpl.symmetry[1]]
-        circ = tpl.spec.to_json()
+        circ = body.to_json()
         circ["template"] = dict(key=key, params=clamped)
-        return circ, ob, bool(tpl.relabel), sym
+        return circ, ob, bool(tpl.relabel), sym, tokens
     if "text" in c:
         try:
             n = int(c["n"])
@@ -137,8 +143,33 @@ def _circuit_state(c, path="circuit") -> tuple:
             raise ExperimentError(path + ".text", str(e)[:300]) from None
         from . import observables as OBS
         o = OBS.z(0, n)
-        return spec.to_json(), dict(key=o.key, label=o.label, tex=o.tex, values=list(o.values)), False, None
+        return spec.to_json(), dict(key=o.key, label=o.label, tex=o.tex, values=list(o.values)), False, None, \
+            ["0"] * n
     raise ExperimentError(path, "give 'template' (with 'params') or 'n' and 'text'")
+
+
+def _inputs_state(doc: dict, tokens: list, n: int) -> list:
+    """The per-qubit inputs of a short-form document: the template's own input (its input parameters), or ``inputs``.
+    A template that loads its own input (the QFT's s and prep, BV's ancilla |−⟩, …) and a different ``inputs`` would
+    prepare twice or leave unclear which one is meant, so that is an error; ``inputs`` all |0⟩ means the template's
+    input, as before 1.5.1."""
+    if "inputs" not in doc:
+        return list(tokens)
+    given = doc["inputs"]
+    if not (isinstance(given, list) and len(given) == n):
+        return given                                     # validate_state reports the shape with its own message
+    if all(t == "0" for t in tokens) or all(t == "0" for t in given):
+        return list(given) if all(t == "0" for t in tokens) else list(tokens)
+    from .io_semantics import same_inputs
+    try:
+        if same_inputs(given, tokens):
+            return list(given)
+    except Exception:                                   # noqa: BLE001 - an invalid token: validate_state names it
+        return given
+    raise ExperimentError("inputs", "the template loads its own input (%s); set it with the template's input "
+                          "parameters in circuit.params, or describe the circuit without the template (text or the "
+                          "state form) to choose other inputs" % ", ".join("q%d %s" % (q, t) for q, t in
+                                                                           enumerate(tokens) if t != "0")[:200])
 
 
 def _observable_state(ob, n: int, path="observable") -> dict:
@@ -246,15 +277,16 @@ def to_state(doc: dict) -> dict:
     else:
         if "circuit" not in doc:
             raise ExperimentError("circuit", "required (or give 'state')")
-        circ, ob, relabel, sym = _circuit_state(doc["circuit"])
+        circ, ob, relabel, sym, tokens = _circuit_state(doc["circuit"])
         n = int(circ["n"])
+        inputs = _inputs_state(doc, tokens, n)
         if "observable" in doc:
             ob = _observable_state(doc["observable"], n)
         budget = doc.get("budget") or {}
         if not isinstance(budget, dict) or set(budget) - {"shots", "t_shot_us"}:
             raise ExperimentError("budget", "a mapping with 'shots' and optionally 't_shot_us'")
         from .recipes import DEFAULT_SET, preset
-        st = dict(app="QEM Explorer", version=__version__, circuit=circ, inputs=doc.get("inputs", ["0"] * n),
+        st = dict(app="QEM Explorer", version=__version__, circuit=circ, inputs=inputs,
                   basis=doc.get("basis", "Z" * n), relabel=bool(doc.get("relabel", relabel)),
                   compile=doc.get("compile") or {}, noise=_noise_state(doc.get("noise")), observable=ob,
                   symmetry=doc.get("symmetry", sym), symmetry_more="",
@@ -404,21 +436,14 @@ def plan(r: Resolved) -> dict:
 
 
 def provenance() -> dict:
-    from . import __version__
-    out = dict(app_version=__version__, python=sys.version.split()[0], platform=platform.platform(),
-               created=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
-    for mod in ("numpy", "scipy", "qiskit", "qiskit_aer", "pandas"):
-        try:
-            out[mod] = __import__(mod).__version__
-        except Exception:                               # noqa: BLE001
-            out[mod] = None
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    try:
-        import subprocess
-        out["git_commit"] = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True,
-                                           timeout=5).stdout.strip() or None
-    except Exception:                                   # noqa: BLE001
-        out["git_commit"] = None
+    """Source, dependency and environment identity of a run (qemx.provenance: source-tree and lock digests, git
+    commit when available, package versions and an inventory digest). Keys of 1.5.0 are kept."""
+    from .provenance import provenance as _prov
+    p = _prov()
+    out = dict(p, created=p["created"])
+    for mod, dist in (("numpy", "numpy"), ("scipy", "scipy"), ("qiskit", "qiskit"), ("qiskit_aer", "qiskit-aer"),
+                      ("pandas", "pandas")):
+        out[mod] = p["packages"].get(dist)
     return out
 
 
@@ -477,6 +502,8 @@ def _write_json_atomic(path: str, obj) -> None:
 
 
 def main(argv=None) -> int:
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(prog="python -m qemx.experiment", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     for c in ("validate", "plan", "run"):

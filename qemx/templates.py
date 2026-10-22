@@ -114,8 +114,9 @@ def basis_prep(n: int, x: int, qubits=None) -> list:
 def qft(n: int = 3, s: int = 1, mode: str = "swap", m: int | None = None, prep: str = "fourier") -> Template:
     """The QFT F|y⟩ = N^{-1/2} Σ_k e^{2πi yk/N}|k⟩ (N = 2^n, little-endian integers) applied to a prepared input.
 
-    Input and output. ``prep`` and ``s`` define the *input*: its preparation gates are part of the circuit (tagged
-    ``prep``, drawn as preparation). The output is derived from them and never edited:
+    Input and output. ``prep`` and ``s`` define the *input* (``role="input"``): the template writes it as leading
+    gates tagged ``prep``, which the app turns into the per-qubit input states (``io_semantics.split_preparation``),
+    so it is prepared once and shown where the inputs are set. The output is derived from it and never edited:
 
     * ``prep="fourier"`` (known-answer benchmark, the default and the only form before 1.5): the product state
       F†|s⟩ (a Hadamard and a phase on every qubit; F†|0⟩ = |+⟩^⊗n) is prepared, so the ideal output is |s⟩ with
@@ -284,7 +285,6 @@ def shor15(a: int = 7, t: int = 3, powers: str = "precomputed", multiplier: str 
     n = t + 4
     work = list(range(t, t + 4))
     qc = QuantumCircuit(n)
-    qc.x(work[0])
     for k in range(t):
         qc.h(k)
     gates = {}
@@ -312,9 +312,10 @@ def shor15(a: int = 7, t: int = 3, powers: str = "precomputed", multiplier: str 
         for k in range(j):
             qc.cp(-math.pi / 2 ** (j - k), k, j)
         qc.h(j)
-    spec = _from_qiskit_circuit(qc, "Shor-15 (a=%d%s)" % (a, "" if powers == "precomputed" and multiplier == "permutation"
+    body = _from_qiskit_circuit(qc, "Shor-15 (a=%d%s)" % (a, "" if powers == "precomputed" and multiplier == "permutation"
                                                           else ", " + ", ".join(x for x in (powers, multiplier)
                                                                                 if x not in ("precomputed", "permutation"))))
+    spec = body.replace(ops=(_g("x", work[0], tag="prep"),) + tuple(body.ops))     # the input: work register |1⟩
     r = next(r for r in range(1, 16) if pow(a, r, 15) == 1)
     good = [y for y in range(2 ** t) if _cf_order(y, t, a) == r and y != 0]
     b = (np.arange(2 ** n)[:, None] >> np.arange(n)[None, :]) & 1
@@ -581,9 +582,7 @@ def qpe_ising(t: int = 3, phase: float = 0.375, state: str = "01") -> Template:
     Jtau = 2 * math.pi * phase
     zz = -1 if state in ("01", "10") else 1
     qc = QuantumCircuit(n)
-    for q, bit in ((sa, state[1]), (sb, state[0])):
-        if bit == "1":
-            qc.x(q)
+    prep = [_g("x", q, tag="prep") for q, bit in ((sa, state[1]), (sb, state[0])) if bit == "1"]   # the input
     for k in range(t):
         qc.h(k)
     for k in range(t):
@@ -597,7 +596,8 @@ def qpe_ising(t: int = 3, phase: float = 0.375, state: str = "01") -> Template:
         for k in range(j):
             qc.cp(-math.pi / 2 ** (j - k), k, j)
         qc.h(j)
-    spec = _from_qiskit_circuit(qc, "QPE of exp(-iJZZτ)")
+    body = _from_qiskit_circuit(qc, "QPE of exp(-iJZZτ)")
+    spec = body.replace(ops=tuple(prep) + tuple(body.ops))
     ph = (-zz * phase) % 1.0             # eigenphase of U on the chosen eigenstate, in turns
     j = int(round(ph * 2 ** t)) % 2 ** t
     obs = OBS.subset_projector(list(range(t)), j, n, label="P(j=%d)" % j)
@@ -901,14 +901,13 @@ def qec_3q(code: str = "bit-flip", mode: str = "syndrome + correction", theta: f
     anc = mode != "majority vote readout"
     n = 5 if anc else 3
     qc = QuantumCircuit(n)
-    qc.ry(theta, 0)
     qc.cx(0, 1)
     qc.cx(0, 2)
     if code == "phase-flip":
         for q in range(3):
             qc.h(q)
     spec_pre = _from_qiskit_circuit(qc, "enc")
-    ops = list(spec_pre.ops)
+    ops = ([_g("ry", 0, params=(theta,), tag="prep")] if theta else []) + list(spec_pre.ops)   # the input RY(θ)|0⟩
     err_gate = "x" if code == "bit-flip" else "z"
     if error == "one error on qubit k":
         ops.append(_g(err_gate, int(k)))
@@ -964,7 +963,7 @@ def repetition(d: int = 3, rounds: int = 1, theta: float = 0.0, p: float = 0.05)
     n = d + rounds * (d - 1)
     ops = []
     if theta:
-        ops.append(_g("ry", 0, params=(theta,)))
+        ops.append(_g("ry", 0, params=(theta,), tag="prep"))          # the input RY(θ)|0⟩
     ops += [_g("cx", 0, i) for i in range(1, d)]
     for r in range(rounds):
         if p > 0:
@@ -1011,7 +1010,7 @@ def steane(theta: float = 1.0472, error: str = "none", k: int = 0, p: float = 0.
     Stabilizers are X and Z on the rows of the Hamming check matrix: {3,4,5,6}, {1,2,5,6}, {0,2,4,6}. The input sits
     on q2; CX q2→q4, q5 applies the logical X representative X2X4X5, then the pivots q0 q1 q3 (H) spread the
     codewords of the dual code. ⟨Z_L⟩ = ⟨Z⊗7⟩ = cos θ; the decoded readout first corrects any single bit flip."""
-    ops = [_g("ry", 2, params=(theta,))] if theta else []
+    ops = [_g("ry", 2, params=(theta,), tag="prep")] if theta else []          # the input RY(θ)|0⟩ on q2
     ops += [_g("cx", 2, 4), _g("cx", 2, 5)]
     ops += [_g("h", q) for q in (0, 1, 3)]
     ops += [_g("cx", 3, t) for t in (4, 5, 6)] + [_g("cx", 1, t) for t in (2, 5, 6)] + [_g("cx", 0, t) for t in (2, 4, 6)]
@@ -1106,7 +1105,7 @@ def five_qubit(theta: float = 1.0472, error: str = "none", k: int = 0, p: float 
     PRA 54, 3824 (1996)): the smallest code that corrects any single-qubit error. RY(θ)|0⟩ on q0 is encoded, an error
     acts, the inverse encoder maps the error to (logical Pauli on q0) ⊗ (syndrome on q1…q4), and the readout decodes
     with the 16-entry lookup table."""
-    ops = [_g("ry", 0, params=(theta,))] if theta else []
+    ops = [_g("ry", 0, params=(theta,), tag="prep")] if theta else []          # the input RY(θ)|0⟩
     ops += _five_ops()
     if error.endswith("on qubit k"):
         ops.append(_g(error[0].lower(), int(k)))
@@ -1146,7 +1145,7 @@ def surface_d2(theta: float = 1.0472, error: str = "none", k: int = 0, p: float 
     plaquette and q5, q6 the two Z checks."""
     anc = syndrome.startswith("ancilla")
     n = 7 if anc else 4
-    ops = [_g("ry", 0, params=(theta,))] if theta else []
+    ops = [_g("ry", 0, params=(theta,), tag="prep")] if theta else []          # the input RY(θ)|0⟩
     ops += [_g("cx", 0, 1), _g("h", 2), _g("cx", 2, 3), _g("cx", 2, 0), _g("cx", 2, 1)]
     if error.endswith("on qubit k"):
         ops.append(_g(error[0].lower(), int(k)))
@@ -1199,46 +1198,53 @@ class TParam:
     step: float | None = None
     options: tuple = ()
     help: str = ""
+    role: str = "circuit"      # "input": chooses only the input state (set in Inputs and measurement, not the circuit)
 
     def bound(self, v, params):
         return v(params) if callable(v) else v
 
 
 QFT_MODES = ("swap", "bitreverse", "relabel")
-_QFT_S_HELP = ("Part of the INPUT, read little-endian (q0 = 1s bit): which state the preparation gates load. The output "
-               "is derived from it (Output panel): |s⟩ for the Fourier-state preparation, a uniform distribution for "
-               "a basis-state input.")
+_QFT_S_HELP = ("Part of the INPUT, read little-endian (q0 = 1s bit): which state is loaded into the qubits before the "
+               "circuit. The output is derived from it (Output panel): |s⟩ for the Fourier-state input, a uniform "
+               "distribution for a basis-state input.")
 _QFT_PREP_HELP = ("fourier: prepare F†|s⟩ with a Hadamard and a phase per qubit (F†|0⟩ = |+⟩^n), a known-answer "
                   "benchmark whose ideal output is |s⟩. basis: prepare |s⟩ with X gates; the ideal output is uniform. "
                   "Configurations from before 1.5 have no prep and mean fourier.")
 _BITS = {"swap": "SWAP network", "bitreverse": "reversed input", "relabel": "relabel outputs"}
+_THETA_HELP = ("Part of the INPUT: the logical state RY(θ)|0⟩ loaded into the code's input qubit before the circuit "
+               "encodes it, so ⟨Z_L⟩ = cos θ without errors.")
 
 REGISTRY = {
     "bell": ("Bell pair", bell, ()),
     "ghz": ("GHZ state", ghz, (TParam("n", "qubits", "int", 3, 2, None, 1),)),
     "qft": ("QFT", qft, (TParam("n", "qubits", "int", 3, 2, None, 1),
                          TParam("s", "input index s (integer)", "int", 5, 0, lambda p: 2 ** p["n"] - 1, 1,
-                                help=_QFT_S_HELP),
+                                help=_QFT_S_HELP, role="input"),
                          TParam("mode", "bit order", "choice", "swap", options=QFT_MODES,
                                 help="SWAP network; no SWAPs with a bit-reversed input load (Fourier-state input "
                                      "only); or no SWAPs and classically relabeled output bits."),
                          TParam("prep", "input preparation", "choice", "fourier", options=QFT_PREPS,
-                                help=_QFT_PREP_HELP))),
+                                help=_QFT_PREP_HELP, role="input"))),
     "aqft": ("Approximate QFT", lambda n=4, s=1, mode="swap", m=1, prep="fourier": qft(n, s, mode, m, prep),
              (TParam("n", "qubits", "int", 4, 3, None, 1),
-              TParam("s", "input index s (integer)", "int", 1, 0, lambda p: 2 ** p["n"] - 1, 1, help=_QFT_S_HELP),
+              TParam("s", "input index s (integer)", "int", 1, 0, lambda p: 2 ** p["n"] - 1, 1, help=_QFT_S_HELP,
+                     role="input"),
               TParam("mode", "bit order", "choice", "swap", options=QFT_MODES),
               TParam("m", "AQFT degree m", "int", 1, 1, lambda p: p["n"] - 1, 1,
                      help="Keep the controlled phases π/2^d between qubits at distance d ≤ m. Coppersmith (1994, "
                           "arXiv:quant-ph/0201067v1) deletes those with d ≥ m_C, so this m = m_C − 1; his bound on "
                           "each entry's phase error is 2π·n·2^(−m_C)."),
-              TParam("prep", "input preparation", "choice", "fourier", options=QFT_PREPS, help=_QFT_PREP_HELP))),
+              TParam("prep", "input preparation", "choice", "fourier", options=QFT_PREPS, help=_QFT_PREP_HELP,
+                     role="input"))),
     "qpe": ("Phase estimation", qpe, (TParam("t", "counting qubits", "int", 3, 1, None, 1),
                                       TParam("phi", "phase φ", "float", 0.25, 0.0, 1.0, 1 / 16))),
     "qpe_ising": ("QPE of an Ising Hamiltonian", qpe_ising,
                   (TParam("t", "counting qubits", "int", 3, 1, None, 1),
                    TParam("phase", "Jτ/2π", "float", 0.375, 0.0, 1.0, 1 / 16),
-                   TParam("state", "eigenstate", "choice", "01", options=("00", "01", "10", "11")))),
+                   TParam("state", "eigenstate |ab⟩ (system input)", "choice", "01", options=("00", "01", "10", "11"),
+                          help="The input of the system qubits, an eigenstate of Z_aZ_b written q(t+1) q(t).",
+                          role="input"))),
     "ising": ("Ising (Trotter)", ising, (TParam("n", "spins", "int", 3, 2, None, 1),
                                          TParam("steps", "Trotter steps", "int", 2, 1, None, 1),
                                          TParam("h", "field h", "float", 1.0, 0.0, 5.0, 0.1),
@@ -1307,7 +1313,8 @@ REGISTRY = {
                (TParam("code", "code", "choice", "bit-flip", options=("bit-flip", "phase-flip")),
                 TParam("mode", "decoder", "choice", "syndrome + correction",
                        options=("syndrome + correction", "syndrome only (no correction)", "majority vote readout")),
-                TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05),
+                TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05,
+                       help=_THETA_HELP, role="input"),
                 TParam("error", "error", "choice", "none",
                        options=("none", "one error on qubit k", "channel on every data qubit")),
                 TParam("k", "qubit k", "int", 0, 0, 2, 1),
@@ -1315,17 +1322,20 @@ REGISTRY = {
     "repetition": ("Repetition code memory (distance d)", repetition,
                    (TParam("d", "distance d (odd)", "int", 3, 3, None, 2),
                     TParam("rounds", "syndrome rounds", "int", 1, 0, None, 1),
-                    TParam("theta", "logical θ (RY)", "float", 0.0, 0.0, 2 * math.pi, 0.05),
+                    TParam("theta", "logical θ (RY)", "float", 0.0, 0.0, 2 * math.pi, 0.05,
+                           help=_THETA_HELP, role="input"),
                     TParam("p", "bit-flip p per exposure (r + 1 exposures)", "float", 0.05, 0.0, 1.0, 0.01))),
     "steane": ("Steane [[7,1,3]] code", steane,
-               (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05),
+               (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05,
+                       help=_THETA_HELP, role="input"),
                 TParam("error", "error", "choice", "none",
                        options=("none", "X on qubit k", "Z on qubit k", "bit-flip channel on every qubit")),
                 TParam("k", "qubit k", "int", 0, 0, 6, 1),
                 TParam("p", "channel p", "float", 0.05, 0.0, 1.0, 0.01),
                 TParam("readout", "logical readout", "choice", "decoded", options=("decoded", "raw parity")))),
     "five_qubit": ("Five-qubit code [[5,1,3]] (Laflamme)", five_qubit,
-                   (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05),
+                   (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05,
+                           help=_THETA_HELP, role="input"),
                     TParam("error", "error", "choice", "none",
                            options=("none", "X on qubit k", "Y on qubit k", "Z on qubit k",
                                     "depolarizing channel on every qubit")),
@@ -1334,7 +1344,8 @@ REGISTRY = {
                     TParam("readout", "logical readout", "choice", "decoded (lookup table)",
                            options=("decoded (lookup table)", "raw (no correction)")))),
     "surface_d2": ("Surface code d = 2 (one plaquette)", surface_d2,
-                   (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05),
+                   (TParam("theta", "logical θ (RY)", "float", 1.0472, 0.0, 2 * math.pi, 0.05,
+                           help=_THETA_HELP, role="input"),
                     TParam("error", "error", "choice", "none",
                            options=("none", "X on qubit k", "Y on qubit k", "Z on qubit k",
                                     "bit-flip channel on every data qubit")),
@@ -1388,6 +1399,37 @@ CATEGORIES = {
     "FTQC · encoded algorithms": ("qec_algorithm",),
     "FTQC · deep algorithms": ("shor", "grover_search", "hsp", "hhl"),
 }
+
+# the qubit that carries the logical input RY(θ)|0⟩ of the error-correcting-code templates (their θ has role "input")
+THETA_QUBIT = {"qec_3q": 0, "repetition": 0, "steane": 2, "five_qubit": 0, "surface_d2": 0}
+
+
+def input_text(key: str, params: dict | None = None) -> str:
+    """The template's own input in words (the Inputs panel shows it next to the per-qubit states); '' for templates
+    that start from |0…0⟩."""
+    p = clamp_params(key, params or {}) if key in REGISTRY else {}
+    if key in ("qft", "aqft"):
+        n, s = int(p["n"]), int(p["s"])
+        if p["prep"] == "basis":
+            return "basis state |s⟩ = |%s⟩ (X gates)" % format(s, "0%db" % n)
+        if p["mode"] == "bitreverse":
+            return ("Fourier state F†|rev(s)⟩ = F†|%d⟩: the bit order “reversed input” loads the Fourier state of "
+                    "rev(s), so the circuit without SWAPs outputs |s⟩ = |%s⟩" % (rev(s, n), format(s, "0%db" % n)))
+        return "Fourier state F†|s⟩ = F†|%d⟩ (a Hadamard and a phase on every qubit)" % s
+    if key == "qpe":
+        return "eigenstate |1⟩ of U = P(2πφ) on q%d" % int(p["t"])
+    if key == "qpe_ising":
+        t = int(p["t"])
+        return "eigenstate |%s⟩ of Z_aZ_b on the system qubits q%d q%d" % (p["state"], t + 1, t)
+    if key == "bv":
+        return "ancilla q%d in |−⟩ (phase kickback)" % int(p["n"])
+    if key == "shor":
+        t = int(p["t"])
+        return "work register q%d…q%d = |1⟩ (q%d in |1⟩)" % (t, t + 3, t)
+    if key in THETA_QUBIT:
+        th = float(p["theta"])
+        return "logical input RY(θ)|0⟩ on q%d, θ = %.4g (⟨Z_L⟩ = cos θ = %.4f)" % (THETA_QUBIT[key], th, math.cos(th))
+    return ""
 
 # encoded-algorithm templates: their syndrome checks and intended logical value come from the template itself
 QEC_ALGORITHM_KEYS = ("qec_algorithm",)

@@ -375,20 +375,48 @@ def combine(ps: PauliSum, parts: list, shots: int):
     sv = np.sqrt([max(r.var1, 0.0) for _, _, r in parts])
     w = sv / sv.sum() if sv.sum() > 0 else np.full(len(parts), 1.0 / len(parts))
     var1 = float(sv.sum() ** 2) if sv.sum() > 0 else 0.0
-    alloc = [max(1, int(round(shots * wi))) for wi in w]
+    from .methods.zne import largest_remainder_split
+    alloc = (list(largest_remainder_split(w, int(shots))) if int(shots) >= len(parts)
+             else [max(1, int(round(shots * wi))) for wi in w])          # Σ = shots whenever every setting can run
     first = parts[0][2]
     details = dict(first.details or {})
     details["hamiltonian"] = [dict(basis=basis_string(b, n), terms=len(idx), mean=float(r.mean), var1=float(r.var1),
                                    shots=int(a)) for (b, idx, r), a in zip(parts, alloc)]
     samplers = [r.sampler for _, _, r in parts]
 
+    def split_of(N):
+        # exactly N target shots over the settings (≥ 1 each, largest remainders); fewer than one per setting: none
+        from .methods.zne import largest_remainder_split
+        return largest_remainder_split(w, int(N)) if int(N) >= len(parts) else None
+
     def sampler(N, B, rng):
         if any(s is None for s in samplers):
             return None
+        Ng = split_of(N)
+        if Ng is None:
+            return np.full(int(B), np.nan)
         tot = np.full(B, ps.constant, dtype=float)
-        for s, wi in zip(samplers, w):
-            tot = tot + np.asarray(s(max(1, int(round(N * wi))), B, rng), float)
+        for s, ng in zip(samplers, Ng):
+            tot = tot + np.asarray(s(int(ng), B, rng), float)
         return tot
+
+    # target-nonlinear settings (every setting runs the same recipe): the combination's budget-dependent moments
+    t_samplers = [r.target_sampler for _, _, r in parts]
+    target_sampler, nl = None, {}
+    if any(t is not None for t in t_samplers) and all(s is not None for s in samplers):
+        def target_sampler(N, B, rng):
+            Ng = split_of(N)
+            if Ng is None:
+                return np.full(int(B), np.nan), np.ones(int(B), bool)
+            tot, fail = np.full(int(B), ps.constant, dtype=float), np.zeros(int(B), bool)
+            for t, s, ng in zip(t_samplers, samplers, Ng):
+                if t is not None:
+                    e, f = t(int(ng), int(B), rng)
+                else:
+                    e = np.asarray(s(int(ng), int(B), rng), float)
+                    f = ~np.isfinite(e)
+                tot, fail = tot + np.asarray(e, float), fail | np.asarray(f, bool)
+            return tot, fail
 
     notes = ["H has %d term%s measured in %d setting%s (qubit-wise commuting groups: %s); shots are split "
              "N_g ∝ √v_g (%s)." % (len(ps.terms), "" if len(ps.terms) == 1 else "s", len(parts),
@@ -414,7 +442,8 @@ def combine(ps: PauliSum, parts: list, shots: int):
     spc = [r.shots_per_circuit for _, _, r in parts if r.shots_per_circuit]
     # the statistical contract: the combination is a protocol mean if any setting's is; reference fits add up
     kinds = [getattr(r, "estimate_kind", "exact") for _, _, r in parts]
-    kind = "measured" if "measured" in kinds else ("protocol" if "protocol" in kinds else kinds[0])
+    kind = "measured" if "measured" in kinds else ("protocol" if "protocol" in kinds else
+                                                   ("reference" if "reference" in kinds else kinds[0]))
     refs = [r.reference_mean if r.reference_mean is not None else r.mean for _, _, r in parts]
     has_ref = any(r.reference_mean is not None for _, _, r in parts)
     moms = [r.moments for _, _, r in parts if r.moments]
@@ -426,7 +455,17 @@ def combine(ps: PauliSum, parts: list, shots: int):
                    failed=int(sum(int(m.get("failed", 0)) for m in moms)),
                    conditional=bool(any(m.get("conditional") for m in moms)))
     flags = tuple(dict.fromkeys(f for _, _, r in parts for f in (r.flags or ())))
-    return MethodResult(
+    if target_sampler is not None and kind == "reference":
+        from .stats import moment_grid
+        ref = float(ps.constant + sum(refs))
+        pol = next((r.failure_policy for _, _, r in parts if getattr(r, "failure_policy", None)), "abstain")
+        nl = dict(target_sampler=target_sampler, failure_policy=pol)
+        if np.isfinite(ref) and np.isfinite(var1):
+            details["target_moments"] = moment_grid(target_sampler, max(len(parts), 1), ref, var1,
+                                                    np.random.default_rng([0x484D, len(parts)]), pol)
+    else:
+        details.pop("target_moments", None)          # the first setting's own grid does not describe the sum
+    return MethodResult(**nl,
         estimate_kind=kind, reference_mean=float(ps.constant + sum(refs)) if has_ref else None, moments=mom,
         flags=flags,
         mean=float(ps.constant + sum(means)), var1=var1, circuits=int(sum(r.circuits for _, _, r in parts)),

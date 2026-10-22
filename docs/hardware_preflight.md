@@ -1,120 +1,206 @@
-# Hardware preflight plan: one shared 600-second campaign
+# Hardware preflight (1.5.1): one shared 600-second campaign
 
-**Status: plan for review. Nothing has been submitted.** No command in this release submits a job unless both of these are true: the user has created a campaign ledger, and the user has run a `run-ibm` step (or pressed **Run on IBM Quantum**) with credentials. Every number below comes from offline planning and emulation.
+**Status: an offline plan. Nothing has been submitted, and nothing in this release submits a job unless a person
+with credentials runs a hardware command against a campaign ledger.** Every number below comes from offline planning
+on the `fake_fez` device model and from an emulation of the hardware path on it.
+
+This plan replaces the 1.5.0 plan, which spent most of the allowance on a distribution-fidelity discrepancy campaign
+(`direction_A_divergence_v3_qpu600.yaml`, 418 s high) whose endpoint differs from the main study's. Version 1.5.1
+puts the main study first: a small, well-powered test of whether the simulated ranking of complete QEM protocols holds
+on the device, with the discrepancy diagnostics computed on the same circuits.
 
 ## 1. Policy
 
-- **One ceiling.** Both thesis themes share one ceiling of **600 s of QPU usage** in total: the main study (QEM performance and transfer) and the supporting study (model discrepancy). The ledger keeps a **60 s reserve**, so at most **540 s** can be admitted. If the account's remaining allowance is smaller, the smaller number applies (`--account-remaining`).
-- **Not a target.** The ceiling bounds the plan; nothing is added to use it up. The confirmatory circuits and their shot allocations below are fixed *before* any hardware result exists.
-- **What is counted.** QPU usage is the time the QPU is locked for our jobs (IBM "Workload usage"). The ledger records:
-  - QPU seconds;
-  - shots, number of jobs and job ids.
+- **One ceiling.** The main study and the supporting discrepancy study share **600 s of QPU usage**. The campaign
+  ledger keeps a **60 s reserve**, so at most **540 s** can be admitted; a smaller remaining account allowance governs
+  if it is lower (`--account-remaining`).
+- **A limit, not a target.** The plan below reserves **331 s**. The rest stays unspent unless a later, separately
+  justified plan is made.
+- **What is counted.** QPU usage is the time the QPU is locked for our jobs (IBM "Workload usage"). The ledger records
+  QPU seconds, shots, jobs and job ids. Waiting time, classical computation and cost are reported separately.
+- **Frozen before data.** Circuits, protocols, budgets, the number of blocks, the endpoint, the contrasts and the
+  analysis are fixed here (design `transfer-v1`, `qemx/transfer.py`). Predictions are frozen with the day's
+  calibration before the first job (`frozen_predictions.json`, written once by `run-ibm` with
+  `transfer.predictions_on`: the same device model and simulation path as the predictions below, on the day's
+  calibration — on the fake device it reproduces them exactly).
 
-  Waiting time, classical computation and monetary cost are reported separately and are not limited by the ledger.
-- **What cannot be bounded per job.** `max_execution_time` limits each job's QPU usage only. A batch or session `max_time` is an elapsed-time TTL that fails queued jobs. No provider setting caps a campaign, so the app keeps its own ledger. A job cancelled by the user, or stopped by its limit, still reports the usage it consumed up to that point.
-
-## 2. Usage model and admission (`qemx/campaign.py`)
+## 2. Usage model and the ledger (`qemx/campaign.py`)
 
 | quantity | value | source |
 |---|---|---|
 | low | 2 s per sub-job + 0.35 ms × executions | IBM quick formula ("Workload usage", read 2026-10-17) |
-| central | 2 s per sub-job + **0.57 ms** × executions | this project's earlier ibm_fez measurement (replaced by Stage 1's pilot) |
-| high (admission) | 1.3 × central | margin |
-| sub-jobs | one per 100 circuits (assumption) | IBM does not document the split; to be calibrated in Stage 1 |
+| central | 2 s per sub-job + **0.57 ms** × executions | this project's earlier ibm_fez measurement; replaced by Stage 1 |
+| high | 1.3 × central | margin |
+| sub-jobs | one per 100 circuits (assumption) | IBM does not document the split; calibrated in Stage 1 |
+| per-job limit | `max_execution_time` = ⌈high⌉ s | set on every job |
+| reservation | max(high, per-job limit) | committed by the ledger until the job is reconciled |
 
-"Executions" means the number of circuits times the number of shots.
+"Executions" are circuits × shots. One Sampler call per shot count is one job (qiskit-ibm-runtime ≥ 0.48 deprecates
+different shots within one call), each with at least one sub-job, so the job count drives usage more than the shots
+do for these small circuits.
 
-How admission works:
+Admission and bookkeeping:
 
-- **Before a job is submitted**, the ledger admits it only if its *high* estimate fits within the remaining allowance. That remainder is the ceiling, minus the reserve, minus reconciled usage, minus the high estimates of all unreconciled jobs.
-- **When it is submitted**, each job's `max_execution_time` is set to 1.1 × its high estimate.
-- **Recording.** Job ids are written to `jobs.json` and to the ledger right after each job, so a crash cannot lose one.
-- **Collecting.** `collect-ibm --ledger` reconciles each job with the usage the provider reports through `job.usage()`.
-- **Overruns.** If any job's reported usage exceeds its high estimate, admission stops until the usage model is recalibrated.
-- **No automatic retries.** After an interruption, a reservation without a job id blocks further submission until it is resolved by hand: `python -m qemx.campaign resolve`, after checking the provider's job list.
+- **One transaction per change.** The ledger is a JSON file (schema `qemx.campaign.ledger/2`) shared by the app and
+  the CLIs. Every change takes an exclusive lock on `<ledger>.lock`, re-reads the file, checks, changes it and writes
+  it through a uniquely named temporary file. Stale objects and concurrent processes cannot overwrite each other.
+  Keep the ledger on a local disk (not a network share or a cloud-synced folder).
+- **Admission.** A job is admitted only if its reservation fits in what remains: ceiling (or the smaller account
+  allowance) − reserve − reconciled usage − the reservations of every unreconciled job, including submissions whose
+  outcome is unknown.
+- **Per-job limits inside the allowance.** Each job carries `max_execution_time` = ⌈high⌉ s and the ledger reserves at
+  least that much, so the provider-enforced limits of all jobs in flight add up to no more than the admitted
+  allowance. (1.5.0 sent ⌈1.1 × high⌉ + 1 s while reserving only the high estimate.) A job that would need more than
+  its limit is stopped by the provider; its usage up to then is still billed.
+- **Unknown outcomes.** Only a definite "not submitted" releases a reservation. A timeout, a lost connection or any
+  other error of the provider call leaves it committed as `submission_unknown`, and no submitter starts until it is
+  resolved by the job's client tag (`qemx-ledger-<id>`): automatically by the collectors, or by hand with
+  `python -m qemx.campaign resolve`.
+- **Mandatory ledger.** Real-provider submission without a valid ledger is refused at the submission boundary; a
+  configured path that does not exist is an error. Only fake backends and local simulators run without one.
+- **Reconciliation.** Collection reconciles each ended job with `job.usage()`. If a job's reported usage exceeds its
+  high estimate, admission stops until the usage model is recalibrated.
+- **No automatic retries, job mode by default.** A resumed run never re-sends a recorded block.
 
-These rules are tested with a mock provider in `tests/test_campaign.py`. The tests cover failures, cancellations, a crash between submission and bookkeeping, resuming without duplicate submissions, overruns and the bound on outstanding work.
+**What remains conditional.** The ceiling holds if the provider stops each job at its `max_execution_time` and
+reports usage within it; billing granularity or cancellation latency beyond a limit must fit in the 60 s reserve. The
+account allowance is the value entered at `init`; usage outside this ledger is not seen. These rules are tested with
+mock providers (`tests/test_campaign.py`, `tests/test_spending.py`, `tests/test_ibm_page_ledger.py`,
+`tests/test_v151_consolidation.py`, `tests/test_transfer.py`).
 
-## 3. Stages
+## 3. The design (`qemx/transfer.py`, design `transfer-v1`)
 
-| stage | what | circuits / methods | executions | planned usage (low / central / **high**) | runs only if |
+**Question.** For circuits whose simulated regimes are clearly separated, does the simulated ranking of complete QEM
+protocols at a fixed total budget per estimate hold on the device?
+
+**Circuits** (compiled for the day's backend on its good qubits):
+
+| circuit | role | ideal | why |
+|---|---|---|---|
+| QFT-4, known answer (input F†\|5⟩, observable P(\|5⟩)) | primary | 1 | strong predicted separation (RO 0.145 vs ZNE-L 0.032) |
+| Bernstein–Vazirani, 4 data qubits, s = 11 (observable P(\|1⟩\|s⟩)) | primary | 1 | moderate separation (RO 0.038 vs ZNE-L 0.016) |
+
+A predicted near-tie (Ising-4, 2 Trotter steps: RO 0.0154 vs ZNE-L 0.0171) is left out: about 30 blocks would be
+needed for 0.8 power, and at 4 blocks its power would be about 0.1.
+
+**Protocols** (the hardware planner's *effective* protocols; total budget B = 4 000 shots per complete estimate,
+every circuit of the protocol included, integer allocation conserved exactly):
+
+| id | protocol | requested → effective |
+|---|---|---|
+| RAW | unmitigated | — |
+| RO | tensored readout-error inversion | — |
+| ZNE-L | linear ZNE, global folding λ = 1, 3, with readout inversion | — |
+| PEC | PEC (inverse, depolarizing model from the day's calibration), with readout inversion | at most 64 sampled circuits: shots per sampled circuit 1 → 43 (QFT-4) and 32 (BV-4); recorded in `frozen_predictions.json` and simulated as such |
+
+**Blocks.** One block runs every protocol on every circuit once, back to back: a complete estimate each, with its
+own calibration circuits, PEC samples and seeds. **K = 4 blocks** (the smallest K with ≥ 0.8 predicted power for
+both primary contrasts). Contrasts are paired within blocks.
+
+**Endpoint and analysis.** Signed error e = estimate − exact ideal value of one complete estimate (the main study's
+scalar endpoint). Per protocol: MSE = mean(e²) over blocks (bootstrap interval over blocks).
+
+- *Primary contrasts:* the predicted best protocol against readout correction only — ZNE-L vs RO on both circuits.
+  For each, d_b = e²_RO,b − e²_ZNE-L,b; one-sided paired t test of mean(d) > 0; Holm over the two contrasts at 0.05.
+- *Secondary:* ZNE-L vs PEC on both circuits (reported, not confirmatory; predicted power ≈ 0.25–0.3 at K = 4).
+- *Discrepancy on the same circuits:* for every protocol, z = (mean error − predicted bias)/SE and the ratio of the
+  observed to the predicted SD with its χ² interval; the unmitigated counts also give the distribution-level
+  distance tests of `qemx.discrepancy` against the day's device-model prediction.
+
+**Predictions** (simulations of the effective protocols on the fake_fez model; on the day they are recomputed with the
+backend's calibration and frozen before the first job):
+
+| circuit | protocol | predicted bias | predicted SD | predicted RMSE |
+|---|---|---|---|---|
+| QFT-4 | RAW | −0.179 | 0.006 | 0.179 |
+| QFT-4 | RO | −0.145 | 0.010 | 0.145 |
+| QFT-4 | ZNE-L | −0.026 | 0.018 | 0.032 |
+| QFT-4 | PEC (s = 43) | −0.028 | 0.048 | 0.055 |
+| BV-4 | RAW | −0.096 | 0.005 | 0.096 |
+| BV-4 | RO | −0.036 | 0.011 | 0.038 |
+| BV-4 | ZNE-L | 0.000 | 0.016 | 0.016 |
+| BV-4 | PEC (s = 32) | −0.015 | 0.032 | 0.035 |
+
+Predicted power at K = 4: QFT-4 primary 1.00, BV-4 primary 0.85; secondary 0.24 and 0.29.
+
+## 4. Usage of the plan (`reports/hardware_transfer/plan/preflight.json`)
+
+| stage | what | jobs | executions | high s | reserved s |
 |---|---|---|---|---|---|
-| 0 | Offline validation (done) | `plan` on the fake twin, emulated null and alternatives, preflight | — | 0 s | — |
-| 1 | Pilot: calibrate the usage model | `direction_A_divergence_hwpilot.yaml`: 1 job, GHZ-2/3 and QFT-2/3, raw, 2 500 shots each | 10 000 | 6 / 8 / **10 s** | ledger initialized; approval given |
-| 2 | Confirmatory core: model discrepancy + transfer of the raw/RO/ZNE ranking | `direction_A_divergence_v3_qpu600.yaml`: 35 benchmarks × 3 layout variants × {RAW, RO, ZNE-G, ZNE-L}, 3 000 shots per benchmark and method | 480 000 (8 jobs) | 216 / 322 / **418 s** | Stage 1 reconciled; the re-run preflight still admits every job |
-| 3 | Transfer of learning methods (optional) | `hardware_transfer_qft4.yaml`, `hardware_transfer_ising4.yaml`: {raw, ZNE-R, CDR (8 × 512), NIL small budget}, 12 000 shots per method | ≈ 96 000 | ≈ 47 / 75 / **97 s** | after Stage 2 is reconciled, the ledger admits it in full; otherwise it is dropped, not shrunk |
-| | **Total (high)** | | | **≈ 525 s of the 540 s admissible** | |
+| 1 | usage pilot: 4 small circuits, 2 500 shots each, one job | 1 | 10 000 | 10.0 | 11 |
+| 2 | transfer test, per block (2 circuits × 4 protocols) | 18 | 32 000 | 70.5 | 80 |
+| 2 | 4 blocks | 72 | 128 000 | 282 | 320 |
+| | **total** | 73 | 138 000 | 292 | **331 of 540** |
 
-In Stage 2, the RAW, RO and ZNE data serve both themes. They measure model discrepancy, and they test whether the simulated ranking of raw, readout-mitigated and ZNE estimates holds on the device. They are counted once.
+Each block's 18 jobs (one per circuit and shot count) are listed with their low/central/high estimates and limits in
+`preflight.json`. At most 6 blocks would fit under the uncalibrated model.
 
-### Stage 2 job table (conservative model, `python -m qemx.campaign preflight`)
+## 5. What the emulation shows (EMULATION, not hardware)
 
-| job | executions | circuits | low s | central s | high s | max_execution_time s |
-|---|---|---|---|---|---|---|
-| 240 circuits × 65 shots | 15,600 | 240 | 11.5 | 14.9 | 19.4 | 23 |
-| 300 circuits × 200 shots | 60,000 | 300 | 27.0 | 40.2 | 52.3 | 59 |
-| 300 circuits × 200 shots | 60,000 | 300 | 27.0 | 40.2 | 52.3 | 59 |
-| 120 circuits × 200 shots | 24,000 | 120 | 12.4 | 17.7 | 23.0 | 27 |
-| 240 circuits × 214 shots | 51,360 | 240 | 24.0 | 35.3 | 45.9 | 52 |
-| 240 circuits × 321 shots | 77,040 | 240 | 33.0 | 49.9 | 64.9 | 73 |
-| 120 circuits × 600 shots | 72,000 | 120 | 29.2 | 45.0 | 58.6 | 66 |
-| 120 circuits × 1000 shots | 120,000 | 120 | 46.0 | 72.4 | 94.1 | 105 |
+The whole hardware path — planning, transpiling, twirl/mask draws, sampling, replay and analysis — was run on the
+fake device in local testing mode for 24 blocks (`reports/hardware_transfer/rehearsal_emulation`). The emulator now
+has the predicting model's physics (idle relaxation in the ALAP schedule, each qubit's asymmetric readout; 1.5.0's
+emulator lacked both and was 20 % quieter than the predictions, z ≈ 25 — finding N44).
 
-**Why not the 1.4.2 `qpu10` manifest.** At 4 500 shots per benchmark and method it needs 596 s under the high estimate, which is more than the 540 s the ledger admits. The 1.4.2 notes put it at "≈ 530 s with a 1.3× margin", but that figure left out the per-sub-job overhead. The v3 manifest is a new version (v2 is unchanged). It keeps the design and cuts shots to 3 000. As a consequence, shot noise per circuit grows by about 1.22×, and so does the smallest detectable discrepancy.
+- Every protocol's mean error agrees with its prediction (|z| ≤ 2.1); SD ratios are near 1, except PEC on QFT-4
+  (1.4, 95 % interval 1.1–1.9): with at most 64 sampled circuits the predicted instance variance is approximate.
+- Both primary contrasts are confirmed with 24 blocks. Split into six disjoint sets of 4 blocks, the QFT-4 contrast is
+  confirmed 6/6 times and the BV-4 contrast 5/6 times, in line with the predicted power (1.00 and 0.85).
 
-## 4. Backend, mode and settings
-
-- **Backend.** The study's backend is `ibm_fez`, as in the manifest. On the day of the run, `plan --backend <name>` compiles against that day's calibration. A different backend is an explicit choice: the app never switches devices silently, and `_check_backend` refuses a backend that does not match the plan.
-- **Mode.** Use **job mode** (`--mode job`, the default). On the Open plan, a batch's 10-minute TTL counts elapsed time, including queue waits, so a ~420 s batch could fail queued jobs. Sessions are not available on the Open plan.
-- **Unchanged settings.** Repetition delay, shots per circuit and mitigation settings are not changed to fit the budget. Any change would be a new manifest version with its scientific consequence stated.
-
-## 5. What the hardware data can and cannot show (from offline predictions)
-
-- **Discrepancy, emulated rehearsal of Stage 2** (`reports/rehearsal_v3`, EMULATION):
-  - *Null case* (the predictor's own model): Holm flags 0 / 1 120 rows. Unadjusted p < 0.05 in 4.4 % ± 0.6 % of rows. z has mean −0.10 and SD 0.94, so the test is calibrated, slightly conservative.
-  - *Power*: injected ZZ crosstalk of 0.05 rad is flagged in 28 % of raw rows, 62 % of aggregated raw rows, 17 % of readout-mitigated rows and **0 % of ZNE rows**. A 1.5× under-reported error is flagged in 15 %, 45 %, 5 % and 0 %.
-  - *Reading*: at this budget the campaign can detect discrepancies of roughly that size in raw and aggregated data. It cannot detect them through ZNE, whose variance hides them. A null result does not establish that the model is adequate.
-- **Transfer of learning methods, simulated predictions** on fake_fez at 12 000 shots per method:
-
-  | circuit | raw RMSE | ZNE-R RMSE | CDR RMSE | NIL (small) RMSE |
-  |---|---|---|---|---|
-  | QFT-4, known answer | 0.179 | 0.041 | 0.029 | 0.169 |
-  | Ising-4, 2 steps | 0.031 | 0.022 | 0.026 | 0.063 |
-
-  - **QFT-4.** The predicted ranking is well separated: per-method SDs are ≤ 0.03, except NIL's 0.15. One run can therefore test it.
-  - **Ising-4.** The predicted differences (≈ 0.005–0.009) are smaller than the per-run SDs (≈ 0.012). Ising-4 is a control: the simulation predicts *no* resolvable ranking, so a large difference on hardware would be the surprise.
-  - **Scope.** These two circuits cannot validate the simulated regime maps in general. They are a bounded transfer check.
+An emulation that agrees with its own model checks the pipeline, not the device.
 
 ## 6. Commands (after explicit approval only)
 
 ```bash
-# once: the campaign ledger (the ceiling covers both themes)
-python -m qemx.campaign init --ledger campaign_ledger.json --ceiling 600 --reserve 60 --account-remaining <s left on the account>
+# once: the campaign ledger (one ceiling for both themes)
+python -m qemx.campaign init --ledger campaign_ledger.json --ceiling 600 --reserve 60 --account-remaining <s left>
 
-# Stage 1 (pilot): calibrate the per-shot usage, then reconcile
+# offline, any time: the plan, the predictions and the emulation
+python scripts/hardware_transfer.py plan     --out reports/hardware_transfer/plan
+python scripts/hardware_transfer.py rehearse --out reports/hardware_transfer/rehearsal_emulation --blocks 24
+
+# Stage 1: calibrate the usage model (one small job), then reconcile and read the per-shot usage
 python scripts/dirA_divergence.py plan manifests/direction_A_divergence_hwpilot.yaml --out data/hwpilot --backend ibm_fez
-python -m qemx.campaign preflight data/hwpilot --ledger campaign_ledger.json
 python scripts/dirA_divergence.py run-ibm data/hwpilot --ledger campaign_ledger.json --mode job
 python scripts/dirA_divergence.py collect-ibm data/hwpilot --ledger campaign_ledger.json --wait
-python -m qemx.campaign status --ledger campaign_ledger.json     # measured per-shot = reported usage / 10 000
+python -m qemx.campaign status --ledger campaign_ledger.json
 
-# Stage 2: re-plan on the day, re-run the preflight with the calibrated per-shot cost, submit, collect, analyze
-python scripts/dirA_divergence.py plan manifests/direction_A_divergence_v3_qpu600.yaml --out data/dirA_div_v3 --backend ibm_fez
-python -m qemx.campaign preflight data/dirA_div_v3 --ledger campaign_ledger.json --per-shot-ms <measured>
-python scripts/dirA_divergence.py run-ibm data/dirA_div_v3 --ledger campaign_ledger.json --mode job --per-shot-ms <measured>
-python scripts/dirA_divergence.py collect-ibm data/dirA_div_v3 --ledger campaign_ledger.json --wait
-python scripts/dirA_divergence.py analyze data/dirA_div_v3 --tag ibm --out reports/dirA_div_v3_ibm --workers 4
+# re-plan with the measured per-shot usage; K is fixed here, by usage only, before any Stage 2 outcome exists
+python scripts/hardware_transfer.py plan --out data/transfer_plan --per-shot-ms <measured>
 
-# Stage 3 (only if the ledger admits it): QEMX_CAMPAIGN_LEDGER=campaign_ledger.json streamlit run app.py
-#   Playground → Export → load examples/experiments/hardware_transfer_qft4.yaml → Run on IBM Quantum
+# Stage 2: freeze the day's predictions, submit K blocks (each job admitted by the ledger), collect, analyze
+python scripts/hardware_transfer.py run-ibm     --out data/transfer --ledger campaign_ledger.json --blocks 4
+python scripts/hardware_transfer.py collect-ibm --out data/transfer --ledger campaign_ledger.json --wait
 ```
 
-The token comes from `QISKIT_IBM_TOKEN`, from a saved account, or from a hidden prompt (`--ask-token`). It is never a command-line argument and is never written to disk.
+**Interrupted runs.** Every provider call is written to `jobs.json` before it is made, and every job id right after.
+After an interruption, `run-ibm` refuses to continue while the ledger holds an unresolved call; once it is resolved
+(`python -m qemx.campaign resolve … --job-id <JOB>` or `--not-submitted`), `run-ibm` finishes the interrupted block
+with its own saved plan and sends only the jobs not yet sent — a job resolved to an existing id is never sent again.
+`collect-ibm` analyzes complete blocks only, and drops a request whose measurement-twirl masks lost a failed job
+(never averaged over the surviving masks).
+
+The token comes from `QISKIT_IBM_TOKEN`, a saved account, or a hidden prompt (`--ask-token`). It is never a
+command-line argument and is never written to disk. `data/transfer/plans/*.pkl` are the submitted plans (local working
+files, SHA-256 recorded in `jobs.json`); never load plan files from someone else.
 
 ## 7. Stopping rules
 
-1. Before every job: the ledger admits its high estimate, or nothing is submitted.
-2. After Stage 1: if the measured per-shot usage exceeds 0.74 ms (1.3 × 0.57), re-run the Stage 2 preflight at the measured value. If it no longer fits, cut Stage 3 first, then reduce Stage 2's shots per benchmark through a new manifest version. Do not raise the margin silently.
-3. If any job ends in an error or is cancelled, do not resubmit automatically. Reconcile it, inspect it, and decide.
-4. If the account's remaining allowance is below the plan, the smaller value governs (`--account-remaining`).
-5. The reserve is not used up to "finish" a stage.
+1. Before every job the ledger admits its reservation, or nothing is submitted.
+2. After Stage 1: re-run the plan with the measured per-shot usage. If 4 blocks no longer fit under the ledger,
+   reduce K to the largest that fits and report the reduced power; do not change shots or protocols to fit.
+3. K is decided before Stage 2 from usage alone and is not changed after any Stage 2 outcome is seen (no optional
+   stopping or extension).
+4. If a job fails or is cancelled, do not resubmit automatically: reconcile, inspect, decide, and record the decision.
+5. The reserve is not used to finish a stage.
+
+## 8. What the hardware data can and cannot show
+
+- A confirmed primary contrast supports the simulated ranking for that circuit, at B = 4 000, on that device and in
+  that time window. It does not validate the simulated regime maps in general, other circuits, other budgets or other
+  devices.
+- An unconfirmed contrast is not evidence that the protocols are equivalent.
+- A large discrepancy z for a protocol says that its mean error differs from the prediction; it does not identify the
+  physical cause.
+- Learning methods (CDR, FR, NIL) are not in this hardware test: their training budgets would need far more jobs per
+  block. Their transfer remains untested.

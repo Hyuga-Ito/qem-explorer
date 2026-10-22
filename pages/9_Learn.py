@@ -83,8 +83,7 @@ st.toggle("Keep my current contenders when a guide sets up a page", key="w_learn
                "experiment. On: they are added to yours. Saved custom recipes are never deleted either way.")
 
 TABS = ["Hands-on guides", "Fundamentals", "Algorithm walkthroughs", "Research topics"]
-S.wdefault("w_learn_tabs", ss.page_tab.get("learn", TABS[0]))
-tabs = st.tabs(TABS, key="w_learn_tabs", on_change=S.cb_tab, args=("learn", "w_learn_tabs"))
+tabs = S.page_tabs("learn", "w_learn_tabs", TABS)      # the selected tab is app state (survives page switches)
 
 with tabs[0]:
     if tabs[0].open is not False:

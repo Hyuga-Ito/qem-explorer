@@ -98,7 +98,7 @@ def test_suite_validation():
                 dict(SUITE, replicates=1), dict(SUITE, methods={"Z": {"kind": "zne", "scales": [1, 3, 3]}})):
         with pytest.raises(ValueError):
             D.suite_from_manifest(bad)
-    with open(os.path.join(ROOT, "manifests", "direction_A_divergence_v1.yaml")) as f:
+    with open(os.path.join(ROOT, "manifests", "direction_A_divergence_v1.yaml"), encoding="utf-8") as f:
         import yaml
         full = D.suite_from_manifest(yaml.safe_load(f))
     assert len(full.benchmarks) == 59 and full.predictors == ("depolarizing", "chen", "device")
@@ -339,7 +339,7 @@ def test_difference_volumetric_plot():
 def _write_manifest(tmp_path):
     import yaml
     p = tmp_path / "m.yaml"
-    p.write_text(yaml.safe_dump(dict(SUITE, circuits=SUITE["circuits"][:2])))
+    p.write_text(yaml.safe_dump(dict(SUITE, circuits=SUITE["circuits"][:2])), encoding="utf-8")
     return str(p)
 
 
@@ -353,7 +353,7 @@ def test_cli_plan_emulate_analyze(tmp_path):
     for t in ("divergence", "structures", "rates", "overview"):
         assert os.path.exists(os.path.join(out, "tables", t + ".csv")), t
     assert os.path.exists(os.path.join(out, "divergence_volumetric_depolarizing.png"))
-    rep = open(os.path.join(out, "tables", "report.md")).read()
+    rep = open(os.path.join(out, "tables", "report.md"), encoding="utf-8").read()
     assert "EMULATED" in rep
     # the cached predictions are reused (same key) and the analysis is reproducible
     assert DV.main(["analyze", run, "--tag", "x", "--out", out, "--no-figures", "--replicates", "60",
@@ -433,14 +433,19 @@ def test_token_never_written_or_printed(tmp_path, monkeypatch, capsys, backend):
         for f in files:
             with open(os.path.join(dirpath, f), "rb") as fh:
                 assert SECRET.encode() not in fh.read(), f
-    jobs_json = json.load(open(os.path.join(run, "obs", "hw", "jobs.json")))
-    assert all(set(r) == {"job_id", "backend", "shots", "runs", "submitted", "max_execution_time"}
-               for r in jobs_json["records"])
+    jobs_json = json.load(open(os.path.join(run, "obs", "hw", "jobs.json"), encoding="utf-8"))
+    assert all(set(r) == {"job_id", "backend", "shots", "runs", "submitted", "max_execution_time", "mode",
+                          "reservation", "client_tag"} for r in jobs_json["records"])     # 1.5.1: + mode, ledger ids
+    assert all(r["mode"] == "job" and r["client_tag"] == CG.job_tag(r["reservation"]) for r in jobs_json["records"])
     assert all(r["max_execution_time"] > 0 for r in jobs_json["records"])          # from each job's high estimate
     assert os.path.exists(os.path.join(run, "obs", "hw", "counts.json"))
 
 
 def test_partial_submission_resumes_without_resubmitting(tmp_path, monkeypatch, backend):
+    """A provider error after one job ("the queue is full") does not prove that no job was created (1.5.1, review
+    F04): the reservation stays committed as submission_unknown and blocks every further submission. Only after a
+    provider check (no job carries the call's client tag) is it resolved as not submitted; --resume then submits
+    exactly the runs not yet covered."""
     import qiskit_ibm_runtime as rt
     jobs, fail = {}, {"after": 1}
 
@@ -451,14 +456,18 @@ def test_partial_submission_resumes_without_resubmitting(tmp_path, monkeypatch, 
         def backend(self, name):
             return backend
 
+        def jobs(self, job_tags=None, limit=None, **kw):              # the provider's job search by tag
+            return [j for j in jobs.values() if set(job_tags or []) <= set(j.tags)]
+
     class Sampler:
         def __init__(self, mode=None):
-            self.options = SimpleNamespace(max_execution_time=None)
+            self.options = SimpleNamespace(max_execution_time=None, environment=SimpleNamespace(job_tags=None))
 
         def run(self, circs, shots=None):
             if fail["after"] is not None and len(jobs) >= fail["after"]:
                 raise RuntimeError("the queue is full")
             j = _Job("job-%d" % len(jobs), len(circs))
+            j.tags = list(self.options.environment.job_tags or [])
             jobs[j.job_id()] = j
             return j
 
@@ -474,21 +483,29 @@ def test_partial_submission_resumes_without_resubmitting(tmp_path, monkeypatch, 
     CG.Ledger.create(led, 600, 60)
     L = ["--ledger", led]
     jp = os.path.join(run, "obs", "hw", "jobs.json")
-    with pytest.raises(SystemExit, match="--resume"):
+    with pytest.raises(SystemExit, match="outcome of the next call is unknown"):
         DV.main(["run-ibm", run, "--tag", "hw", "--backend", "fake_fez"] + L)
-    first = json.load(open(jp))
-    assert first["partial"] and len(first["records"]) == 1
+    first = json.load(open(jp, encoding="utf-8"))
+    assert first["partial"] and len(first["records"]) == 1 and len(first["pending"]) == 1
+    assert first["records"][0]["client_tag"] in jobs["job-0"].tags                 # every job carries its tag
     led_entries = CG.Ledger.load(led).entries
-    assert [e["state"] for e in led_entries] == ["submitted", "released"]   # the refused job never became a job
+    assert [e["state"] for e in led_entries] == ["submitted", "submission_unknown"]  # may be a job: still committed
+    tag = first["pending"][0]["client_tag"]
+    for extra in ([], ["--resume"], ["--force"]):                                  # nothing is sent while unknown
+        with pytest.raises(SystemExit, match="unknown"):
+            DV.main(["run-ibm", run, "--tag", "hw", "--backend", "fake_fez"] + L + extra)
+    assert len(jobs) == 1
+    assert CG.main(["resolve", "--ledger", led, "--tag", tag, "--not-submitted"]) == 0   # provider checked: no job
     with pytest.raises(SystemExit, match="partial"):
         DV.main(["run-ibm", run, "--tag", "hw", "--backend", "fake_fez"] + L)      # never resubmits silently
     fail["after"] = None
     assert DV.main(["run-ibm", run, "--tag", "hw", "--backend", "fake_fez", "--resume"] + L) == 0
-    done = json.load(open(jp))
+    done = json.load(open(jp, encoding="utf-8"))
     keys = [k for r in done["records"] for k in r["runs"]]
     plan = DV.load_plan(run)
-    assert not done["partial"] and done["records"][0] == first["records"][0]
+    assert not done["partial"] and not done["pending"] and done["records"][0] == first["records"][0]
     assert sorted(keys) == sorted(r.key for r in plan.runs) and len(keys) == len(set(keys))   # each run once
+    assert len(jobs) == len(done["records"])
 
 
 def test_collect_keeps_the_counts_of_finished_jobs_when_one_fails():
@@ -551,12 +568,12 @@ def test_refresh_features_of_an_old_plan(tmp_path):
     circuits (digests), keeps the old plan, and the χ² ladder says so when they are missing."""
     run = str(tmp_path / "run")
     assert DV.main(["plan", _write_manifest(tmp_path), "--out", run]) == 0
-    with open(os.path.join(run, "plan.json")) as f:
+    with open(os.path.join(run, "plan.json"), encoding="utf-8") as f:
         d = json.load(f)
     digests = [r["digest"] for r in d["runs"]]
     for i in d["instances"]:
         i["features"] = None
-    with open(os.path.join(run, "plan.json"), "w") as f:
+    with open(os.path.join(run, "plan.json"), "w", encoding="utf-8") as f:
         json.dump(d, f)
     assert DV.main(["refresh-features", run]) == 0
     assert os.path.exists(os.path.join(run, "plan.before-features.json"))

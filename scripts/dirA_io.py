@@ -79,7 +79,7 @@ class DirectorySource(RunSource):
                 pass
         if os.path.exists(csv) and os.path.getsize(csv) > 0:
             try:
-                df = pd.read_csv(csv)
+                df = pd.read_csv(csv, encoding="utf-8")
             except pd.errors.EmptyDataError:
                 df = pd.DataFrame()
             if columns is not None:
@@ -97,7 +97,7 @@ class DirectorySource(RunSource):
             if cid.startswith(".tmp-") or (want is not None and cid not in want):
                 continue
             try:
-                with open(f) as fh:
+                with open(f, encoding="utf-8") as fh:
                     yield json.load(fh)
             except (OSError, ValueError):
                 continue
@@ -106,7 +106,7 @@ class DirectorySource(RunSource):
         p = os.path.join(self.dir, "run.json")
         if not os.path.exists(p):
             return {}
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
 
     def expected_cells(self):
@@ -158,7 +158,7 @@ def read_text(path: str | None) -> str | None:
     """A text input (lock file); None when absent."""
     if not path or not os.path.exists(path):
         return None
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -166,7 +166,7 @@ def read_csv(path: str | None) -> pd.DataFrame | None:
     """A CSV input (master list); None when absent."""
     if not path or not os.path.exists(path):
         return None
-    return pd.read_csv(path)
+    return pd.read_csv(path, encoding="utf-8")
 
 
 # ------------------------------------------------------------------ reports (text output)
@@ -260,15 +260,15 @@ class DirectoryReportSink:
         for name, df in rep.tables.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
                 p = os.path.join(self.dir, name + ".csv")
-                df.to_csv(p, index=not isinstance(df.index, pd.RangeIndex))
+                df.to_csv(p, index=not isinstance(df.index, pd.RangeIndex), encoding="utf-8")
                 paths.append(p)
         for fname, text in (("summary.csv", None), ("report.md", rep.render_markdown()),
                             ("report.txt", rep.render_text())):
             p = os.path.join(self.dir, fname)
             if text is None:
-                rep.summary.to_csv(p, index=False)
+                rep.summary.to_csv(p, index=False, encoding="utf-8")
             else:
-                with open(p, "w") as f:
+                with open(p, "w", encoding="utf-8") as f:
                     f.write(text)
             paths.append(p)
         return paths

@@ -580,14 +580,14 @@ def analyse(plan, counts: dict, predicted: dict, *, errors=(), replicates=None, 
 
 # ------------------------------------------------------------------ input / output
 def _read_json(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def _write_json(path, obj):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
 
@@ -661,7 +661,7 @@ def _backend(name: str):
 def cmd_plan(a):
     import yaml
     from qemx.divergence import make_plan, suite_from_manifest
-    with open(a.manifest) as f:
+    with open(a.manifest, encoding="utf-8") as f:
         m = yaml.safe_load(f)
     suite = suite_from_manifest(m)
     name = a.backend or suite.fake
@@ -698,20 +698,50 @@ def _check_backend(plan, b):
               % (plan.backend["name"], b.name, b.name))
 
 
+def _campaign_ledger(path, what):
+    """The campaign ledger at ``path`` — a missing or invalid file is an error, never "no ledger"."""
+    from qemx import campaign as CG
+    try:
+        return CG.open_ledger(path)
+    except CG.LedgerError as e:
+        raise SystemExit("%s needs the campaign ledger (one shared QPU ceiling for the whole thesis): %s. Create it "
+                         "once with `python -m qemx.campaign init --ledger %s --ceiling 600 --reserve 60` and review "
+                         "`python -m qemx.campaign preflight <run dir> --ledger %s`" % (
+                             what, e, path or "campaign_ledger.json", path or "campaign_ledger.json")) from None
+
+
+def _settle_pending(ledger, service, jp, jobs):
+    """Submissions of ``jobs.json`` whose outcome was unknown (``pending``): first look for their jobs by client tag
+    on the provider (a job found is attached in the ledger), then take the ledger's answer — a job id moves the
+    record to ``records``, "not submitted" drops it (its runs are submitted again by --resume). Returns the records
+    still unresolved (jobs.json is rewritten when anything changed)."""
+    from qemx import campaign as CG
+    pending = list(jobs.get("pending") or [])
+    if not pending:
+        return []
+    if service is not None:
+        CG.resolve_unknown(ledger, CG.ibm_tag_lookup(service))
+    got, gone, still = CG.sync_pending(ledger, pending)
+    if got or gone:
+        jobs = dict(jobs, records=list(jobs.get("records", [])) + got, pending=still)
+        _write_json(jp, jobs)
+    return still
+
+
+def _unknown_exit(still, ledger_path, jp):
+    raise SystemExit("%s holds %d submission(s) whose outcome is unknown (they may be jobs; their high estimates stay "
+                     "committed). Look for jobs tagged %s on the provider, then `python -m qemx.campaign resolve "
+                     "--ledger %s --tag <TAG> --job-id <JOB>` (found) or `--not-submitted` (none); run again "
+                     "afterwards" % (jp, len(still), ", ".join(p.get("client_tag") or "?" for p in still[:5]),
+                                     ledger_path))
+
+
 def cmd_run_ibm(a):
     from qemx.divergence import snapshot, submit
     from qemx.hardware import SubmitError
     plan = load_plan(a.run_dir)
     from qemx import campaign as CG
-    if not a.ledger or not os.path.exists(a.ledger):
-        raise SystemExit("hardware submission needs the campaign ledger (one shared QPU ceiling for the whole thesis): "
-                         "create it once with `python -m qemx.campaign init --ledger %s --ceiling 600 --reserve 60`, "
-                         "review `python -m qemx.campaign preflight %s --ledger %s`, then run again with --ledger"
-                         % (a.ledger or "campaign_ledger.json", a.run_dir, a.ledger or "campaign_ledger.json"))
-    ledger = CG.Ledger.load(a.ledger)
-    if ledger.unsubmitted_reservations():
-        raise SystemExit("the ledger holds reservations without job ids (an interrupted submission): check the "
-                         "provider's job list and reconcile them (python -m qemx.campaign reconcile …) first")
+    ledger = _campaign_ledger(a.ledger, "hardware submission")          # before any login
     model = CG.UsageModel(per_shot_s=a.per_shot_ms / 1e3, margin=a.margin)
     service = connect(a.channel, a.instance, a.token_env, a.ask_token)
     name = a.backend or plan.suite.device
@@ -721,6 +751,10 @@ def cmd_run_ibm(a):
     jp = os.path.join(d, "jobs.json")
     earlier, skip = [], set()
     if os.path.exists(jp):
+        old = _read_json(jp)
+        still = _settle_pending(ledger, service, jp, old)
+        if still:
+            _unknown_exit(still, a.ledger, jp)
         old = _read_json(jp)
         if a.resume and old.get("partial"):
             earlier = list(old["records"])               # submit only the runs these jobs do not cover
@@ -732,27 +766,44 @@ def cmd_run_ibm(a):
             raise SystemExit("%s already has %s submission (--resume submits the runs it lacks; --force submits "
                              "everything again, keeping the old job ids in jobs.replaced-*.json; --tag starts a new "
                              "set)" % (d, "a partial" if old.get("partial") else "a complete"))
+    CG.resolve_unknown(ledger, CG.ibm_tag_lookup(service))      # a lost response whose job exists: attach it
+    try:
+        CG.check_no_unresolved(ledger)
+    except CG.UnresolvedSubmission as e:
+        raise SystemExit("not submitted: %s" % e)
     models = snapshot(plan, b)
     if not earlier:
         meta = dict(kind="hardware", backend=b.name, calibration="at submission",
                     created=_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         _write_json(os.path.join(d, "calibration.json"), dict(source="at submission", models=models))
         _write_json(os.path.join(d, "meta.json"), meta)
+    sent = []
+
+    def keep(recs):                                       # jobs.json is current after every single job
+        sent[:] = recs
+        _write_json(jp, dict(backend=b.name, records=earlier + recs, partial=True, pending=[]))
+
+    def attempt(p):                                       # … and holds the runs of a call before it starts
+        _write_json(jp, dict(backend=b.name, records=earlier + sent, partial=True, pending=[p]))
     try:
-        def keep(recs):                                   # jobs.json is current after every single job
-            _write_json(jp, dict(backend=b.name, records=earlier + recs, partial=True))
         records = submit(plan, b, a.max_execution_time, skip=skip, ledger=ledger, model=model, mode=a.mode,
-                         campaign=plan.suite.study, on_record=keep)
+                         campaign=plan.suite.study, on_record=keep, on_attempt=attempt)
     except CG.CampaignLimit as e:
+        if sent:
+            keep(sent)
         raise SystemExit("not submitted: %s" % e)
     except KeyboardInterrupt:
-        raise SystemExit("interrupted: the job ids submitted so far are in %s (partial); after checking the provider's "
-                         "job list, continue with run-ibm --resume" % jp)
+        raise SystemExit("interrupted: the job ids submitted so far are in %s (partial; a call in flight is listed "
+                         "under \"pending\"); run-ibm --resume settles it through the ledger and the provider "
+                         "before submitting anything else" % jp)
     except SubmitError as e:
-        _write_json(jp, dict(backend=b.name, records=earlier + e.records, partial=True))
+        _write_json(jp, dict(backend=b.name, records=earlier + e.records, partial=True, pending=list(e.unknown)))
+        if e.unknown:
+            raise SystemExit("submission stopped after %d job(s): the outcome of the next call is unknown — %s"
+                             % (len(earlier + e.records), e))
         raise SystemExit("submission stopped after %d job(s): %s — their ids are in jobs.json; submit the rest with "
                          "run-ibm --resume (collect-ibm can collect at any time)" % (len(earlier + e.records), e))
-    _write_json(jp, dict(backend=b.name, records=earlier + records, partial=False))
+    _write_json(jp, dict(backend=b.name, records=earlier + records, partial=False, pending=[]))
     print("submitted %d job(s) to %s%s; collect with: python scripts/dirA_divergence.py collect-ibm %s --tag %s"
           % (len(records), b.name, " (resumed: %d earlier)" % len(earlier) if earlier else "", a.run_dir, a.tag))
     return 0
@@ -761,18 +812,32 @@ def cmd_run_ibm(a):
 def cmd_collect_ibm(a):
     from qemx.divergence import collect, snapshot
     plan = load_plan(a.run_dir)
-    d = obs_dir(a.run_dir, a.tag)
-    jobs = _read_json(os.path.join(d, "jobs.json"))
-    service = connect(a.channel, a.instance, a.token_env, a.ask_token)
     ledger = None
-    if getattr(a, "ledger", None) and os.path.exists(a.ledger):
-        from qemx import campaign as CG
-        ledger = CG.Ledger.load(a.ledger)
+    if not a.no_ledger:                                   # reconcile reported usage; a missing ledger is an error
+        ledger = _campaign_ledger(a.ledger, "collect-ibm (use --no-ledger only for jobs submitted without one)")
+    d = obs_dir(a.run_dir, a.tag)
+    jp = os.path.join(d, "jobs.json")
+    jobs = _read_json(jp)
+    service = connect(a.channel, a.instance, a.token_env, a.ask_token)
+    still = []
+    if jobs.get("pending"):
+        if ledger is None:
+            raise SystemExit("%s holds submissions whose outcome is unknown; collect with the campaign ledger"
+                             % jp)
+        still = _settle_pending(ledger, service, jp, jobs)
+        jobs = _read_json(jp)
     counts, status = collect(service, jobs["records"], wait=a.wait, ledger=ledger)
     if ledger is not None:
+        ledger.refresh()
         print("campaign ledger: %.1f s committed, %.1f s remaining" % (ledger.committed_s(), ledger.remaining_s()))
     for s in status:
         print("%s %s%s" % (s["job_id"], s["status"], " (failed)" if s["failed"] else ""))
+    if still:
+        for p in still:
+            print("%s submission outcome unknown (reservation %s)" % (p.get("client_tag"), p.get("reservation")))
+        print("not complete: %d submission(s) with an unknown outcome; resolve them (python -m qemx.campaign "
+              "resolve …) and collect again" % len(still))
+        return 1
     if counts is None:
         print("not finished yet; run collect-ibm again (or --wait)")
         return 1
@@ -976,7 +1041,7 @@ def recovery_row(tables: str, label: str, predictor: str = PRIMARY_PREDICTOR, mi
     map, and ε_eff(obs)/ε_eff(pred)."""
     def read(name):
         path = os.path.join(tables, name + ".csv")
-        return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+        return pd.read_csv(path, encoding="utf-8") if os.path.exists(path) else pd.DataFrame()
     row = dict(data=label)
     L = read("model_ladder")
     row["ladder"] = _short_verdict(ladder_verdict(L)) if len(L) else ""
@@ -1039,7 +1104,7 @@ def cmd_recovery(a):
         items.append((lab, d))
     R = recovery_table(items)
     os.makedirs(a.out, exist_ok=True)
-    R.to_csv(os.path.join(a.out, "recovery.csv"), index=False)
+    R.to_csv(os.path.join(a.out, "recovery.csv"), index=False, encoding="utf-8")
     F.setup_matplotlib()
     saved = DirectoryFigureSink(a.out, a.formats).save(F.diagnostic_matrix(R, title=a.title), "divergence_recovery")
     with pd.option_context("display.width", 250, "display.max_colwidth", 80):
@@ -1079,10 +1144,10 @@ def cmd_figures(a):
         rep = Report()
         for f in sorted(os.listdir(tdir)):
             if f.endswith(".csv"):
-                rep.tables[f[:-4]] = pd.read_csv(os.path.join(tdir, f))
+                rep.tables[f[:-4]] = pd.read_csv(os.path.join(tdir, f), encoding="utf-8")
         D = rep.tables.get("divergence")
     else:
-        rep, D = None, pd.read_csv(a.table)
+        rep, D = None, pd.read_csv(a.table, encoding="utf-8")
     preds = a.predictors or (list(dict.fromkeys(D["predictor"])) if D is not None else [])
     saved = make_figures(D, sink, preds, a.title, a.x, a.value, per_method=not a.no_per_method) \
         if D is not None else []
@@ -1094,6 +1159,8 @@ def cmd_figures(a):
 
 
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -1117,7 +1184,9 @@ def main(argv=None):
     p.add_argument("--ledger", default=os.environ.get("QEMX_CAMPAIGN_LEDGER", "campaign_ledger.json"),
                    help="the campaign ledger (python -m qemx.campaign init); required")
     p.add_argument("--mode", choices=("job", "batch"), default="job",
-                   help="job (default) or batch; the Open plan's batch TTL is 10 min of elapsed time")
+                   help="job (default: every job stands alone) or batch (one Batch; the Open plan's batch TTL is 10 "
+                        "min of elapsed time and can fail queued jobs); a batch that cannot be opened falls back to "
+                        "job mode, and jobs.json records the mode each job used")
     p.add_argument("--per-shot-ms", type=float, default=0.57, help="usage model: QPU ms per shot (calibrate)")
     p.add_argument("--margin", type=float, default=1.3, help="usage model: high = central × margin")
     p.add_argument("--resume", action="store_true", help="after a partial submission: submit the runs it lacks")
@@ -1127,7 +1196,9 @@ def main(argv=None):
     p = sub.add_parser("collect-ibm")
     p.add_argument("run_dir")
     p.add_argument("--ledger", default=os.environ.get("QEMX_CAMPAIGN_LEDGER", "campaign_ledger.json"),
-                   help="reconcile the jobs' reported QPU usage into this ledger (when it exists)")
+                   help="reconcile the jobs' reported QPU usage into this ledger (required unless --no-ledger)")
+    p.add_argument("--no-ledger", action="store_true",
+                   help="collect without reconciling usage (only for jobs submitted without a campaign ledger)")
     p.add_argument("--tag", default="ibm")
     p.add_argument("--wait", action="store_true")
     conn(p)

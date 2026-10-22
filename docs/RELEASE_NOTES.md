@@ -1,158 +1,111 @@
-# QEM Explorer 1.2 — release notes
+# QEM Explorer 1.7.0 — release notes (2026-10-22)
 
-QEM Explorer 1.2 makes every comparison an exact control experiment: all methods spend the same total shot budget,
-every cost is counted the way it is paid, and the simulator and IBM hardware produce the same results suite. It adds
-Grover's search and the hidden subgroup problem, diagrams for every algorithm, and a re-verified implementation of
-every algorithm and estimator. All presets and example values remain illustrative.
+1.7.0 answers an independent review of 1.6.0. Every finding was checked against the code and data before it was
+changed; the issue-to-evidence matrix is `docs/REVIEW_RESPONSE_1.7.md`. The foundations were repaired first (how CDR
+and NIL labels sample their training designs, how abstention is evaluated, how runs are bound to their inputs, how
+failures are collected), the pilot was relabeled with the corrected sampling, and the study was extended with focused
+experiments. Migration: `docs/MIGRATION.md` (Part 00). Verification: `docs/QA_SUMMARY.md`. Decisions only the owner can
+make: `docs/OWNER_DECISIONS.md`.
 
-## Equal budgets and honest costs
+## Scientific corrections (each listed with its reason in `docs/selection/METHODS.md` §14)
 
-* **One total budget per method.** Every contender spends the sidebar's budget B on target, training and
-  calibration circuits together, B = N_t + F + c·s. The calibration shots are chosen optimally,
-  s* = Rκ/(1 + cκ) with κ = √(w/(cv)), and the finite calibration's error enters the variance by the delta method
-  (w/s). New module `qemx/budget.py`; the cost table, the RMSE curves, the repeated experiments, Cost vs precision,
-  Head-to-head, Batch run and the bullseye all use it.
-* **Training noise is counted.** CDR/NIL's training shots are part of the budget, and their shot noise propagates
-  through the fit to a constant u (first order, delta method). When the simulated repeats show a clearly larger
-  spread (NIL's near-collinear features), the excess is booked as u. A target precision below √(b² + u) is reported
-  as unreachable.
-* **Circuits are what is sent.** PEC counts its sampled circuits: one shot per circuit (the textbook protocol),
-  so N_t circuits, or ⌈N_t/s⌉ with s shots per circuit (new parameter; the instance-to-instance variance
-  (s − 1)·Var_inst is then added). Twirling and randomized compiling count one random circuit per shot; ZNE one per
-  noise scale; CDR/NIL their training circuits; readout mitigation its calibration circuits.
-* New table columns: *target shots*, *training shots*, *calibration shots*; *QPU s* = B·t_shot, the same for every
-  method. A method whose training alone exceeds B says so instead of showing a number.
+- **Learning designs** (review R1). CDR and NIL labels now estimate the risk of a protocol that draws a fresh training
+  design at deployment: each label half has its own pool of independent designs (10 in the pilot), every trial records
+  its design, and standard errors are over designs (cluster-robust) with between/within-design variance components.
+  The 1.6.0 labels (six designs shared by both halves) keep their own estimand and are kept as historical data.
+- **Abstention** (R2) is evaluated by nested group cross-validation; the deployment threshold is frozen with the
+  configuration (`freeze --complete`).
+- **Independent circuits and ancestry** (R3, R4). `plan` counts tasks, written base circuits, independent logical
+  circuits, variants, designs and trials separately; a canonical logical identity and a study-wide ancestry registry
+  show which circuits earlier studies used; the 1.6.0 final test is historical; a new confirmation set of 25 logical
+  circuits was registered before labeling and evaluated once.
+- **Statements** (R5). One vocabulary (`qemx/selection/claims.py`); a group split-conformal interval beside the
+  CV-residual ones; certificates name their units and say "clipped estimator"; the 2ε relation is a post-hoc check.
+- **Aggregation** (S4, S5). Failure shares are the union of flags; policy MSE is weighted by base circuit; the single
+  best protocol is ranked on one population with a declared fallback.
 
-## Hardware parity
+## Software corrections
 
-* **The same allocation on hardware.** The IBM Quantum page records each contender's circuits with their roles,
-  predicts their outcomes with the device's calibrated error rates and allocates the budget exactly as the
-  simulator's accounting does: ZNE's N_j ∝ |η_j|σ_j, a Hamiltonian's N_g ∝ √v_g, s* calibration shots, PEC's K
-  sampled circuits with N_t/K shots each, the training shots. Contenders never share counts.
-* **The same results suite.** The replay returns the simulator's result structure, so the page shows the
-  Playground's analysis views (measured distributions, readout-corrected and ZNE-extrapolated), estimates, spread of
-  repeated experiments, the equal-budget cost table, every method's internals, and the same ZIP plus the plan, the
-  circuits sent and the job IDs. A *shot allocation* table shows how each contender spends its budget.
+- **Execution** (S1): supervised child processes on every platform (also with one worker), parent-enforced time and
+  memory limits, outcomes ok / error / timeout / memory; the profiler no longer needs POSIX `resource`.
+- **Failure records** (S2) are collected, never crash collection; corrupted records (array digest) are refused.
+- **Run binding** (S3): a run directory is bound to its configuration, manifest, split, portfolio, device snapshots,
+  code and environment; incompatible resumes and stale files are refused; reuse is an explicit import; `final` and
+  `confirm` check the freeze before labeling.
+- **Schemas** (S6) are enforced on load; unknown keys and family parameters are errors; invalid variants are errors.
+- **Python 3.10** (S7): `tomli` fallback for the TOML test and a justified tolerance; the tests pass on 3.10.
+- **Hardware plan**: merged PEC circuits were charged their shots once per occurrence (about 3·10⁸ shots for a run at
+  B = 20 000), which declared a feasible plan infeasible; every run is now charged exactly B (with a test).
+- **UTF-8 everywhere**: every project text file is read and written as UTF-8 (`qemx/textio.py`), a static checker
+  (`scripts/check_text_io.py`) and runtime tests with Japanese, Greek and mathematical text and Unicode paths, also
+  under a non-UTF-8 locale; CI jobs for a legacy locale and Windows.
 
-## Exports
+## Application
 
-* **No HTML files** in any ZIP. Figures are PNG (3×) and SVG; without a renderer each figure is saved as Plotly JSON.
-* **Global export.** The Playground's (and the IBM page's) *Download all* computes every cross-page result of the
-  comparison on the fly — `cost_precision/` (RMSE against budget, budget and QPU time for ε, crossovers),
-  `pec_wall/`, `bias_variance/` — and adds the other pages' stored results (depth sweep, bullseye, head-to-head,
-  model mismatch, batch run), the state and the Qiskit script. Tables carry CSV and LaTeX.
+- **Playground** — the Output panel separates the input state, the output state before measurement, the measured
+  distribution in the chosen bases and the observable with its meaning; template identities are predictions only
+  while their assumptions hold; *Apply to all* reports what it changed; inputs and bases stay independent.
+- **Recommend for my circuit** uses the 1.7 recommender: the Playground state becomes the same `DeploymentTask` as
+  `python -m qemx.selection recommend`; versioned model bundles without pickle (preprocessing, feature order,
+  candidate definitions, training support, validation summary, threshold and fallback, statement kinds); only the
+  requested features, without simulating the circuit unless allowed; out-of-distribution and unsupported results are
+  reported. The 1.5 recommender is kept as a labelled legacy expander.
+- The *Protocol selection study* tab lists the corrected study first and marks the 1.6.0 study as historical.
 
-## Algorithms and diagrams
+## Research (`docs/selection/RESULTS.md`)
 
-* **Grover's search** (any n ≥ 2, any marked item, optimal k* = ⌊π/(4θ)⌋ or custom iterations; the multi-controlled
-  Z as CZ, a 6-CX Clifford+T circuit, or Qiskit's synthesis) and the **hidden subgroup problem** (Z₂ⁿ with a hidden
-  subgroup of dimension 1 or 2; the cyclic group Z_N with N = 2ⁿ) in *FTQC · deep algorithms*, with Learn
-  walkthroughs and Theory sections.
-* **Diagrams** for every algorithm in Learn and Theory (Bell, GHZ, QFT, QPE, Ising, BV, HSP, Grover, VQE, QAOA, QML,
-  the five codes, Shor, HHL, ZNE folding), typeset with quantikz (`scripts/make_figures.py`) and shown on a light
-  card in both themes. Diagrams are sized by their text — labels render at about body-text size (×1.9, never below
-  ×1.35; a diagram wider than the column scrolls instead of shrinking further) — and their captions are typeset by the
-  app under the card (`docs/figures/captions.json`).
-* **Theory & sources** redesigned for reading: five parts with a contents column, strict section hierarchy, wider
-  line spacing and a narrower measure; new references (Grover 1996; Bennett et al. 1997; Boyer et al. 1998;
-  Childs & van Dam 2010; Jozsa 2001), 100 in total.
+All results are simulated (fake-device emulation). With the corrected labels the six protocols without a training
+design are identical trial for trial to 1.6.0; CDR's and NIL's trial-level standard errors had understated their
+uncertainty by a factor 1.1–2.5 and NIL's typical risk by 1.3–1.9. Choosing the protocol per budget (SBS-B) remains
+most of the gain (−0.141 [−0.205, −0.073] decades against the single best protocol). The frozen recommender (boosted
+trees, deployable + simulated features) is −0.043 [−0.105, 0.026] against SBS-B on held-out development circuits and
+−0.087 [−0.161, −0.024] on the once-only confirmation (25 new logical circuits): favourable on both, resolved on the
+confirmation only, so by the rule declared before the study the claim is **not established**. Budget is the only
+information whose removal resolvedly hurts; models win clearly only when extrapolating beyond the training budgets
+(ridge best; the structured b² + v/B model in between). Nested abstention does not beat random rejection. A coherent
+fraction of the gate errors displaces PEC in all six cells tested while the recommender, which sees only Pauli
+calibration data, keeps choosing it. At equal total budget no reaction to the echo diagnostic beats spending every
+shot on the target, and the learned reaction does as well triggered at random. NIL's severe failures at 16 training
+circuits are spread over designs on two of five tasks and concentrated in one undetectable design on another.
+`docs/selection/RESULTS.md` §15 assesses every 1.6.0 claim: the CDR precision claim changed; the others survive,
+some sharpened.
 
-## Interface
+New experiments: the corrected pilot (same tasks and seeds as 1.6.0), the noise-composition study (one noise
+component at a time), equal-budget mismatch reactions with held-out discrepancy types, a design study of CDR/NIL
+training allocations, the structured risk model b² + v/((1 − f)B), semantic ablations, and the confirmation. Planned
+and not executed: the larger study `full17.yaml` (runnable plan with estimates and caps) and the hardware validation
+(`docs/selection/HARDWARE.md`, owner authorization required). Everything reported is simulated (fake-device
+emulation); no hardware job was submitted.
 
-* **One Run button.** The sidebar's *Run simulation* runs the Playground and Cost vs precision; duplicate run
-  buttons are gone. Pages with their own experiment (sweeps, mismatch curves) name what they run.
-* **Inputs and bases in the composer.** Applying `ramp:1`, `plus`, `bits:0101` or a basis such as `XZY` to all
-  qubits draws the preparation gates (e.g. H·P(7π/4)) and the basis changes (H, S†·H) as locked boxes on the wires.
-* **π in angles.** Angle fields accept `pi`, `π`, `\pi`, `Pi`, `2pi`, `3π/4`, `\frac{\pi}{8}`, `2·π`, `−π/2`; angles
-  are shown as fractions of π up to π/1024 (`π/128`).
-* **Readable tooltips.** Math in every `help` popup (widgets, metrics, table columns) is rendered as Unicode
-  (√(b² + v/N), γ = ∑ᵢ|qᵢ|) instead of raw TeX.
+## Figures and tables
 
-## Verification
+All six main and eight supplementary figures revised to the review (signed regret on a diverging scale, semantic
+ablations and noise composition, Ridge and the structured model in budget extrapolation, nested reliability panels,
+single-deployment diagnostics and equal-budget reactions, design-aware bias–variance, best-vs-runner-up prediction,
+counts and noise components in dataset coverage, statement kinds in certificates, failure semantics, trials by
+design, runtime by component), a new design-variability figure, a methods box in every figure's notes, Table 1 with
+tasks and base circuits apart, a studies table, Table 3 for the confirmation and Table 3h for the historical final
+test, and a figure validator that parses every SVG/PDF and compares plotted numbers with the tables
+(`scripts/validate_figures.py`).
 
-Two independent code-level audits (Sonnet) compared every template and estimator with its formal definition.
+## Distribution
 
-* Confirmed correct, with numerical evidence: the QFT equals the DFT matrix; Grover's success probability equals
-  sin²((2k+1)θ) for n = 2–5; HSP outcomes are uniform on H^⊥ (Z₂ⁿ) and on the multiples of N/2^j (Z_N); QPE, BV,
-  Simon, Shor, HHL, VQE, QAOA and all five codes; Richardson and linear ZNE weights; PEC's quasi-probabilities
-  invert the channel and γ matches its closed form; the readout inverses, M3 and TREX; the calibration gradient;
-  symmetry verification's and virtual distillation's variances against brute-force sampling; the Hamiltonian split;
-  the optimal calibration split.
-* Fixed: M3 dropped negative entries of signed (PEC) data; PEC's variance on Aer ignored the readout-mitigated
-  observable (up to +39 %) and estimated the instance variance from at most 32 instances; ZNE counted noiseless
-  virtual RZ gates when a circuit has no two-qubit gates; the Lasso penalty was 2N times the documented one; the
-  learning variance omitted the training data's shot noise; the training-set rank check ignored shot noise;
-  symmetry verification read classical bits instead of qubits when the readout is relabeled; the budget model
-  treated calibration as free when its gradient vanished; documentation drift (AQFT modes, QAOA ratio for odd
-  rings, the QML sign convention, the repetition code's r + 1 exposures, the d = 2 surface-code checks).
-* 327 tests, including 34 new theory-conformance, parity and UI tests (`tests/test_v12.py`).
+- `qem-explorer-1.7.0.zip` — the source archive: code, documentation, configurations, the shipped recommender bundles,
+  and the corrected pilot's records, tables and figures (`reports/selection_v170/`).
+- `qem-explorer-1.7.0-trials-1.zip` and `-trials-2.zip` — the corrected pilot's per-trial arrays (`*.npz`, 347 files:
+  development and historical final test; confirmation, regimes, noise composition and mismatch), to be extracted into
+  the repository root; `reports/selection_v170/TRIALS_SHA256SUMS` verifies them. Needed only for re-analysis from
+  trials, the per-trial drill-down in the app and two supplementary figures.
+- The 1.6.0 pilot (`reports/selection_pilot/`) is kept as the historical dataset; its per-trial arrays and figures are
+  omitted from the source archive (unchanged in the 1.6.0 release archive).
+- Review material, run logs and intermediate evidence are not part of either archive.
 
----
+## Known limitations
 
-# QEM Explorer 1.1 — release notes (previous)
-
-QEM Explorer 1.1 turns the 1.0 laboratory into a research platform: it reads each result the way its mathematics
-asks, shows what the compiler does to a circuit on real connectivity, runs whole studies with one button, and
-ships a handbook and a learning path. All presets and example values remain illustrative.
-
-## Analysis and visualization
-
-* **Analysis panel with automatic views** (*Mitigate & compare*): an output-distribution histogram for probability
-  observables (ideal, noisy, readout-corrected and ZNE-extrapolated, exact and marginalized onto the bits the
-  observable reads; TVD and Hellinger fidelity), estimates ± σ with the spread of repeated experiments for expectation
-  values, effective logical error and syndrome histograms for codes, and a grid of each method's diagnostic curve
-  (ZNE fit, PEC quasi-probabilities and γ, learning fit, VD spectrum, acceptance, readout assignment errors). A
-  **View** selector overrides the automatic choice; custom circuits say so.
-* Collision-free circuit drawings (ZNE fold bands, PEC insertions, grouped operations) at any width.
-* Bloch spheres wrap into rows for 5+ qubits; two-line titles from three spheres per row.
-* LaTeX tooltips on every cost-table column and metric.
-
-## Compilation and hardware realism
-
-* **Logical ↔ physical switch** in the composer: each logical gate above the native gates that implement it
-  (H → RZ·√X·RZ), routing SWAPs framed, and a rewrite table.
-* **Topology & layout** tab: coupling graphs (heavy-hex devices drawn row by row), why each SWAP was inserted, and a
-  mapomatic-style VF2 search for the lowest-error physical qubits with one-click recompilation.
-* ISA compilation on **2D-grid** and **heavy-hex** lattices.
-* **Crosstalk** noise: phase kicks and residual ZZ on idle neighbors of a driven gate; DD refocuses them.
-
-## Observables and interactivity
-
-* **Hamiltonian observables** `0.5*Z0*Z1 + 0.2*X0 - 0.1*Y1` (strict parser, qubit-wise commuting settings, exact
-  results on every backend and in exported scripts).
-* **Live θ sliders** for VQE and QAOA in *Time travel*, and 1D / γ × β energy-landscape scans.
-
-## Studies, learning and theory
-
-* **Sweeps in Batch run** — one line per swept quantity, every combination a scenario:
-  `ramp: 0, 1, 3` (the phase-ramp input $\lvert{\rm ramp}{:}k\rangle=F^\dagger\lvert k\rangle$ on the whole register),
-  `input: plus, bits:0101`, `basis: Z, X, ZZXY`, any template parameter (`m: 1, 2, 3`, `s: 0, 1`) and any noise
-  parameter (`p2: 0.005, 0.01`). Each axis applies only where it means something (template parameters to templates
-  that have them, noise parameters not to fake devices); a new chart plots the error against the swept value with
-  everything else held fixed. Strict parser, safe expression reader, size guards.
-* **Register-wide inputs and bases** in the Playground (*All qubits: input / basis → Apply to all*): `plus`,
-  `ramp:k`, `bits:0101`, `X`, `ZZXY`. Phase inputs are stored as `ph:<turns>` per qubit, saved and exported like the
-  other inputs.
-
-* **Batch run** page: algorithms × methods × noise models × noise scales × simulators with one *Run all*; per-scenario
-  failure isolation; heat map, winners, error against noise scale; included in the Download-all ZIP.
-* **Learn** page: seven hands-on guides with one-click Playground setups, QC fundamentals for QEM, and walkthroughs of
-  VQE, QAOA, Shor, HHL and QEC primitives.
-* **QEC templates**: the five-qubit code [[5,1,3]] (Clifford encoder, lookup decoder, corrects any single-qubit error)
-  and the d = 2 surface code (one plaquette; transversal or ancilla syndrome extraction).
-* Symmetry verification checks several parities at once (e.g. every Z check of a code).
-* **Theory handbook**: new sections on advanced mitigation (symmetry expansion, pulse-level ZNE and PEA, quantum
-  subspace expansion, classical shadows, M3) and on the road to fault tolerance (stabilizer formalism, code taxonomy,
-  decoding, threshold theorem, logical error mitigation); about 95 references with DOIs.
-
-## Quality
-
-* **Stability:** one process-wide lock around every entry into Qiskit's native code (compilation, circuit
-  construction, Aer, drawing), and `runner.fastReruns = false`, so two runs of one session never overlap. A native
-  crash cannot be caught by `try/except`; this prevents the concurrent use that can cause one.
-* US English throughout the documentation, comments and interface; option values renamed in 1.1 (for
-  example `VQE-optimized` → `VQE-optimized`) are still accepted from 1.0 state files.
-* Two independent QA passes (Sonnet) on the batch runner, the responsive layout, the text parsers, the analysis
-  engine, the new codes and the handbook; every confirmed finding fixed with a regression test.
-* 293 tests (pytest, including AppTest end-to-end runs of every page and the exported script in a terminal and in a
-  Jupyter kernel).
+- Fake-device emulation only; 3–6 qubits; one realization of each calibration snapshot.
+- 52 development logical circuits (40 + the 12 historical-final ones) and 25 confirmation circuits: claims about
+  circuits in general are limited by that diversity; 10 learning designs per half are few clusters.
+- NIL with 16 training circuits (the paper uses 256–5 000).
+- Bounded-loss certificates are uninformative at these risks; split-conformal intervals need more calibration
+  circuits than the pilot has for simultaneous levels.
+- GitHub Actions (including the Windows job) was not run for this release; macOS untested.

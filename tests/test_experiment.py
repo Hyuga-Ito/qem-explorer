@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from qemx import experiment as E
+from qemx.textio import child_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = dict(schema=E.SCHEMA, name="qft-pilot",
@@ -56,7 +57,7 @@ def test_credentials_are_rejected_anywhere():
 
 def test_yaml_is_loaded_safely(tmp_path):
     p = tmp_path / "evil.yaml"
-    p.write_text("schema: !!python/object/apply:os.system ['echo hacked']\n")
+    p.write_text("schema: !!python/object/apply:os.system ['echo hacked']\n", encoding="utf-8")
     import yaml
     with pytest.raises(yaml.YAMLError):
         E.load(str(p))
@@ -110,13 +111,13 @@ def test_ui_state_round_trips_through_yaml_and_the_cli(tmp_path, monkeypatch):
     out = tmp_path / "out"
     env = dict(os.environ, PYTHONPATH=ROOT)
     for cmd in ("validate", "plan"):
-        p = subprocess.run([sys.executable, "-m", "qemx.experiment", cmd, str(y)], cwd=ROOT, env=env,
-                           capture_output=True, text=True, timeout=600)
+        p = subprocess.run([sys.executable, "-m", "qemx.experiment", cmd, str(y)], cwd=ROOT, env=child_env(env),
+                           capture_output=True, text=True, timeout=600, encoding="utf-8")
         assert p.returncode == 0, p.stderr
-    p = subprocess.run([sys.executable, "-m", "qemx.experiment", "run", str(y), "--out", str(out)], cwd=ROOT, env=env,
-                       capture_output=True, text=True, timeout=900)
+    p = subprocess.run([sys.executable, "-m", "qemx.experiment", "run", str(y), "--out", str(out)], cwd=ROOT, env=child_env(env),
+                       capture_output=True, text=True, timeout=900, encoding="utf-8")
     assert p.returncode == 0, p.stderr
-    res = json.loads((out / "result.json").read_text())
+    res = json.loads((out / "result.json").read_text(encoding="utf-8"))
     cli = {r["method"]: r["estimate"] for r in res["rows"]}
     assert set(cli) == set(app)
     for k in app:
@@ -127,8 +128,8 @@ def test_ui_state_round_trips_through_yaml_and_the_cli(tmp_path, monkeypatch):
     y2 = tmp_path / "exp2.yaml"
     d2 = E.from_state(dict(state, shots=4096), "other")
     y2.write_text(E.dump_yaml(d2), encoding="utf-8")
-    p = subprocess.run([sys.executable, "-m", "qemx.experiment", "run", str(y2), "--out", str(out)], cwd=ROOT, env=env,
-                       capture_output=True, text=True, timeout=900)
+    p = subprocess.run([sys.executable, "-m", "qemx.experiment", "run", str(y2), "--out", str(out)], cwd=ROOT, env=child_env(env),
+                       capture_output=True, text=True, timeout=900, encoding="utf-8")
     assert p.returncode == 2 and "another configuration" in p.stderr
 
 

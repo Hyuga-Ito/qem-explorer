@@ -324,7 +324,7 @@ def test_older_state_without_custom_active_keeps_every_saved_recipe_active(fake_
 # ------------------------------------------------------------------ record schema
 def test_record_schema_version_and_mixed_schema_guard():
     from qemx.phase import store as ST
-    assert ST.SCHEMA_VERSION == "qemx.phase.cell/3"
+    assert ST.SCHEMA_VERSION == "qemx.phase.cell/4" and "qemx.phase.cell/3" in ST.READABLE_SCHEMAS
     assert ST.READABLE_SCHEMAS[-1] == ST.SCHEMA_VERSION
     src = open(os.path.join(ROOT, "qemx", "phase", "run.py"), encoding="utf-8").read()
     assert "older record schema" in src

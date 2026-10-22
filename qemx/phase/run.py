@@ -113,14 +113,16 @@ def prepare_out(out: str, manifest_path: str, force: bool = False) -> dict:
     if os.path.exists(copy) and manifest_hash(copy) != h and not force:
         raise SystemExit("%s holds a different manifest (sha256 %s… ≠ %s…); use another --out or --force"
                          % (out, manifest_hash(copy)[:12], h[:12]))
-    info = dict(manifest=os.path.abspath(manifest_path), manifest_sha256=h,
-                started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), argv=sys.argv, provenance=provenance())
+    from ..provenance import provenance as full_provenance, redact_path
+    info = dict(manifest=redact_path(os.path.abspath(manifest_path)), manifest_sha256=h,
+                started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), argv=redact_path(list(sys.argv)),
+                provenance=dict(provenance(), environment=full_provenance(full=True)))
     if not os.path.exists(copy) or force:
-        with open(manifest_path) as f, open(copy, "w") as g:
+        with open(manifest_path, encoding="utf-8") as f, open(copy, "w", encoding="utf-8") as g:
             g.write(f.read())
-        with open(os.path.join(out, "run.json"), "w") as f:
+        with open(os.path.join(out, "run.json"), "w", encoding="utf-8") as f:
             json.dump(info, f, indent=1)
-    with open(os.path.join(out, "run_history.jsonl"), "a") as f:
+    with open(os.path.join(out, "run_history.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(info) + "\n")
     return info
 
@@ -232,7 +234,7 @@ def cmd_masterlist(a):
     extra = ["observable", "basis", "phys", "two_qubit", "depth", "ideal_note", "lam_lc", "lam_lc_exact", "lam_total",
              "lam_ro"] if a.with_lambda else []
     from .lightcone import calculate_lambda_lc
-    with open(a.out, "w", newline="") as f:
+    with open(a.out, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols + extra)
         for i, c in enumerate(cells):
@@ -270,7 +272,17 @@ def cmd_status(a):
         print("%-28s %-8s %d" % (stage, s, n))
 
 
+def cmd_holdout_check(a):
+    """The final holdout shares no base circuit with the development manifests."""
+    import json
+    from .manifest import check_disjoint, load
+    out = check_disjoint(load(a.manifest), *[load(m) for m in a.against])
+    print(json.dumps(out, indent=1))
+
+
 def main(argv=None):
+    from qemx.textio import utf8_stdio
+    utf8_stdio()                       # printed text is UTF-8 on every platform
     p = argparse.ArgumentParser(prog="python -m qemx.phase.run", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     q = sub.add_parser("plan")
@@ -301,6 +313,11 @@ def main(argv=None):
     q = sub.add_parser("status")
     q.add_argument("out")
     q.set_defaults(fn=cmd_status)
+    q = sub.add_parser("holdout-check", help="check that a holdout manifest shares no base circuit with development "
+                                             "manifests")
+    q.add_argument("manifest")
+    q.add_argument("--against", nargs="+", required=True)
+    q.set_defaults(fn=cmd_holdout_check)
     a = p.parse_args(argv)
     a.fn(a)
 

@@ -751,6 +751,7 @@ class NeighborInformedLearning(QEMMethod):
         if positions not in ("2q", "all"):
             raise ValueError("positions must be '2q' or 'all'")
         T, s_tr = int(n_train), int(train_shots)
+        s_tr_default = s_tr                        # the sampler may override it per experiment (1.6)
         if T < 2 or s_tr < 1 or int(n_neighbors) < 1:
             raise ValueError("NIL needs at least 2 training circuits, 1 neighbor and 1 shot per training circuit")
         if not (math.isfinite(float(l1_bound)) and float(l1_bound) > 0) and model == "l1":
@@ -778,7 +779,8 @@ class NeighborInformedLearning(QEMMethod):
             return MethodResult(ctx.expval(rr), ctx.var_shot(rr), 1, gamma=ctx.readout_gamma(),
                                 **cal_fields(ctx, readout_fun(ctx, rr)),
                                 implemented=[("Implemented circuit", display_circuit(ctx))], details=details or {},
-                                notes=[note], sampler=lambda N, B, rng: ctx.sample_expvals(rr, N, B, rng))
+                                notes=[note], sampler=lambda N, B, rng, theta=None, s_tr=None: ctx.sample_expvals_theta(
+                                    rr, N, B, rng, theta))
         if not slots:
             return unmitigated("The circuit is Clifford: its ideal value is classically computable, and every "
                                "training circuit would equal the target. NIL is not applied.")
@@ -931,13 +933,13 @@ class NeighborInformedLearning(QEMMethod):
             n[act] = optimal_integer_split(np.abs(c[act]) * sig[act], int(N))[1]
             return n
 
-        def sampler(N, B, rng, theta=None):
+        def sampler(N, B, rng, theta=None, s_tr=None):
             """B complete experiments with N target shots: training features sampled (train_shots per training
-            circuit), the rule refitted, the N target shots split by the fitted coefficients, the target neighbor
-            circuits sampled. With ``theta`` (B calibration draws θ̂) every circuit of experiment b is mitigated
-            with θ̂_b."""
+            circuit, or ``s_tr`` for a budget-dependent training allocation, 1.6), the rule refitted, the N target
+            shots split by the fitted coefficients, the target neighbor circuits sampled. With ``theta`` (B
+            calibration draws θ̂) every circuit of experiment b is mitigated with θ̂_b."""
             oe, bad = theta_rows(theta, B)
-            Xs = sample_training(s_tr, B, rng, oe)
+            Xs = sample_training(s_tr_default if s_tr is None else int(s_tr), B, rng, oe)
             C = np.empty((int(B), k))
             b_ = np.empty(int(B))
             for bi in range(int(B)):
@@ -983,18 +985,24 @@ class NeighborInformedLearning(QEMMethod):
         # ---- training-shot variance and calibration coefficient of the protocol as run, by Monte Carlo (the fit is
         # piecewise smooth at best; with near-collinear features first-order values are meaningless)
         from .learning import MC_REPS, CAL_REF_SHOTS, calibration_w
-        from ..stats import protocol_contract, training_moments
+        from ..stats import moments_wanted, protocol_contract, reference_moments, training_moments
         seed64 = int(ctx.seed) % (2 ** 63)
         # protocol moments at s_tr (qemx/stats.py): mean of the refitted estimates, their variance u and the mean
         # conditional per-shot target variance; the fit to exact training features is kept as the reference
-        mom = training_moments(train_resampler, s_tr, np.random.default_rng([seed64, 0x4E49, 1]))
+        want = moments_wanted(ctx)
+        mom = training_moments(train_resampler, s_tr, np.random.default_rng([seed64, 0x4E49, 1])) if want \
+            else reference_moments(mean, var1, s_tr)
         u_train = mom.u
         contract = protocol_contract(ctx, mom, mean, var1, notes)
         mean, var1 = contract.pop("mean"), contract.pop("var1")
-        notes.append("Shot noise of the training data adds a variance %.3g that more target shots cannot remove "
-                     "(σ floor %.3g; %d Monte-Carlo refits)." % (u_train, math.sqrt(max(u_train, 0.0)), mom.repeats))
+        if want:
+            notes.append("Shot noise of the training data adds a variance %.3g that more target shots cannot remove "
+                         "(σ floor %.3g; %d Monte-Carlo refits)." % (u_train, math.sqrt(max(u_train, 0.0)),
+                                                                      mom.repeats))
+        else:
+            contract["flags"] = tuple(contract["flags"]) + ("moments-not-estimated",)
         cal = cal_fields(ctx, refit)
-        if cal:
+        if cal and want:
             cal["cal_w"] = calibration_w(ctx, train_resampler, s_tr, MC_REPS, seed64)
             contract["flags"] = tuple(contract["flags"]) + ("calibration-mean-first-order",)
         ex_nb = next((f for f in feats if f[2]["kind"] != "bare"), feats[0])

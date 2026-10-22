@@ -138,7 +138,28 @@ def compare(compiled: Compiled, noise: NoiseSpec, observable: Observable, recipe
     return ideal, out, runner
 
 
-HIDDEN = ("family", "v", "fixed_shots", "cal_circuits", "w_cal", "u_train", "n_circuits")   # cost-model fields in rows
+HIDDEN = ("family", "v", "fixed_shots", "cal_circuits", "w_cal", "u_train", "n_circuits", "per_circuit",  # cost model
+          "target moments", "reference bias")             # budget-dependent moment grid (JSON) of nonlinear rows
+
+# column names of a single measured experiment (hardware replay): one signed error and its absolute value, not a
+# statistical bias or RMSE (qemx/stats.py). Rows keep "bias"/"RMSE" as machine keys for ranking code; tables and
+# exports show these names for measured rows (measured_view).
+MEASURED_LABELS = {"bias": "signed error to reference", "RMSE": "absolute error", "sd": "bootstrap sd"}
+
+
+def measured_view(df):
+    """A comparison table (pandas DataFrame) with measured-experiment columns named for what they are: when every
+    row that ran is a single measured experiment, "bias" → "signed error to reference", "RMSE" → "absolute error",
+    "sd" → "bootstrap sd"; mixed tables keep the statistical names and gain the two measured columns."""
+    if "estimate kind" not in df:
+        return df
+    ran = df["estimate kind"] != "not run"
+    meas = df["estimate kind"] == "measured"
+    if meas.any() and bool((meas | ~ran).all()):
+        drop = [k for k, v in MEASURED_LABELS.items() if k in df and v in df]      # explicit columns exist
+        df = df.drop(columns=drop)
+        return df.rename(columns={k: v for k, v in MEASURED_LABELS.items() if k in df})
+    return df
 
 INSUFFICIENT_BUDGET = "insufficient_budget"     # status of a protocol that was not run: its minimum cost exceeds B
 
@@ -173,6 +194,16 @@ def summary(o: Outcome, ideal: float, B: int, t_shot_us: float, samples=None, al
     is the repeats'. ``sd (repeats)`` is always the empirical spread (NaN-aware; failed repeats
     are counted, not averaged). A NaN estimate or variance gives an infinite RMSE.
 
+    Since 1.5.1, a result with a ``target_sampler`` (estimators nonlinear in their target data: exponential ZNE,
+    symmetry verification) is summarized by its **budget-dependent protocol moments** at this budget's target shots
+    (qemx.stats.target_moments, Monte Carlo to the declared tolerance): ``estimate`` is the protocol's expected value,
+    ``bias`` = estimate − ideal with its MC error, ``sd`` the protocol's spread plus the calibration (and training)
+    terms, ``estimate kind`` "protocol", and the exact-probability fit is the ``exact-fit value``. The columns
+    ``fit failures`` (share of experiments whose nonlinear fit failed) and ``failure policy`` say how failures were
+    handled; with "abstain" the moments are conditional on success and the status says how often it abstained.
+    A measured row (one hardware experiment) also carries ``signed error to reference`` and ``absolute error``
+    (the latter equals its ``RMSE`` slot); tables name them so through :func:`measured_view`.
+
     ``alloc`` (hardware) is the allocation actually run — {N, s, training, calibration, circuits, shots}: the shot
     columns, the circuits and the analytic sd then describe that experiment, and QPU s its shots."""
     from . import budget as BG
@@ -205,27 +236,66 @@ def summary(o: Outcome, ideal: float, B: int, t_shot_us: float, samples=None, al
     kind = getattr(r, "estimate_kind", "exact") or "exact"
     mom = getattr(r, "moments", None) or {}
     mc = float(mom.get("mean_mcse", 0.0) or 0.0) if kind == "protocol" else 0.0
+    est_row = r.mean
     b = r.mean - ideal
     st_ = status(r)
+    flags = list(getattr(r, "flags", ()) or ())
+    sd_from = "repeats" if use_emp else "analytic"
+    extra = {}
+    tm = target_protocol(r, acc) if kind != "measured" else None
+    if tm is not None:
+        # an estimator nonlinear in its target data (exponential ZNE, symmetry verification): the row describes the
+        # complete finite-shot protocol at this budget (Monte Carlo), not the fit to exact probabilities
+        kind, est_row, mc = "protocol", tm.mean, tm.mean_mcse
+        b = tm.mean - ideal
+        sd = math.sqrt(tm.var + acc["var_cal"] + acc["var_train"]) if math.isfinite(tm.var) else math.inf
+        sd_from = "protocol MC"
+        if "budget-dependent-moments" not in flags:
+            flags.append("budget-dependent-moments")
+        if tm.conditional:
+            flags.append("conditional-on-success")
+            st_ = (st_ + "; " if st_ else "") + ("abstains in %.1f %% of experiments: estimate, sd and RMSE are "
+                                                  "conditional on success" % (100 * tm.abstention_rate))
+        extra = {"fit failures": tm.fit_failure_rate, "failure policy": tm.policy, "MC experiments": tm.repeats}
     if not acc["feasible"]:
         st_ = INSUFFICIENT_BUDGET + ": " + budget_needed_text(acc["min_budget"])
     if kind == "measured":
-        # one measured run: e = estimate − ideal is a single draw of bias + noise; e² is an unbiased estimate of the
-        # MSE, so the RMSE shown is |e| (not √(e² + sd²), which would count the shot noise twice)
+        # one measured run: e = estimate − ideal is a single signed error to the reference; e² is an unbiased
+        # observation of the MSE, and |e| is shown in the "RMSE" slot (named "absolute error" for measured rows,
+        # measured_view) — not √(e² + sd²), which would count the shot noise twice
         rmse_ = abs(float(b)) if np.isfinite(b) else math.inf
     else:
         rmse_ = float(np.sqrt(b * b + sd * sd)) if (np.isfinite(sd) and np.isfinite(b)) else math.inf
     ref = getattr(r, "reference_mean", None)
-    return {"method": o.title, "family": fam, "estimate": r.mean, "estimate kind": kind,
+    grid = (r.details or {}).get("target_moments") if getattr(r, "target_sampler", None) is not None else None
+    if grid and kind != "measured":
+        import json
+        extra.update({"target moments": json.dumps(grid, default=float),
+                      "reference bias": float(ref) - ideal if ref is not None else math.nan})
+    if kind == "measured":
+        extra.update({"signed error to reference": b, "absolute error": rmse_})
+    return {"method": o.title, "family": fam, "estimate": est_row, "estimate kind": kind,
             "exact-fit value": float(ref) if ref is not None else math.nan, "bias": b, "bias MC ±": mc, "sd": sd,
-            "sd from": "repeats" if use_emp else "analytic", "sd (repeats)": emp, "failed repeats": failed,
-            "RMSE": rmse_, "γ": r.gamma, "flags": ", ".join(getattr(r, "flags", ()) or ()),
+            "sd from": sd_from, "sd (repeats)": emp, "failed repeats": failed,
+            "RMSE": rmse_, "γ": r.gamma, "flags": ", ".join(dict.fromkeys(flags)), **extra,
             "circuits": acc["circuits"], "extra qubits": r.extra_qubits, "accepted": r.accept,
             "target shots": int(round(acc["target_shots"])), "training shots": int(acc["training_shots"]),
             "calibration shots": int(round(alloc["calibration"] if alloc else acc["calibration_shots"])),
             "QPU s": (alloc["shots"] if alloc else int(B)) * t_shot_us * 1e-6, "status": st_,
             "v": m.v, "fixed_shots": m.fixed, "cal_circuits": m.c, "w_cal": m.w, "u_train": m.u,
-            "n_circuits": m.circuits}
+            "n_circuits": m.circuits, "per_circuit": int(getattr(m, "per_circuit", 1) or 1)}
+
+
+def target_protocol(r: MethodResult, acc: dict):
+    """qemx.stats.TargetMoments of a target-nonlinear result at the target shots of a budget (``acc`` = budget.account),
+    or None for estimators whose finite-shot mean does not depend on the target shots. Seeded by the target-shot
+    count, so a table is reproducible. Calibration and training variances are added analytically by the caller."""
+    ts = getattr(r, "target_sampler", None)
+    if ts is None or not acc.get("feasible"):
+        return None
+    from .stats import target_moments
+    N = int(max(round(float(acc["target_shots"])), 1))
+    return target_moments(ts, N, np.random.default_rng([0x51A7, N]), getattr(r, "failure_policy", None) or "abstain")
 
 
 def table_rows(outs, ideal: float, B: int, t_shot_us: float, repeats: int = 120, seed: int = 1,

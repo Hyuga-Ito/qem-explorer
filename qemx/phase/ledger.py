@@ -7,7 +7,11 @@ Model (one method, one cell)
     \mathrm{RMSE}(B) = \sqrt{\,b(s_{\rm tr})^2 + \frac{v}{N_t} + \frac{w}{s} + u(s_{\rm tr})\,}
 
 * :math:`N_t` target shots, split among the method's :math:`m` target circuits (ZNE: :math:`N_j\propto|\eta_j|\sigma_j`,
-  so :math:`v=(\sum_j|\eta_j|\sigma_j)^2`); every target circuit needs at least one shot. NIL's split
+  so :math:`v=(\sum_j|\eta_j|\sigma_j)^2`); every target circuit needs at least one shot (``per_circuit`` shots: PEC
+  with s shots per sampled circuit needs s), and post-selection needs :math:`\lceil 5/P_{\rm accept}\rceil` target
+  shots (``accept``): the feasibility contract of :mod:`qemx.budget` (:func:`qemx.budget.min_total_budget`), which
+  :func:`min_budget` and every allocation here use, so the phase ledger, the interactive cost model and the hardware
+  planner agree on feasibility. NIL's split
   :math:`N_j\propto|c_j|\sigma_j` depends on the fitted coefficients, so its rows carry no per-circuit ``a``: the
   ledger uses the pooled :math:`v(s_{\rm tr})=E_c[(\sum_j|c_j|\sigma_j)^2]` of its training levels (continuous split;
   the integer split that the Monte-Carlo validation draws is larger by a term of second order in :math:`1/N_t`);
@@ -53,11 +57,11 @@ The model is first order in the target and calibration shot noise; ``qemx.phase.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import numpy as np
 
-from ..budget import optimal_integer_split
+from ..budget import MIN_ACCEPTED, Feasibility, min_target_shots, min_total_budget, optimal_integer_split
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,17 @@ def _pol(policy) -> Policy:
     return policy if isinstance(policy, Policy) else Policy(str(policy))
 
 
+def _rule(pol: Policy) -> Feasibility:
+    """The policy's lower bounds as the shared feasibility rule (qemx.budget.Feasibility)."""
+    return Feasibility(MIN_ACCEPTED, int(pol.s_min), int(pol.s_tr_min))
+
+
+def n_min(cost: "Cost", policy="fixed") -> int:
+    """Fewest target shots that yield an estimate (qemx.budget.min_target_shots): ``per_circuit`` per target circuit
+    and, with post-selection, ⌈5/P_accept⌉."""
+    return min_target_shots(cost.m, cost.accept, cost.per_circuit, _rule(_pol(policy)))
+
+
 @dataclass(frozen=True)
 class Cost:
     method: str
@@ -96,6 +111,11 @@ class Cost:
     m: int = 1                       # target circuits that each need at least one shot
     a: tuple = ()                    # per-target-circuit |η_j| σ_j (ZNE); empty = one pooled target
     levels: tuple = ()               # ((s_tr, b, u[, v[, w]]), …) at s_tr training shots, measured by Monte Carlo
+    accept: float = 1.0              # post-selection acceptance P_accept (needs ⌈5/P_accept⌉ target shots)
+    per_circuit: int = 1             # shots each target circuit needs at least (PEC: s shots per sampled circuit)
+    # budget-dependent moments of a target-nonlinear estimator (qemx.stats.moment_grid; exponential ZNE, symmetry
+    # verification): below the grid's validated first-order range the ledger uses its Monte-Carlo mean and variance
+    target_grid: dict | None = field(default=None, compare=False, hash=False)
 
     def __post_init__(self):
         """Every number finite and of the right sign: a NaN would make every comparison False and turn into a wrong
@@ -107,7 +127,10 @@ class Cost:
         fin("b", self.b)
         for nm in ("v", "w", "u1", "u_extra"):
             fin(nm, getattr(self, nm), 0.0)
-        for nm, lo in (("c", 0), ("T", 0), ("s_tr", 0), ("m", 1)):
+        fin("accept", self.accept, 0.0)
+        if float(self.accept) > 1.0:
+            raise ValueError("Cost %s: accept = %r is not a probability" % (self.method, self.accept))
+        for nm, lo in (("c", 0), ("T", 0), ("s_tr", 0), ("m", 1), ("per_circuit", 1)):
             x = getattr(self, nm)
             if int(x) != x or x < lo:
                 raise ValueError("Cost %s: %s = %r must be an integer >= %d" % (self.method, nm, x, lo))
@@ -147,6 +170,8 @@ class Cost:
 
     def to_json(self) -> dict:
         d = asdict(self)
+        if d.get("target_grid") is None:
+            d.pop("target_grid", None)
         d["a"] = list(self.a)
         d["levels"] = [list(l) for l in self.levels]
         return d
@@ -172,6 +197,8 @@ class Alloc:
     var_target: float = math.inf
     var_cal: float = 0.0
     var_train: float = 0.0
+    source: str = "first-order"      # where b and var_target come from (target-nonlinear rows: qemx.stats.grid_at)
+    abstention_rate: float = 0.0     # share of experiments without an estimate ("abstain" failure policy)
 
     @property
     def mse(self) -> float:
@@ -190,15 +217,16 @@ def _tr_choices(cost: Cost, pol: Policy) -> list:
 
 
 def min_budget(cost: Cost, policy="fixed") -> int:
-    """Smallest B that yields an estimate (every circuit at its minimum number of shots)."""
+    """Smallest B that yields an estimate (every circuit at its minimum number of shots): the shared feasibility
+    function qemx.budget.min_total_budget with the policy's lower bounds and the smallest training level it may use."""
     pol = _pol(policy)
     tr = _tr_choices(cost, pol)
     t_min = min(tr) if tr else int(pol.s_tr_min)
-    return int(cost.m) + int(cost.T) * t_min + (int(cost.c) * int(pol.s_min) if cost.c > 0 else 0)
+    return int(min_total_budget(cost.m, cost.accept, cost.per_circuit, int(cost.T) * t_min, int(cost.c), _rule(pol)))
 
 
 def _target_var(cost: Cost, N: float, integer: bool, v: float | None = None) -> tuple:
-    if N < cost.m or N <= 0:
+    if N < cost.m or N <= 0 or N < n_min(cost):
         return math.inf, ()
     if not cost.a or len(cost.a) <= 1:
         return (cost.v if v is None else v) / N, ((int(N),) if integer else ())
@@ -223,12 +251,13 @@ def _best_s(cost: Cost, B, R, s_tr, b, u, v, w, pol: Policy, v_level: bool) -> A
         vt, Nj = _target_var(cost, N, pol.integer, vt_arg)
         vc = w / s if cost.c > 0 else 0.0
         return Alloc(B, True, N, s, s_tr, Nj, b, vt + vc + u, vt, vc, u)
+    nmin = n_min(cost, pol)
     if cost.c <= 0:
-        if R < cost.m:
+        if R < nmin:
             return Alloc(B, False)
         return at(0)
     smin = float(pol.s_min)
-    smax = (R - cost.m) / cost.c
+    smax = (R - nmin) / cost.c
     if pol.integer:
         smax = math.floor(smax)
     if smax < smin:
@@ -267,7 +296,8 @@ def _given_tr(cost: Cost, B, s_tr: int, pol: Policy) -> Alloc:
 
 def _continuous_opt(cost: Cost, B, pol: Policy) -> Alloc:
     """First-order opt path (no levels): s_tr continuous with u = u1/s_tr, KKT water-filling over three pools."""
-    pools = [("N", _v_pooled(cost), 1.0, float(cost.m))]
+    nmin = n_min(cost, pol)
+    pools = [("N", _v_pooled(cost), 1.0, float(nmin))]
     if cost.c > 0:
         pools.append(("s", cost.w, float(cost.c), float(pol.s_min)))
     pools.append(("t", cost.u1, float(cost.T), float(pol.s_tr_min)))
@@ -296,7 +326,7 @@ def _continuous_opt(cost: Cost, B, pol: Policy) -> Alloc:
     s_c, t_c = x.get("s", 0.0), x["t"]
     if not pol.integer:
         N = B - (cost.c * s_c if cost.c > 0 else 0) - cost.T * t_c
-        if N < cost.m or (cost.c > 0 and s_c < pol.s_min) or t_c < pol.s_tr_min:
+        if N < nmin or (cost.c > 0 and s_c < pol.s_min) or t_c < pol.s_tr_min:
             return Alloc(B, False)
         vt, _ = _target_var(cost, N, False)
         vc = cost.w / s_c if cost.c > 0 else 0.0
@@ -310,7 +340,7 @@ def _continuous_opt(cost: Cost, B, pol: Policy) -> Alloc:
         a_ = _best_s(cost, B, B - cost.T * t, t, cost.b, cost.u1 / t + cost.u_extra, _v_pooled(cost), cost.w, pol,
                      v_level=False)
         return a_ if a_.feasible else None
-    t_hi = (B - cost.m - (cost.c * pol.s_min if cost.c > 0 else 0)) // cost.T
+    t_hi = (B - nmin - (cost.c * pol.s_min if cost.c > 0 else 0)) // cost.T
     if t_hi < pol.s_tr_min:
         return Alloc(B, False)
     t0 = min(max(int(round(t_c)), int(pol.s_tr_min)), int(t_hi))
@@ -354,7 +384,31 @@ def allocate(cost: Cost, B, policy="fixed") -> Alloc:
         if out.N_j and sum(out.N_j) != out.N:
             raise AssertionError("per-circuit target shots do not add up")
         out.N, out.s, out.s_tr = int(out.N), int(out.s), int(out.s_tr)
-    return out
+    return _target_nonlinear(cost, out)
+
+
+def _target_nonlinear(cost: Cost, a: Alloc) -> Alloc:
+    """An allocation of a target-nonlinear estimator with its budget-dependent moments (review F01): at N target
+    shots below the grid's validated first-order range, the bias is the protocol's Monte-Carlo mean minus the ideal
+    value and the target variance is the protocol's (``source`` says where each number came from). The per-circuit
+    split is the method's own (the grid was simulated with it); the ledger does not re-optimize it for these rows.
+    No usable moments at N (every experiment abstained, or N below the grid): infeasible."""
+    g = cost.target_grid
+    if not g or not a.feasible:
+        return a
+    from ..stats import grid_at
+    m = grid_at(g, float(a.N))
+    a.source = m.get("source", "")
+    if str(a.source).startswith("first-order (validated)"):
+        return a
+    if not (math.isfinite(m.get("mean", math.nan)) and math.isfinite(m.get("var", math.nan))):
+        return Alloc(a.B, False)
+    ideal = float(g["reference_mean"]) - float(cost.b)
+    a.b = float(m["mean"]) - ideal
+    a.var = a.var - a.var_target + float(m["var"])
+    a.var_target = float(m["var"])
+    a.abstention_rate = float(m.get("abstention_rate", 0.0) or 0.0)
+    return a
 
 
 def rmse(cost: Cost, B, policy="fixed") -> float:

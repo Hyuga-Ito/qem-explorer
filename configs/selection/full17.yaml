@@ -1,0 +1,58 @@
+# Larger study (1.7.0) — PLANNED, NOT EXECUTED. Resumable: `python -m qemx.selection label configs/selection/full17.yaml
+# --out runs/full17 --workers N` continues where it stopped (run binding, run.json); `plan --measured runs/pilot17/dev`
+# gives the CPU and disk estimate from the corrected pilot's measured rates; the caps below stop a configuration
+# that would exceed them from being started unknowingly (plan reports caps.within).
+#
+# Design (review R3): many independent logical circuits rather than many variants of few circuits. New angle seeds,
+# graph instances (QAOA rings of every width), Trotter parameters and rotation angles, so that no logical circuit of
+# this study appears in any earlier study (ancestry registry: role "planned"; plan reports registry_overlap = {}).
+# Fresh learning designs (10 per label half) and 100 + 100 trials per (task, protocol, budget), the full budget grid
+# up to 3·10⁷ shots. 20 % of the logical circuits (keyed hash) form the study's own untouched final test.
+schema: qemx.selection.config/1
+name: full17
+status: planned
+master_seed: 20261201
+R: 100
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 10}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL]
+final_test_fraction: 0.2
+tasks:
+  - widths: [3, 4, 5, 6, 7]
+    families:
+      hea: [{layers: 1, angle_seed: 11}, {layers: 2, angle_seed: 12}, {layers: 3, angle_seed: 13}, {layers: 1, angle_seed: 14}, {layers: 2, angle_seed: 15}, {layers: 3, angle_seed: 16}, {layers: 1, angle_seed: 17}, {layers: 2, angle_seed: 18}, {layers: 3, angle_seed: 19}, {layers: 1, angle_seed: 20}, {layers: 2, angle_seed: 21}, {layers: 3, angle_seed: 22}]
+      qaoa: [{p: 1, angle_seed: 41}, {p: 2, angle_seed: 42}, {p: 1, angle_seed: 43}, {p: 2, angle_seed: 44}, {p: 1, angle_seed: 45}, {p: 2, angle_seed: 46}, {p: 1, angle_seed: 47}, {p: 2, angle_seed: 48}, {p: 1, angle_seed: 49}, {p: 2, angle_seed: 50}, {p: 1, angle_seed: 51}, {p: 2, angle_seed: 52}]
+      brickwork: [{layers: 2, angle_seed: 71}, {layers: 3, angle_seed: 72}, {layers: 4, angle_seed: 73}, {layers: 2, angle_seed: 74}, {layers: 3, angle_seed: 75}, {layers: 4, angle_seed: 76}, {layers: 2, angle_seed: 77}, {layers: 3, angle_seed: 78}, {layers: 4, angle_seed: 79}, {layers: 2, angle_seed: 80}]
+      ising: [{steps: 1, h: 0.5}, {steps: 1, h: 1.5}, {steps: 2, h: 0.5}, {steps: 2, h: 1.5}, {steps: 3, h: 0.5}, {steps: 3, h: 1.5}, {steps: 4, h: 0.5}, {steps: 4, h: 1.5}]
+      ghz: [{theta: 0.3}, {theta: 0.5}, {theta: 0.7}, {theta: 0.9}, {theta: 1.2}, {theta: 1.4}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_marrakesh, fake_kyiv, fake_brisbane]
+    variants_per_base: 2
+  - widths: [5, 7]
+    families:
+      qft: [{m: 2}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_marrakesh, fake_kyiv, fake_brisbane]
+    variants_per_base: 2
+limits: {task_seconds: 3600, memory_gb: 4, cpu_hours: 80, disk_gb: 10}
+analysis:
+  splits: [same-distribution, family, device, width, budget-extrap, budget-interp]
+  split_options:
+    same-distribution: {k: 5}
+    width: {min_test_n: 7}
+    budget-extrap: {max_train_B: 300000}
+    device: {test_device: fake_brisbane}
+  feature_sets: [size_budget, structure, lightcone, deployable, deployable+simulated]
+  model_families: [ridge, enet, hgb, mlp, struct]
+  abstain_family: hgb
+  abstain_set: deployable
+  ablation_set: deployable+simulated
+  bootstrap: 1000
+  lc_repeats: 3
+  other_split_sets: [size_budget, deployable]
+  other_split_families: [ridge, hgb, struct]
+  extras: [ablation, learning_curve, deployed, nested_selective, interval_coverage, certificates, floor_sensitivity, budget_generalization, design_diagnostics]

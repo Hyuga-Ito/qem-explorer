@@ -155,8 +155,19 @@ def test_analysis_pages_run():
 
 
 @pytest.mark.slow
-def test_token_never_kept():
-    """Submitting with a (fake) token fails to connect; the token is cleared and appears nowhere in the state."""
+def test_token_never_kept(tmp_path, monkeypatch):
+    """Submitting with a (fake) token fails to connect; the token is cleared and appears nowhere in the state or the
+    error. The service is mocked (1.5.0 sent the fake token to the provider's sign-in endpoint over the network)
+    and a valid campaign ledger is configured, so the connection path itself is exercised offline."""
+    import qiskit_ibm_runtime as R
+    from qemx import campaign as CG
+
+    class Refuses:
+        def __init__(self, *a, token=None, **kw):
+            raise ValueError("invalid token %s for this channel" % token)
+    monkeypatch.setattr(R, "QiskitRuntimeService", Refuses)
+    led = CG.Ledger.create(str(tmp_path / "ledger.json"), ceiling_s=600, reserve_s=60)
+    monkeypatch.setenv(CG.ENV_LEDGER, led.path)
     at = _app()
     at.switch_page(PAGES[6]).run()
     at.session_state["w_hw_mode"] = "ibm"
@@ -170,8 +181,8 @@ def test_token_never_kept():
     assert at.session_state["hw_token"] == ""
     blob = repr({k: at.session_state[k] for k in at.session_state})
     assert secret not in blob
-    for e in at.error:
-        assert secret not in e.value
+    assert at.error and all(secret not in e.value for e in at.error)
+    assert not CG.Ledger.load(led.path).entries                        # nothing was admitted or submitted
     from ui import state as S  # noqa: F401
 
 

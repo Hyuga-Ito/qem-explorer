@@ -34,10 +34,11 @@ def _run(tpl, noise, est, readout="none", **p):
     return REGISTRY[est].run(ctx, **rc.p), ctx
 
 
-def _sign_changing_zne():
-    """ZNE, exponential rule, whose E(λ) changes sign: the estimate is NaN (audit reproduction)."""
+def _sign_changing_zne(on_fail="abstain"):
+    """ZNE, exponential rule, whose E(λ) changes sign: with the 'abstain' failure policy the estimate is NaN (audit
+    reproduction; this was the only behavior before 1.5.1). The default policy since 1.5.1 is 'linear'."""
     tpl = T.Template(parse("x 0; cx 0 1; cx 0 1", 2), OBS.z(0, 2), "")
-    r, ctx = _run(tpl, NoiseSpec(amp_damp=0.12), "zne", rule="exponential")
+    r, ctx = _run(tpl, NoiseSpec(amp_damp=0.12), "zne", rule="exponential", on_fail=on_fail)
     return r, ctx
 
 
@@ -81,10 +82,24 @@ def test_sign_changing_exponential_zne_reports_infinite_cost():
     assert BG.budget_for(b, m, 0.01) == math.inf               # was 1 shot before the fix
     assert BG.rmse(b, m, 1e4) == math.inf
     assert BG.crossover(b, m, 0.0, BG.CostModel(v=1.0)) is None
-    row = summary(Outcome(Recipe.make("zne", rule="exponential"), r), ctx.ideal_value(), 10000, 1.0,
-                  samples=r.sampler(9999, 20, np.random.default_rng(0)))
+    row = summary(Outcome(Recipe.make("zne", rule="exponential", on_fail="abstain"), r), ctx.ideal_value(), 10000,
+                  1.0, samples=r.sampler(9999, 20, np.random.default_rng(0)))
     assert row["RMSE"] == math.inf and row["v"] == math.inf
     assert BG.budget_for(row["bias"], BG.CostModel.of_row(row), 0.01) == math.inf
+
+
+def test_sign_changing_exponential_zne_falls_back_to_the_linear_fit_by_default():
+    """1.5.1 failure policy 'linear' (the default): the exact E(λ) change sign, so the reference is the least-squares
+    line through the same E(λ) — no extra shots — and the result says so."""
+    from qemx.methods.zne import extrapolate
+    r, ctx = _sign_changing_zne(on_fail="linear")
+    E, lams = r.details["E"], r.details["lams"]
+    assert math.isnan(extrapolate("exponential", lams, E))
+    assert r.mean == pytest.approx(extrapolate("linear", lams, E))
+    assert r.reference_mean == pytest.approx(r.mean) and r.estimate_kind == "reference"
+    assert r.details["reference_rule"] == "linear" and r.failure_policy == "fallback"
+    assert any("Failure policy" in n for n in r.notes)
+    assert np.isfinite(r.var1)
 
 
 # ============================================================ (4) empirical-sd fallback for nonlinear estimators

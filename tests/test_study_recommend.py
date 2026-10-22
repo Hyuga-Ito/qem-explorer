@@ -21,7 +21,8 @@ def test_feature_dictionary_is_complete_and_oracles_are_refused():
     assert not FT.BY_NAME["entropy_half"].scalable and FT.BY_NAME["two_qubit_logical"].scalable
     assert "NOT an entanglement measure" in FT.BY_NAME["output_entropy_bits"].definition
     md = FT.dictionary_markdown()
-    assert md.count("\n| `") == len(FT.DICTIONARY)
+    main, aliases = md.split("## Names of earlier schemas")            # 1.5.1: the /1 → /2 alias table follows
+    assert main.count("\n| `") == len(FT.DICTIONARY) and aliases.count("\n| `") == len(FT.ALIASES)
 
 
 def test_features_from_a_record_keep_missing_values_as_nan_with_reasons():
@@ -30,7 +31,9 @@ def test_features_from_a_record_keep_missing_values_as_nan_with_reasons():
                descriptors=dict(non_clifford=1, obs_weight=4, obs_terms=1, idle_fraction=0.2),
                **{"lambda": dict(lam_lc=0.05, lam_lc_gate=0.04, lam_lc_idle=0.01, lam_ro=0.02, lc_2q_gates=5)})
     v, miss = FT.from_record(rec, 1e4)
-    assert v["two_qubit_density"] == pytest.approx(6 / 40) and v["lam_per_2q"] == pytest.approx(0.01)
+    # 1.5.1 (schema /2): two_qubit_density is two_qubit_per_qubit_layer (a rate, same formula)
+    assert v["two_qubit_per_qubit_layer"] == pytest.approx(6 / 40) and v["lam_per_2q"] == pytest.approx(0.01)
+    assert v["two_qubit_compile_overhead"] == 3 and "two_qubit_density" not in v
     assert v["log10_budget"] == pytest.approx(4)
     assert math.isnan(v["entropy_half"]) and "entropy_half" in miss            # never an invented zero
     assert math.isnan(v["entropy_profile_max"])

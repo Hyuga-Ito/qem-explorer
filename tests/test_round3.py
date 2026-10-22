@@ -19,6 +19,7 @@ from qemx.methods import Recipe
 from qemx.noise import PRESETS
 from qemx.recipes import compare, preset, summary
 from qemx.viz import composer as CV
+from qemx.textio import child_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ABSTRACT = CP.CompileOptions(mode="abstract", basis_2q="cx", coupling="all", layout="sabre", opt_level=1)
@@ -212,8 +213,8 @@ def test_export_runs_in_terminal_and_in_a_jupyter_kernel(tmp_path):
     _, outs, _ = compare(comp, PRESETS["Depolarizing"], tpl.observable, recipes)
     src = EX.script(_state(tpl, recipes), {o.title: o.result.mean for o in outs})
     p = tmp_path / "export.py"
-    p.write_text(src)
-    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=600, cwd=tmp_path)
+    p.write_text(src, encoding="utf-8")
+    out = subprocess.run([sys.executable, str(p)], capture_output=True, text=True, timeout=600, cwd=tmp_path, encoding="utf-8", env=child_env())
     assert out.returncode == 0, out.stderr[-2000:]
     assert sum(ln.rstrip().endswith("✓") for ln in out.stdout.splitlines()) == len(recipes)
     nb = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell(src),

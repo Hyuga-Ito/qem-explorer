@@ -25,13 +25,18 @@ import tempfile
 
 import numpy as np
 
-SCHEMA_VERSION = "qemx.phase.cell/3"
+SCHEMA_VERSION = "qemx.phase.cell/4"
 # /2 (v1.4): status "partial", per-level ok/v/w/se_w.
 # /3 (v1.5): learning rows (CDR / FR / NIL / chains) report the *protocol* moments at their training shots in
 #     mean / b / v (qemx/stats.py), the exact-training reference fit in reference_mean / b_inf, and their Monte-Carlo
 #     record in ``moments``; every row carries estimate_kind and flags. /1–/2 records keep their own meaning: there
 #     mean / b / v of a learning row are the reference fit's (the ledger used the measured training levels anyway).
-READABLE_SCHEMAS = ("qemx.phase.cell/1", "qemx.phase.cell/2", SCHEMA_VERSION)
+# /4 (v1.5.1): target-nonlinear rows (exponential ZNE, symmetry verification, chains with an exponential outer ZNE)
+#     keep the exact-probability fit as the reference (estimate_kind "reference") and carry ``target_moments``, the
+#     budget-dependent Monte-Carlo moments (qemx.stats.moment_grid) that the ledger uses below their validated
+#     first-order range, plus ``failure_policy``; provenance adds source/lock/inventory digests. /3 rows of those
+#     estimators are costed to first order (as written by 1.5.0) and must not be mixed with /4 rows in one run.
+READABLE_SCHEMAS = ("qemx.phase.cell/1", "qemx.phase.cell/2", "qemx.phase.cell/3", SCHEMA_VERSION)
 CELL_STATUS = ("ok", "partial", "error", "timeout", "oom", "crashed")
 USABLE_STATUS = ("ok", "partial")                          # cells whose methods enter the tables
 
@@ -153,7 +158,7 @@ def read_cell(out_dir: str, cell_id: str) -> dict | None:
     p = cell_path(out_dir, cell_id)
     if not os.path.exists(p):
         return None
-    with open(p) as f:
+    with open(p, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -289,6 +294,7 @@ def ledger_rows(rec: dict, budgets, policies=("fixed", "opt")) -> tuple:
                 a = allocate(c, int(B), pol)
                 rm = math.sqrt(a.mse) if a.feasible else math.inf
                 L.append(dict(cell_id=rec["cell_id"], method=k, policy=pol.name, B=int(B), feasible=a.feasible,
+                              moments_source=getattr(a, "source", "first-order") if a.feasible else None,
                               N=a.N if a.feasible else None, s=a.s if a.feasible else None,
                               s_tr=a.s_tr if a.feasible else None, b=a.b if a.feasible else None,
                               var=a.var if a.feasible else None, rmse=rm if math.isfinite(rm) else None))
@@ -326,7 +332,7 @@ def _write_table(rows: list, path_base: str, columns=None) -> dict:
     for ext in (".csv", ".parquet"):
         if os.path.exists(path_base + ext):
             os.unlink(path_base + ext)
-    df.to_csv(path_base + ".csv", index=False)
+    df.to_csv(path_base + ".csv", index=False, encoding="utf-8")
     out = dict(rows=int(len(df)), parquet=False)
     try:
         df.to_parquet(path_base + ".parquet", index=False)
@@ -420,8 +426,8 @@ def collect(out_dir: str, budgets=None, policies=("fixed", "opt"), manifest_path
                        ("errors", ER)):
         out["tables"][name] = _write_table(rows, os.path.join(t, name), ERROR_COLUMNS if name == "errors"
                                            else (None if rows else TABLE_KEYS[name]))
-    with open(os.path.join(t, "schema.json"), "w") as f:
+    with open(os.path.join(t, "schema.json"), "w", encoding="utf-8") as f:
         json.dump(SCHEMA, f, indent=1)
-    with open(os.path.join(t, "collect.json"), "w") as f:
+    with open(os.path.join(t, "collect.json"), "w", encoding="utf-8") as f:
         json.dump(dict(out, stale_ids=stale, missing_ids=missing), f, indent=1)
     return out

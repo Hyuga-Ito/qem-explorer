@@ -48,11 +48,12 @@ def test_failed_and_cancelled_jobs_still_count(tmp_path):
     states = sorted(e["state"] for e in led.entries)
     assert states == ["completed", "failed"]
     assert led.committed_s() == pytest.approx(prov.total_usage())   # the failed job's usage is charged
-    # a job that ended without reported usage keeps its high estimate
+    # a job that ended without reported usage keeps its reservation (1.5.1: the larger of the high estimate and its
+    # provider-enforced max_execution_time — review N12)
     rid = led.admit("c", CG.estimate_usage(1000, 10))
     led.submitted(rid, "x-1")
     led.reconcile("x-1", None, "cancelled")
-    assert led.committed_s() == pytest.approx(prov.total_usage() + CG.estimate_usage(1000, 10).high_s)
+    assert led.committed_s() == pytest.approx(prov.total_usage() + CG.reservation_s(CG.estimate_usage(1000, 10)))
 
 
 def test_submission_error_releases_and_crash_keeps_the_reservation(tmp_path):

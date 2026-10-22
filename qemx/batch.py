@@ -82,12 +82,13 @@ def _algorithm(source: str, current: dict | None, cache: dict, variant=(), kinds
             raise ValueError("no current circuit")
         a = dict(current)
     else:
-        tpl = T.build(source, T.clamp_params(source, dict(T.defaults(source), **params)))
-        n = tpl.spec.n
-        a = dict(spec=tpl.spec, inputs=["0"] * n, basis="Z" * n, observable=tpl.observable, symmetry=tpl.symmetry,
+        from .io_semantics import template_inputs
+        tokens, body, tpl = template_inputs(source, T.clamp_params(source, dict(T.defaults(source), **params)))
+        n = body.n
+        a = dict(spec=body, inputs=tokens, basis="Z" * n, observable=tpl.observable, symmetry=tpl.symmetry,
                  relabel=tpl.relabel, name=tpl.spec.name)
     n = a["spec"].n
-    if inp is not None:
+    if inp is not None:                 # a register input replaces the input (the template's own one included)
         a["inputs"] = SW.input_tokens(inp, n)
     if basis is not None:
         a["basis"] = SW.basis_string(basis, n)
@@ -168,11 +169,15 @@ def run(scenarios, recipes, *, current: dict | None, opts: CP.CompileOptions, sh
 def rmse_at(rows, N: int) -> np.ndarray:
     """RMSE of every row at a total budget of N shots (target, training and calibration together)."""
     from . import budget as BG
+    from .analysis import row_point, target_grid
     out = []
     for r in rows:
         b = r.get("bias", math.nan)
         if not np.isfinite(b) or not np.isfinite(r.get("v", math.nan)):
             out.append(math.nan)
+            continue
+        if target_grid(r) is not None:                # target-nonlinear row: budget-dependent moments (1.5.1)
+            out.append(row_point(r, max(int(N), 1))["rmse"])
             continue
         out.append(BG.rmse(float(b), BG.CostModel.of_row(r), max(int(N), 1)))
     return np.array(out, float)

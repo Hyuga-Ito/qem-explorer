@@ -212,13 +212,17 @@ def _calibration_hash(spec: CellSpec, phys) -> str:
 
 
 def provenance() -> dict:
+    """Package versions (1.5.0 keys) plus the source-tree, lock and package-inventory digests (qemx.provenance)."""
     import importlib
+    from ..provenance import provenance as _prov
     out = dict(python=platform.python_version(), platform=platform.platform())
     for mod in ("qemx", "qiskit", "qiskit_aer", "qiskit_ibm_runtime", "numpy", "scipy", "sklearn"):
         try:
             out[mod] = importlib.import_module(mod).__version__
         except Exception:                                    # noqa: BLE001 - recorded as missing
             out[mod] = None
+    p = _prov()
+    out.update({k: p[k] for k in ("source_sha256", "lock_sha256", "git_commit", "inventory_sha256")})
     return out
 
 
@@ -268,6 +272,12 @@ def _method_row(ms: MethodSpec, rc, res, ideal: float) -> dict:
     if mom:
         row["moments"] = {k: (_f(v) if isinstance(v, float) else v) for k, v in mom.items()}
     flags = list(getattr(res, "flags", ()) or ())
+    grid = det.get("target_moments") if getattr(res, "target_sampler", None) is not None else None
+    if grid:                     # target-nonlinear (record schema /4): budget-dependent moments for the ledger
+        row["target_moments"] = json.loads(json.dumps(grid, default=_f))
+        row["failure_policy"] = getattr(res, "failure_policy", None)
+        if "budget-dependent-moments" not in flags:
+            flags.append("budget-dependent-moments")
     if ms.estimator == "zne":
         lf = det.get("lams_fault")
         row["details"] = dict(lams=[float(x) for x in det.get("lams", [])], E=[_f(x) for x in det.get("E", [])],
@@ -363,14 +373,24 @@ def _method_row(ms: MethodSpec, rc, res, ideal: float) -> dict:
 def cost_of(row: dict):
     """ledger.Cost from a method row (None if the method produced no finite estimate). Learning methods carry their
     Monte-Carlo training levels (b, u, v and w at each number of training shots; levels flagged ``ok: false`` are
-    left out, so no policy can choose them); the first-order u1 is used only when no levels were measured."""
+    left out, so no policy can choose them); the first-order u1 is used only when no levels were measured.
+
+    The feasibility constraints travel with the cost (the shared contract of qemx.budget): the post-selection
+    acceptance ``accept`` (symmetry verification, chains with an inner post-selection: ⌈5/P_accept⌉ target shots) and
+    the shots one target circuit needs, ``per_circuit`` (PEC: its shots per sampled circuit). Rows written before
+    1.5.1 already carry both fields (``accept``, ``shots_per_circuit``); a row without them (or with a non-finite
+    acceptance) has no post-selection and one shot per circuit, as before."""
     from .ledger import Cost
     if row.get("status") != "ok" or row.get("b") is None or row.get("v") is None:
         return None
     levels = tuple(level_tuple(l, row) for l in (row.get("levels") or ()) if l.get("ok", True))
+    acc = row.get("accept")
+    acc = 1.0 if acc is None or not math.isfinite(float(acc)) else min(max(float(acc), 0.0), 1.0)
     return Cost(row["key"], b=row["b"], v=row["v"], w=row.get("w") or 0.0, c=int(row.get("c") or 0),
                 T=int(row.get("T") or 0), s_tr=int(row.get("s_tr") or 0), u1=row.get("u1") or 0.0,
-                u_extra=0.0, m=int(row.get("m") or 1), a=tuple(row.get("a") or ()), levels=levels)
+                u_extra=0.0, m=int(row.get("m") or 1), a=tuple(row.get("a") or ()), levels=levels,
+                accept=acc, per_circuit=max(int(row.get("shots_per_circuit") or 1), 1),
+                target_grid=row.get("target_moments") or None)
 
 
 def level_tuple(l: dict, row: dict) -> tuple:

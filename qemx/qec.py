@@ -804,10 +804,10 @@ def compile_algorithm(c: Code, alg: Algorithm, decoder: str = "majority / lookup
     for lq in range(nl):
         b, j = cp.loc(lq)
         for g, prm in alg.prep.get(lq, []):
-            cp.emit(g, (cp.roles[b][c.inputs[j]],), prm, "prep")
+            cp.emit(g, (cp.roles[b][c.inputs[j]],), prm, "encode")      # logical injection: part of the circuit
             inj.append("%s on q%d" % (_fmt_ops([(g, prm)]), cp.roles[b][c.inputs[j]]))
     for b in range(nb):
-        cp.emit_roles(b, c.encoder, "prep")
+        cp.emit_roles(b, c.encoder, "encode")
     enc_end = len(cp.ops)
     err_op = None
     if error != "none":

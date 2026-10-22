@@ -406,7 +406,7 @@ circuits have the same ideal value; §6.3 explains how the training set is chose
 
 CDR's regression can use more features of the target's own shots than the noisy $\langle O\rangle$. The app's
 **feature regression** (FR; parameter value ``features="fr"`` since 1.5 — the legacy value ``features="nil"`` of stored
-studies is migrated with a note, see docs/MIGRATION_1.5.md; method keys FR-L / FR-R; this project's own heuristic,
+studies is migrated with a note, see docs/MIGRATION.md; method keys FR-L / FR-R; this project's own heuristic,
 not neighbor-informed learning) uses $\mathbf x=(\langle O\rangle,\langle Z_i\rangle,\langle Z_iZ_j\rangle)$ of the noisy distribution and
 fits $\hat O=b+\mathbf c\cdot\mathbf x$ by
 

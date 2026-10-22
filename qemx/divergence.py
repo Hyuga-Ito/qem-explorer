@@ -889,102 +889,122 @@ def _plain_sampler(sampler) -> None:
 
 
 def submit(plan: Plan, backend, max_execution_time: int | None = None, skip=(), ledger=None, model=None,
-           mode: str = "job", campaign: str = "", on_record=None) -> list:
+           mode: str = "job", campaign: str = "", on_record=None, on_attempt=None) -> list:
     """Submit the runs to a real backend, except the run keys in ``skip`` (runs of jobs already submitted: resuming a
-    partial submission). Returns job records — job id, backend, shots and run keys; never a credential. A failure
-    after some jobs went through raises :class:`qemx.hardware.SubmitError` carrying the records of the jobs submitted
-    by this call.
+    partial submission). Returns job records — job id, backend, shots, run keys, reservation and client tag; never a
+    credential. A failure after some jobs went through raises :class:`qemx.hardware.SubmitError` carrying the records
+    of the jobs submitted by this call (and ``unknown``: a submission whose outcome is unknown, with its runs).
 
-    ``ledger`` (:class:`qemx.campaign.Ledger`): every job is admitted against the campaign's conservative remaining
-    QPU allowance *before* it is submitted (its high usage estimate under ``model``), its id is recorded at once, and
-    the first job that does not fit stops the submission (partial, resumable). Without an explicit
-    ``max_execution_time`` each job gets one from its own high estimate. ``mode``: "job" (default; each job stands
-    alone) or "batch" (one Batch; on the Open plan its 10-minute elapsed-time TTL can fail queued jobs).
-    ``on_record(records)`` is called after every job with the records so far (to write them to disk at once)."""
+    ``ledger`` (:class:`qemx.campaign.Ledger` or its path) is **required for a real provider** (LedgerRequired
+    before any provider contact; only fake backends and local simulators run without it), and nothing is submitted
+    while it holds a submission whose outcome is unknown. Every job goes through
+    :func:`qemx.campaign.submit_one`: admitted against the campaign's conservative remaining QPU allowance *before*
+    it is submitted (its high usage estimate under ``model``), tagged with its client tag, its id recorded at once;
+    the first job that does not fit stops the submission (partial, resumable), and a provider call that fails
+    without proving that no job exists leaves the reservation committed (``submission_unknown``). Without an
+    explicit ``max_execution_time`` each job gets one from its own high estimate. ``mode``: "job" (default; each job
+    stands alone) or "batch" (one Batch; on the Open plan its 10-minute elapsed-time TTL can fail queued jobs; see
+    :func:`qemx.hardware.open_mode`). ``on_attempt(attempt)`` is called right before each provider call with the
+    pending record (reservation, client tag, runs) and ``on_record(records)`` after every job with the records so
+    far: a crash at any point leaves every job id, or the runs of the one call whose outcome is unknown, on disk."""
     from qiskit_ibm_runtime import SamplerV2
-    from .hardware import SubmitError
+    from .campaign import (CampaignLimit, SubmissionRejected, SubmissionUnknown, check_no_unresolved,
+                           default_max_execution_time, estimate_usage, require_ledger, submit_one, tag_sampler)
+    from .hardware import SubmitError, close_mode, open_mode
     if mode not in ("job", "batch"):
         raise ValueError("mode must be 'job' or 'batch'")
+    ledger = require_ledger(ledger, backend)
+    if ledger is not None:
+        check_no_unresolved(ledger)
     skip = set(skip)
     circs = physical_circuits(plan, backend, [r for r in plan.runs if r.key not in skip])   # all checked first
-    batch = None
-    if mode == "batch":
-        try:
-            from qiskit_ibm_runtime import Batch
-            batch = Batch(backend=backend)
-        except Exception:                              # noqa: BLE001 - accounts without batch mode use job mode
-            batch = None
+    batch, used = open_mode(backend, mode)
+    bname = getattr(backend, "name", "backend")
     records = []
     try:
         for shots, grp in _by_shots(circs):
             for lo in range(0, len(grp), 300):           # at most 300 circuits per job
                 part = grp[lo:lo + 300]
-                rid, met = None, max_execution_time
-                if ledger is not None:
-                    from .campaign import CampaignLimit, estimate_usage
-                    est = estimate_usage(int(shots) * len(part), len(part), 1, model)
+                sampler = SamplerV2(mode=batch if batch is not None else backend)
+                _plain_sampler(sampler)
+                base = dict(backend=bname, shots=int(shots), runs=[k for k, _, _ in part], mode=used)
+                if ledger is None:                       # a local backend: no QPU time is spent
+                    met = max_execution_time
+                    if met:
+                        sampler.options.max_execution_time = int(met)
                     try:
-                        rid = ledger.admit("%s: %d circuits × %d shots" % (plan.suite.study, len(part), shots), est,
-                                           campaign)
+                        jid = sampler.run([c for _, c, _ in part], shots=shots).job_id()
+                    except Exception as e:
+                        if not records:
+                            raise
+                        raise SubmitError("%s: %s" % (type(e).__name__, e), records) from e
+                    rec = dict(job_id=jid, **base)
+                else:
+                    est = estimate_usage(int(shots) * len(part), len(part), 1, model)
+                    met = int(max_execution_time) if max_execution_time else default_max_execution_time(est)
+
+                    def prepare(tag, sampler=sampler, met=met):
+                        sampler.options.max_execution_time = int(met)
+                        return tag_sampler(sampler, tag)
+
+                    def attempt(info, base=base, met=met):
+                        if on_attempt is not None:       # the runs of this call are on disk before it starts
+                            on_attempt(dict(base, job_id=None, max_execution_time=met, outcome="pending", **info))
+
+                    def run(tag, sampler=sampler, part=part, shots=shots):
+                        return sampler.run([c for _, c, _ in part], shots=shots)
+                    try:
+                        _, jid, rid, tag = submit_one(
+                            ledger, "%s: %d circuits × %d shots" % (plan.suite.study, len(part), shots), est, run,
+                            campaign, prepare=prepare, on_attempt=attempt, max_execution_time=met)
                     except CampaignLimit as e:
                         if not records:
                             raise
                         raise SubmitError("campaign ledger: %s" % e, records) from e
-                    if not met:
-                        met = int(math.ceil(est.high_s * 1.1)) + 1
-                sampler = SamplerV2(mode=batch if batch is not None else backend)
-                _plain_sampler(sampler)
-                if met:
-                    sampler.options.max_execution_time = int(met)
-                try:
-                    job = sampler.run([c for _, c, _ in part], shots=shots)
-                    jid = job.job_id()
-                except Exception as e:
-                    if rid is not None:
-                        ledger.release(rid, "submission failed: %s" % type(e).__name__)
-                    if not records:
-                        raise
-                    raise SubmitError("%s: %s" % (type(e).__name__, e), records) from e
-                if rid is not None:
-                    ledger.submitted(rid, jid)
-                records.append(dict(job_id=jid, backend=getattr(backend, "name", "backend"), shots=int(shots),
-                                    runs=[k for k, _, _ in part], max_execution_time=met,
-                                    submitted=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+                    except SubmissionUnknown as e:
+                        raise SubmitError(str(e), records, [dict(base, job_id=e.job_id, reservation=e.rid,
+                                                                 client_tag=e.client_tag, max_execution_time=met,
+                                                                 outcome="unknown")]) from e
+                    except SubmissionRejected as e:
+                        if not records:
+                            raise
+                        raise SubmitError("%s: %s" % (type(e).__name__, e), records) from e
+                    rec = dict(job_id=jid, reservation=rid, client_tag=tag, **base)
+                rec.update(max_execution_time=met, submitted=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                records.append(rec)
                 if on_record is not None:                # persist every job id at once: a crash cannot lose one
                     on_record(list(records))
     finally:
-        if batch is not None:
-            try:
-                batch.close()
-            except Exception:                         # noqa: BLE001
-                pass
+        close_mode(batch)
     return records
 
 
 def _job_usage(job):
-    try:
-        u = job.usage()                                # qiskit-ibm-runtime ≥ 0.30: QPU seconds
-        return None if u is None else float(u)
-    except Exception:                                  # noqa: BLE001 - not reported (yet)
-        return None
+    from .campaign import job_usage
+    return job_usage(job)
 
 
 def collect(service, records: list, wait: bool = False, ledger=None) -> tuple:
     """(counts or None, statuses): counts {run key: {outcome: count}} once every job has ended (a failed job's runs
     have no counts). Statuses carry the execution timestamps and the reported QPU usage where the service reports
-    them; with a ``ledger`` every ended job is reconciled with its reported usage."""
+    them; with a ``ledger`` every ended job is reconciled with its reported usage through
+    :func:`qemx.campaign.reconcile_job` (the step the app's collection uses too)."""
+    from .campaign import PROVIDER_FINAL, provider_state, reconcile_job
     FIN, FAIL = ("DONE", "JobStatus.DONE"), ("ERROR", "CANCELLED", "JobStatus.ERROR", "JobStatus.CANCELLED")
     counts, status, ended = {}, [], True
 
-    def recon(job, jid, st):
+    def recon(job, jid, st=None):
         u = _job_usage(job)
         if ledger is not None:
-            state = "completed" if st in FIN else ("cancelled" if "CANCEL" in st else "failed")
             try:
-                ledger.reconcile(jid, u, state)
-            except KeyError:                           # submitted before the ledger existed
-                pass
+                st = job.status() if st is None else st
+            except Exception:                          # noqa: BLE001 - unknown: the ledger is left as it is
+                return u
+            if provider_state(st) in PROVIDER_FINAL:
+                reconcile_job(ledger, jid, job, st)   # a job submitted before the ledger existed is skipped
         return u
+    if ledger is not None:
+        ledger.refresh()
     for rec in records:
         job = service.job(rec["job_id"])
         st = str(job.status())
@@ -1001,7 +1021,7 @@ def collect(service, records: list, wait: bool = False, ledger=None) -> tuple:
             res = job.result()                         # waits; raises if the job ends in error or is cancelled
         except Exception as e:                         # noqa: BLE001 - this job's runs get no counts; others keep theirs
             entry.update(failed=True, status="%s (%s)" % (st, type(e).__name__))
-            entry["usage_s"] = recon(job, rec["job_id"], "ERROR")
+            entry["usage_s"] = recon(job, rec["job_id"])   # reconciled only if the provider now reports an end
             status.append(entry)
             continue
         try:
@@ -1388,10 +1408,22 @@ def freqs_from_counts(c: dict, n: int) -> tuple:
     return (f / s if s > 0 else f), int(s)
 
 
-def estimate(method: Method, n: int, F: dict, lams: dict | None = None) -> tuple:
+def _project(Q, info):
+    """nearest_probability(Q), recording in ``info["moved_mass"]`` the total-variation distance each row was moved
+    (½ Σ|P − Q|): distances and fidelities of a projected RO/ZNE distribution depend on this projection (review 5.9)."""
+    P = nearest_probability(Q)
+    if info is not None:
+        info["moved_mass"] = 0.5 * np.abs(np.atleast_2d(P) - np.atleast_2d(np.asarray(Q, float))).sum(1)
+    return P
+
+
+def estimate(method: Method, n: int, F: dict, lams: dict | None = None, info: dict | None = None) -> tuple:
     """(distributions, flags) of a method from the frequency rows of its runs (``F``: {role: (R, 2ⁿ) array}).
-    ``lams``: {role: achieved λ} of the folded runs."""
+    ``lams``: {role: achieved λ} of the folded runs. Readout-mitigated and extrapolated quasi-probabilities are
+    projected onto the simplex; ``info`` (a dict) receives the mass each row was moved (``moved_mass``)."""
     flags = []
+    if info is not None:
+        info["moved_mass"] = np.zeros(np.atleast_2d(next(iter(F.values()))).shape[0])
     if method.kind == "raw":
         return np.atleast_2d(F["target"]), flags
     p01, p10 = readout_flips(F["cal0"], F["cal1"], n)
@@ -1402,11 +1434,11 @@ def estimate(method: Method, n: int, F: dict, lams: dict | None = None) -> tuple
             flags.append("readout-unmitigated:%s" % ",".join(map(str, bad)))
         return q
     if method.kind == "ro":
-        return nearest_probability(mit(F["target"])), flags
+        return _project(mit(F["target"]), info), flags
     roles = sorted((r for r in F if r.startswith("fold:")), key=lambda r: lams[r])
     eta = extrapolation_weights(method.rule, [lams[r] for r in roles])
     Q = sum(e * mit(F[r]) for e, r in zip(eta, roles))
-    return nearest_probability(Q), flags
+    return _project(Q, info), flags
 
 
 def _sample(p: np.ndarray, shots: int, R: int, rng) -> np.ndarray:
@@ -1448,7 +1480,9 @@ def compare(plan: Plan, counts: dict, predicted: dict, *, replicates: int | None
                 continue
             Fo = {r.role: freqs_from_counts(counts[r.key], n)[0] for r in runs}
             shots = {r.role: int(r.shots) for r in runs}
-            q_obs, flags = estimate(m, n, Fo, lams)
+            pinfo = {}
+            q_obs, flags = estimate(m, n, Fo, lams, pinfo)
+            moved_obs = float(np.atleast_1d(pinfo["moved_mass"])[0])
             fc_obs = float(hellinger_fidelity(p_id, q_obs)[0])
             nf_obs = float(normalized_fidelity(p_id, q_obs)[0])
             Fb = {role: _sample(Fo[role], shots[role], Rb, rng) for role in Fo}
@@ -1456,20 +1490,24 @@ def compare(plan: Plan, counts: dict, predicted: dict, *, replicates: int | None
             fc_b, nf_b = hellinger_fidelity(p_id, qb), normalized_fidelity(p_id, qb)
             obs = dict(fc_obs=fc_obs, fc_obs_se=float(np.std(fc_b, ddof=1)), nf_obs=nf_obs,
                        nf_obs_se=float(np.nanstd(nf_b, ddof=1)) if np.isfinite(nf_b).any() else math.nan,
-                       flags=";".join(sorted(set(flags))))
+                       flags=";".join(sorted(set(flags) | ({"projected"} if moved_obs > 0 else set()))),
+                       moved_mass_obs=moved_obs)
             for k, pk in predicted.items():
                 if not all(r.key in pk for r in runs):
                     rows.append(dict(base, **obs, predictor=k, status="no prediction"))
                     continue
                 Pk = {r.role: pk[r.key] for r in runs}
-                q_inf, _ = estimate(m, n, Pk, lams)
+                pinf, prep = {}, {}
+                q_inf, _ = estimate(m, n, Pk, lams, pinf)
                 Fr = {role: _sample(Pk[role], shots[role], R, rng) for role in Pk}
-                qr, _ = estimate(m, n, Fr, lams)
+                qr, _ = estimate(m, n, Fr, lams, prep)
                 fc_r, nf_r = hellinger_fidelity(p_id, qr), normalized_fidelity(p_id, qr)
                 mu, sd = float(np.mean(fc_r)), float(np.std(fc_r, ddof=1))
                 nmu = float(np.nanmean(nf_r)) if np.isfinite(nf_r).any() else math.nan
                 nsd = float(np.nanstd(nf_r, ddof=1)) if np.isfinite(nf_r).any() else math.nan
                 rows.append(dict(base, **obs, predictor=k, status="ok", fc_pred=mu, fc_pred_sd=sd,
+                                 moved_mass_pred_inf=float(np.atleast_1d(pinf["moved_mass"])[0]),
+                                 moved_mass_pred_mean=float(np.mean(prep["moved_mass"])),
                                  fc_pred_inf=float(hellinger_fidelity(p_id, q_inf)[0]), nf_pred=nmu, nf_pred_sd=nsd,
                                  delta=mu - fc_obs, z=zscore(mu - fc_obs, sd, obs["fc_obs_se"]),
                                  delta_nf=nmu - nf_obs if math.isfinite(nmu) and math.isfinite(nf_obs) else math.nan,

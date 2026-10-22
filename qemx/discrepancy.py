@@ -130,12 +130,7 @@ def marginal(p, bits, n: int) -> np.ndarray:
     return out
 
 
-def null_distance(p_model, shots: int, metric: str = "tvd", reps: int = 2000, rng=None) -> np.ndarray:
-    """Distances between the model and empirical distributions of ``shots`` samples drawn from the model itself: the
-    sampling distribution of the plug-in metric when the model is exactly right (parametric bootstrap)."""
-    p = check_distribution(p_model, "p_model")
-    rng = np.random.default_rng(rng)
-    F = rng.multinomial(int(shots), p, size=int(reps)) / float(shots)
+def _dist_rows(F, p, metric):
     if metric == "tvd":
         return 0.5 * np.abs(F - p).sum(1)
     if metric == "hellinger":
@@ -145,19 +140,47 @@ def null_distance(p_model, shots: int, metric: str = "tvd", reps: int = 2000, rn
     raise ValueError("unknown metric %r" % metric)
 
 
-def distance_test(p_model, counts_freq, shots: int, metric: str = "tvd", reps: int = 2000, rng=None) -> dict:
+def null_distance(p_model, shots: int, metric: str = "tvd", reps: int = 2000, rng=None, p_draws=None) -> np.ndarray:
+    """Distances between the model and empirical distributions of ``shots`` samples drawn under the model: the
+    sampling distribution of the plug-in metric when the model is right (parametric bootstrap).
+
+    ``p_draws`` (K × outcomes): draws of the model's distribution under its own parameter uncertainty (a calibration
+    estimated from finite shots, a fitted noise model). Each null replicate then first draws one parameter value,
+    then ``shots`` samples from that distribution, and compares them with ``p_model`` (the prediction actually
+    used): the observed counts come from *one* realization of the uncertain parameter, so their law is a mixture of
+    multinomials. Substituting the average distribution into a single multinomial is not equivalent in general — it
+    understates the spread when the parameter uncertainty is not negligible against shot noise."""
+    p = check_distribution(p_model, "p_model")
+    rng = np.random.default_rng(rng)
+    if p_draws is None:
+        F = rng.multinomial(int(shots), p, size=int(reps)) / float(shots)
+    else:
+        D = np.atleast_2d(np.asarray(p_draws, float))
+        if D.shape[1] != p.size:
+            raise ValueError("p_draws must have one column per outcome (%d), not %d" % (p.size, D.shape[1]))
+        for k in range(D.shape[0]):
+            check_distribution(D[k], "p_draws[%d]" % k)
+        pick = rng.integers(0, D.shape[0], int(reps))
+        F = np.stack([rng.multinomial(int(shots), D[k] / D[k].sum()) for k in pick]) / float(shots)
+    return _dist_rows(F, p, metric)
+
+
+def distance_test(p_model, counts_freq, shots: int, metric: str = "tvd", reps: int = 2000, rng=None,
+                  p_draws=None) -> dict:
     """Observed plug-in distance and its p-value under the model at the same shots (one-sided: larger is worse; for
-    the classical fidelity, smaller is worse). The model's own Monte-Carlo or parameter uncertainty is not included:
-    pass a model distribution that already integrates it, or widen with ``residual``."""
+    the classical fidelity, smaller is worse). By default the model is treated as exact. To include the model's own
+    parameter uncertainty, pass ``p_draws`` (draws of its distribution under that uncertainty): the null is then the
+    mixture of multinomials described in :func:`null_distance` (``null`` says which was used)."""
     p = check_distribution(p_model, "p_model")
     f = check_distribution(counts_freq, "observed")
     obs = {"tvd": tvd, "hellinger": hellinger, "classical_fidelity": classical_fidelity}[metric](p, f)
-    null = null_distance(p, shots, metric, reps, rng)
+    null = null_distance(p, shots, metric, reps, rng, p_draws)
     worse = (null <= obs) if metric == "classical_fidelity" else (null >= obs)
     return dict(metric=metric, observed=float(obs), null_mean=float(null.mean()), null_q95=float(
         np.quantile(null, 0.05 if metric == "classical_fidelity" else 0.95)),
         p_value=float((worse.sum() + 1) / (len(null) + 1)), shots=int(shots), outcomes=int(p.size),
-        sparse=bool(int(shots) < 5 * p.size))
+        sparse=bool(int(shots) < 5 * p.size),
+        null="exact model (multinomial)" if p_draws is None else "mixture over %d parameter draws" % len(p_draws))
 
 
 def residual(o_obs: float, o_pred: float, se_obs: float, se_pred: float = 0.0, se_model: float = 0.0) -> dict:

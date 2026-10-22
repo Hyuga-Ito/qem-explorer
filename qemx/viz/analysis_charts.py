@@ -39,20 +39,25 @@ def _base(fig, dark, height, **kw):
 def rmse_vs_shots(rows: list, shots, eps: float | None, n_budget: float | None, dark=False, t_shot_us: float = 250.0,
                   crossings: list | None = None) -> go.Figure:
     """RMSE(N) = sqrt(b² + v/N) per method on log–log axes; the floor |b| is where more shots stop helping."""
-    from ..analysis import rmse_row
+    from ..analysis import curve_sources, rmse_row, target_grid
     sty = style_map([(r["method"], r["family"]) for r in rows])
     fig = go.Figure()
     shots = np.asarray(shots, float)
     for r in rows:
         col, dash, sym = sty[r["method"]]
         y = rmse_row(r, shots)
+        nl = target_grid(r) is not None
+        # the bias floor: the large-budget limit (for target-nonlinear rows the reference bias, not this budget's)
+        floor = abs(float(r.get("reference bias", r["bias"]))) if nl else abs(r["bias"])
+        src = curve_sources(r, shots) if nl else ["analytic"] * len(shots)
         fig.add_trace(go.Scatter(x=shots, y=y, mode="lines", name=r["method"], line=dict(color=col, width=2.4, dash=dash),
-                                 customdata=np.stack([shots * t_shot_us * 1e-6, np.full_like(shots, abs(r["bias"]))], 1),
+                                 customdata=np.stack([shots * t_shot_us * 1e-6, np.full_like(shots, floor)], 1),
+                                 text=src,
                                  hovertemplate="%s<br>N = %%{x:,.0f} shots (%%{customdata[0]:.3g} s QPU)"
-                                               "<br>RMSE = %%{y:.4g}<br>bias floor %%{customdata[1]:.3g}<extra></extra>"
-                                               % r["method"]))
-        if abs(r["bias"]) > 0:
-            fig.add_trace(go.Scatter(x=[shots[0], shots[-1]], y=[abs(r["bias"])] * 2, mode="lines", showlegend=False,
+                                               "<br>RMSE = %%{y:.4g} (%%{text})<br>bias floor %%{customdata[1]:.3g}"
+                                               "<extra></extra>" % r["method"]))
+        if floor > 0 and np.isfinite(floor):
+            fig.add_trace(go.Scatter(x=[shots[0], shots[-1]], y=[floor] * 2, mode="lines", showlegend=False,
                                      line=dict(color=col, width=1, dash="dot"), hoverinfo="skip", opacity=0.6))
     if eps:
         fig.add_hline(y=eps, line=dict(color=T.ink(dark), width=1.4, dash="dash"))

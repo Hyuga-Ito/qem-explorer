@@ -210,7 +210,7 @@ def test_hardware_plan_allocates_the_budget_like_the_simulator():
     for i, a in plan.alloc.items():
         reqs = [r for r in plan.requests.values() if r.tag == i]
         tot = sum(r.shots for r in reqs)
-        assert abs(tot - plan.shots) <= len(reqs), (plan.recipes[i].title(), tot)
+        assert tot == plan.shots == a["effective_budget"], (plan.recipes[i].title(), tot)   # exact (review F08)
     tags = {}
     for k, r in plan.requests.items():                  # contenders never share measured counts
         tags.setdefault(r.spec.key(), set()).add(r.tag)
@@ -218,7 +218,11 @@ def test_hardware_plan_allocates_the_budget_like_the_simulator():
     shots = [r.shots for r in plan.requests.values() if r.tag == zne]
     assert len(set(shots)) > 1                            # N_j ∝ |η_j|σ_j, not an even split
     pec = next(i for i, rc in enumerate(plan.recipes) if rc.estimator == "pec")
-    assert plan.alloc[pec]["spc"] == round(plan.shots / 8)
+    # the configured protocol is kept (review F09): one shot per sampled circuit, N_t sampled circuits — not
+    # instances = 8 circuits with N_t/8 shots each
+    assert plan.alloc[pec]["spc"] == 1
+    tgt = [r for r in plan.requests.values() if r.tag == pec and r.role == "target"]
+    assert sum(r.multiplicity for r in tgt) == plan.alloc[pec]["target"] == plan.shots
 
 
 def test_hardware_results_have_the_simulator_structure():
