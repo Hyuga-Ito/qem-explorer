@@ -95,7 +95,12 @@ def _numbers(run: str) -> list:
     out = []
 
     def rd(p):
-        return pd.read_csv(p, encoding="utf-8") if os.path.exists(p) else None
+        if not os.path.exists(p):
+            return None
+        try:
+            return pd.read_csv(p, encoding="utf-8")
+        except pd.errors.EmptyDataError:             # a table without rows (e.g. no confirmation yet)
+            return None
     m = rd(os.path.join(fdir, "fig04_generalization_learning__matrix.csv"))
     if m is not None:
         for _, r in m.iterrows():
@@ -147,6 +152,47 @@ def _numbers(run: str) -> list:
             t = mc[mc.policy == r.policy]
             ok &= len(t) == 1 and r.mean_log10_MSE.startswith("%.3f" % t.mean_log10_risk.iloc[0])
         out.append(("table3 against metrics_confirm", bool(ok)))
+    # 1.8.0 figures and thesis tables
+    dc = rd(os.path.join(fdir, "supp_deployment_policy__comparison.csv"))
+    if dc is not None and len(dc):
+        ok = True
+        for r in dc[dc.kind.str.startswith("POLICY|")].itertuples():
+            js = os.path.join(run, "replay", "replay_%s.json" % r.kind.split("|", 1)[1])
+            s_ = TX.read_json(js) if os.path.exists(js) else {}
+            ok &= _close(float(r.diff), float(s_.get("diff", math.nan)))
+        out.append(("supp_deployment_policy against replay summaries", bool(ok)))
+    pc = rd(os.path.join(fdir, "supp_portfolio_expansion__contrasts.csv"))
+    pt = rd(os.path.join(run, "portfolio", "portfolio_contrasts.csv"))
+    if pc is not None and pt is not None:
+        m = pc.merge(pt, on="contrast", suffixes=("", "_t"))
+        out.append(("supp_portfolio_expansion against portfolio_contrasts",
+                    len(m) == len(pc) and all(_close(x, y) for x, y in zip(m["diff"], m["diff_t"]))))
+    sv = rd(os.path.join(fdir, "supp_tails__severe.csv"))
+    lab = rd(os.path.join(adir, "labels.csv"))
+    if sv is not None and lab is not None:
+        import numpy as np
+        lab["feasible"] = lab.feasible.astype(str).str.lower().isin(["true", "1", "1.0"])
+        raw = lab[lab.protocol == "RAW"].set_index(["task_id", "B"]).mse_eval.rename("raw")
+        lab = lab.join(raw, on=["task_id", "B"])
+        ok = True
+        for r in sv.dropna(subset=["p_severe_vs_raw"]).itertuples():
+            q = lab[(lab.protocol == r.protocol) & (lab.B == r.B) & lab.feasible & np.isfinite(lab.mse_eval)]
+            per = (q.mse_eval > 10 * q.raw).astype(float).groupby(q.base_id).mean()
+            ok &= _close(float(per.mean()), float(r.p_severe_vs_raw))
+        out.append(("supp_tails severe rates against labels", bool(ok)))
+    t7 = rd(os.path.join(run, "thesis_tables", "t7_portfolio.csv"))
+    if t7 is not None and pt is not None:
+        m = t7.merge(pt, on="contrast", suffixes=("", "_t"))
+        out.append(("thesis t7 against portfolio_contrasts",
+                    len(m) == len(t7) and all(_close(x, y) for x, y in zip(m["diff"], m["diff_t"]))))
+    t3c = rd(os.path.join(run, "thesis_tables", "t3_confirmation.csv"))
+    if t3c is not None and mc is not None:
+        mc_ = mc[mc.B.astype(str) == "all"]
+        ok = True
+        for r in t3c[~t3c.policy.str.startswith("POLICY|")].itertuples():
+            t = mc_[mc_.policy == r.policy]
+            ok &= len(t) == 1 and _close(float(t.mean_log10_risk.iloc[0]), float(r.mean_log10))
+        out.append(("thesis t3 against metrics_confirm", bool(ok)))
     return out
 
 
@@ -180,7 +226,7 @@ def validate(run: str) -> dict:
                 with open(p, encoding="utf-8") as fh:
                     lines = sum(1 for _ in fh)
                 if lines < 2 and not csv.endswith(("software_failures.csv", "design_study.csv",
-                                                   "composition.csv")):
+                                                   "composition.csv", "supp_tails__designs.csv")):
                     errs.append("%s has no rows" % csv)
         res["figures"][n] = errs
     res["numbers"] = [dict(check=c, ok=bool(ok)) for c, ok in _numbers(run)]

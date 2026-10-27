@@ -1,4 +1,5 @@
-r"""Hardware validation of the selection recommender: planning, preflight and an authorization gate (1.7.0).
+r"""Hardware validation of the selection recommender: planning, preflight and an authorization gate (1.7.0;
+1.8.0: one deployed-policy call per task, the preflight status of every planned protocol recorded).
 
 Hardware transfer is a secondary, optional stage of the study (roadmap stage F). This module prepares it; it never
 submits anything by itself.
@@ -57,23 +58,22 @@ def plan(cfg: dict, bundle_path: str | None = None, ledger=None, model=None) -> 
         dep = DP.from_spec(spec, B)
         comp = dep.compile()
         names = []
+        rec = DP.recommend(dep, bundle) if bundle is not None else None     # one call: the deployed policy (1.8.0)
         for p in hw["protocols"]:
             if p == "recommended":
-                if bundle is None:
+                if rec is None:
                     continue
-                r = DP.recommend(dep, bundle)
-                names.append(("recommended", r["choice"]))
+                names.append(("recommended", rec["choice"]))
             elif p == "SBS-B":
-                if bundle is None:
+                if rec is None:
                     continue
-                r = DP.recommend(dep, bundle)
-                names.append(("SBS-B", r["fallback"]))
+                names.append(("SBS-B", rec["fallback"]))
             else:
                 names.append((p, p))
         seen = {}
         for role, k in names:
             seen.setdefault(k, []).append(role)
-        recipes = [PR.PORTFOLIO[k].recipe() for k in seen]
+        recipes = [PR.PORTFOLIO[k].recipe(spec) for k in seen]    # declared parameters (e.g. SV's checks) resolved
         hp = HW.make_plan(comp, dep.obs(), recipes, B, backend=DV.fake_backend(hw["device"]))
         labels = hp.labels()
         for idx, (k, roles) in enumerate(seen.items()):
@@ -82,9 +82,13 @@ def plan(cfg: dict, bundle_path: str | None = None, ledger=None, model=None) -> 
             # a merged request is measured once with the shares of every occurrence already added to its shots
             # (qemx.hardware.Request.multiplicity counts the occurrences; multiplying by it overcounted PEC runs)
             shots = sum(int(r.shots) for r in req)
+            pf = ((rec or {}).get("preflight") or {}).get(k, {})
             rows.append(dict(task=spec.label, task_id=spec.task_id, protocol=k, roles=roles, B=B,
                              label=labels[idx] if idx < len(labels) else k, supported=skipped is None,
-                             reason=skipped or "", circuits=len(req), shots=shots, blocks=int(hw["blocks"])))
+                             reason=skipped or "", circuits=len(req), shots=shots, blocks=int(hw["blocks"]),
+                             preflight=pf.get("status"), preflight_level=pf.get("level"),
+                             recommendation_status=(rec or {}).get("status"),
+                             recommendation_accepted=(rec or {}).get("accepted")))
             if skipped is None and req:
                 for b in range(int(hw["blocks"])):
                     jobs.append(("%s · %s · block %d" % (spec.label[:40], k, b + 1), shots, len(req)))
@@ -103,7 +107,8 @@ def plan(cfg: dict, bundle_path: str | None = None, ledger=None, model=None) -> 
                    backend=hw["backend_name"], blocks=int(hw["blocks"]), ceiling_s=float(hw["ceiling_s"]),
                    reserve_s=float(hw["reserve_s"]), runs=rows, jobs=jrows,
                    bundle=bundle.meta["version"] if bundle else None,
-                   bundle_digest=bundle.meta.get("arrays_sha256") if bundle else None)
+                   bundle_digest=bundle.meta.get("arrays_sha256") if bundle else None,
+                   policy=DP.POLICY if bundle else None)
     out = dict(content, digest=_digest(content), remaining_s=remaining, reserved_s=cum, admitted_jobs=adm,
                total_jobs=len(jobs), fits=adm == len(jobs), executed=False,
                note="Plan only: nothing was submitted. Execution needs QEMX_HW_AUTHORIZE=<digest>, a campaign ledger "
@@ -126,8 +131,10 @@ def write(p: dict, out_dir: str) -> str:
         L.append("| %s | %s | %s | %s | %d | %s | %d |" % (r["task"], r["protocol"], ", ".join(r["roles"]),
                                                              "yes" if r["supported"] else "no: " + r["reason"],
                                                              r["circuits"], f"{r['shots']:,}", r["blocks"]))
-    L += ["", "To execute (owner only): set `%s=%s`, a campaign ledger (`QEMX_CAMPAIGN_LEDGER`) and credentials, then "
-          "`python -m qemx.selection hardware execute --plan %s`." % (ENV_AUTH, p["digest"], "hardware_plan.json")]
+    L += ["", "To execute (owner only): `python -m qemx.selection hardware check --plan %s` verifies the plan; set "
+          "`%s=%s`, a campaign ledger (`QEMX_CAMPAIGN_LEDGER`) and credentials (environment, saved account or hidden "
+          "prompt), then submit through the approved IBM workflow with the ledger (`docs/selection/HARDWARE.md`). "
+          "Neither `plan` nor `check` submits anything." % ("hardware_plan.json", ENV_AUTH, p["digest"])]
     TX.write_text(os.path.join(out_dir, "hardware_plan.md"), "\n".join(L) + "\n")
     return os.path.join(out_dir, "hardware_plan.json")
 

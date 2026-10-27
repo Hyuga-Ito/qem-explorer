@@ -1,0 +1,71 @@
+# Confirmation set (1.8.0) — new logical circuits for a once-only confirmation of the recommender frozen on dev18.yaml.
+# Declared before any of these tasks was labeled (and before the dev18 analysis was run). Every base circuit is new:
+# new angle seeds and parameters (configs/selection/ancestry_registry.json, role "confirmation"); `python -m
+# qemx.selection confirm` refuses to run if any of them appears in another study. Same families, widths, devices and
+# variant pool as dev18 (an in-distribution confirmation); the same expanded portfolio, seed scheme and label plan.
+# The full deployed policy (qemx.selection.replay, deploy.recommend with its guard, preflight and fallback) is
+# evaluated on these tasks too, once, beside the model-component benchmark.
+schema: qemx.selection.config/1
+name: conf18
+status: planned
+master_seed: 20261025
+R: 60
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 6, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4, 5, 6]
+    families:
+      hea: [{layers: 2, angle_seed: 1901}]
+      qaoa: [{p: 1, angle_seed: 1911}, {p: 2, angle_seed: 1912}]
+      brickwork: [{layers: 3, angle_seed: 1921}]
+      ising: [{steps: 2, h: 0.75}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [3, 4, 5, 6]
+    families:
+      ghz: [{theta: 0.8, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 2
+    include_default: false
+  - widths: [4]
+    families:
+      ghz: [{theta: 1.05}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [4, 5]
+    families:
+      qft: [{s: 7}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [5]
+    families:
+      bv: [{secret: 9}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [3]
+    families:
+      grover: [{k: 1, marked: 1}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+limits: {task_seconds: 5400, memory_gb: 3}

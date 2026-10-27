@@ -1,0 +1,29 @@
+# Historical reproduction of the frozen 1.8.0 study into a NEW directory (fake-device emulation only; days of CPU).
+# Reproducing an already inspected study does not create new untouched evidence: its confirmation set (conf18) was
+# evaluated once in 1.8.0; re-running it here reproduces that evaluation, it is not a new confirmation.
+#   python -m qemx.selection pipeline configs/pipelines/reproduce_v18.yaml --out runs/v18_repro --workers auto
+# Replaces scripts/reproduce_v18.sh's command list (which stopped at an existing freeze and hid confirmation
+# failures behind "|| true"); every stage is verified or resumed and every failure stops the dependent stages.
+schema: qemx.selection.pipeline/1
+name: reproduce_v18
+purpose: historical-reproduction
+workers: 2
+development: configs/selection/dev18.yaml
+confirmation: {config: configs/selection/conf18.yaml, train: dev}
+studies:
+  - {config: configs/selection/noisecomp18.yaml, subdir: noisecomp}
+  - {config: configs/selection/regimes18.yaml, subdir: regimes}
+plot_config: configs/selection/figures18.yaml
+analyze:
+  extras: ablation,learning_curve,budget_generalization,abstention,interval_coverage,certificates,floor_sensitivity,design_diagnostics
+bundles:
+  - {version: qemx-rec-1.8.0, feature_set: frozen, simulation: true}
+  - {version: qemx-rec-1.8.0-deployable, feature_set: deployable18, simulation: false}
+profile: {widths: "3,4,5,6,7"}
+tables: true
+scripts:
+  - {name: root-audit-label, after: label, argv: [scripts/root_audit.py, label, --out, "{out}/audit18", --workers, "{workers}"]}
+  - {name: portfolio, after: analyze, argv: [scripts/portfolio_comparison.py, --labels, "{out}/dev", --out, "{out}/portfolio"]}
+  - {name: root-audit-analyze, after: analyze, argv: [scripts/root_audit.py, analyze, --out, "{out}/audit18", --bundle, "{bundles}/qemx-rec-1.8.0-deployable"]}
+stages: [plan, label, studies-label, scripts-label, analyze, freeze, nested, freeze-complete, confirm, bundles, replay,
+         studies-analyze, scripts-analyze, profile, figures, report, tables, status]

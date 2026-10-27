@@ -1,0 +1,364 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-25T09:26:08+00:00",
+ "identity": {
+  "stage": "dev",
+  "labels_config": "1c59afa65e137d12",
+  "tasks": "853ee71880df209a",
+  "n_tasks": 54,
+  "split": {
+   "final_test_fraction": 0.0,
+   "salt": "qemx-1.6-final",
+   "development": "45d7acc0b274c845",
+   "final": "4f53cda18c2baa0c"
+  },
+  "portfolio": "d97de6fc55ac3e22",
+  "devices": {
+   "fake_fez": "4eb21db4db0cca8f",
+   "fake_fez@eng=exact": "6916f73eab2f1fb1",
+   "fake_fez@ro=2": "d3f988071c3fdb8a",
+   "fake_fez@ro=2,eng=exact": "e516b4c76a1b7918",
+   "fake_fez@s=0.5": "932e7d0d5b8e51a9",
+   "fake_fez@s=0.5,eng=exact": "02b440b8b4e752f5",
+   "fake_fez@s=2": "705698089f93dca8",
+   "fake_fez@s=2,eng=exact": "3b1abde0d12d9a81",
+   "fake_kyiv": "bbecee3c55ae6c5f",
+   "fake_kyiv@eng=exact": "4f698c1df246ce3d",
+   "fake_kyiv@t=2": "7557b51fe1ee8abf",
+   "fake_kyiv@t=2,eng=exact": "8cde4b706839e844",
+   "fake_torino": "4a415b23c89eb31d",
+   "fake_torino@eng=exact": "7a6f5708518ecbde",
+   "fake_torino@g2=2": "85a1261332f0870f",
+   "fake_torino@g2=2,eng=exact": "176c1797147c8293"
+  }
+ },
+ "identity_digest": "ba37652708958c4f",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "pilot19",
+  "status": "planned",
+  "expansion_policy": "explicit",
+  "master_seed": 20261102,
+  "R": 24,
+  "budgets": [
+   1000,
+   30000,
+   1000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 3,
+   "seed_scheme": 2,
+   "crn": "task"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     3,
+     4,
+     5
+    ],
+    "families": {
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 1911
+      },
+      {
+       "layers": 3,
+       "angle_seed": 1914
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 1912
+      },
+      {
+       "p": 2,
+       "angle_seed": 1915
+      }
+     ],
+     "ising": [
+      {
+       "steps": 2,
+       "h": 0.63
+      },
+      {
+       "steps": 1,
+       "h": 0.87
+      }
+     ],
+     "brickwork": [
+      {
+       "layers": 2,
+       "angle_seed": 1913
+      },
+      {
+       "layers": 3,
+       "angle_seed": 1916
+      }
+     ]
+    },
+    "inputs": [
+     "default",
+     "plus",
+     "product"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv",
+     "fake_fez@s=0.5",
+     "fake_fez@s=2",
+     "fake_torino@g2=2",
+     "fake_kyiv@t=2",
+     "fake_fez@ro=2"
+    ],
+    "include_default": false,
+    "variants_per_base": 2
+   },
+   {
+    "widths": [
+     3,
+     4,
+     5
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.75,
+       "basis": "Z"
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "z_mid"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino@g2=2",
+     "fake_kyiv@t=2"
+    ],
+    "include_default": false,
+    "variants_per_base": 2
+   }
+  ],
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3,
+   "cpu_hours": 6,
+   "disk_gb": 2,
+   "min_free_disk_gb": 2
+  },
+  "analysis": {
+   "splits": [
+    "same-distribution",
+    "noise",
+    "device-base",
+    "joint"
+   ],
+   "split_options": {
+    "same-distribution": {
+     "k": 5
+    },
+    "noise": {
+     "k": 3
+    },
+    "device-base": {
+     "k": 3
+    },
+    "joint": {
+     "test_family": "hea",
+     "test_noise": "g2=2"
+    }
+   },
+   "feature_sets": [
+    "size_budget",
+    "deployable18",
+    "deployable18+simulated"
+   ],
+   "model_families": [
+    "ridge",
+    "enet",
+    "hgb",
+    "struct"
+   ],
+   "abstain_family": "hgb",
+   "abstain_set": "deployable18",
+   "ablation_set": "deployable18",
+   "other_split_sets": [
+    "size_budget",
+    "deployable18"
+   ],
+   "other_split_families": [
+    "ridge",
+    "hgb"
+   ],
+   "bootstrap": 500,
+   "lc_repeats": 2,
+   "extras": [
+    "design_diagnostics",
+    "learning_curve"
+   ]
+  }
+ },
+ "manifest": [
+  "03e2f563265605cd08cf",
+  "05e26fcd45bb61126c6d",
+  "0c054cd1664fa8ecdde7",
+  "11545b9f00edc97fee4e",
+  "15ee7aa01379ca3799d7",
+  "1a552bd884fc74a60427",
+  "21994a40efabbc483a4b",
+  "24583cb60285c064a918",
+  "2d4921cdb6170cd52284",
+  "2e08038c8bde416d4a53",
+  "317080b1f4d633ccf84c",
+  "3294d86a72f8a9dfd8c1",
+  "391e567b3caa9af78cf5",
+  "3bdb65a249bf482894a0",
+  "40df5cc34e33a1966f35",
+  "4282b5c25e73f0f83e01",
+  "46ac1410b413f86ef8ab",
+  "4a6f463e086266fb9530",
+  "4c5f86c1fe53379c936e",
+  "50b5e52010448809af7c",
+  "53da863745d2bb07a4b2",
+  "55ffe3c0f7800cd7e3fc",
+  "5f8df68df1480952adb5",
+  "640fb9ceff693ebaaa6e",
+  "6650e502569f4e8d3801",
+  "6ce45f56aa8c2aefe101",
+  "72351f7453bfe5eedcd3",
+  "7b6a02c3dbd630e34371",
+  "7f9867caaee5835b8016",
+  "871f665ef3b6c2d3aad4",
+  "8e2a3476843ce960795d",
+  "923ba18a8902bc223c89",
+  "96c42c7d1e9b4ac3a42d",
+  "9917264c0ba25f4631ad",
+  "9dd0b3d7af9c467702e8",
+  "a8f1162a7b5cbcd76d53",
+  "ab9cf9b6695cd140d165",
+  "ac306f8a729b83dd330e",
+  "ace08656b2744b536605",
+  "b2a05bd76dfdbf966019",
+  "b379abb026c7dfda2448",
+  "b6b3beeac0e6102293b2",
+  "bb5772149d04119fdfea",
+  "bee0e1911f02dfe91b0f",
+  "c19fd1b1ef16f3d12211",
+  "c8135fb5f02f18100321",
+  "d5eba3d762c700d05824",
+  "d79b61b97cbd2c7965a1",
+  "da6d6005ca92b0fc164d",
+  "dde343f32ac46cedeada",
+  "e280fa31e2445d02222e",
+  "f17aa1df078dbfd10269",
+  "f92a3551328e9a38be71",
+  "f9c87efc1d077dba0e26"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-25T09:26:08+00:00",
+   "execution": {
+    "code": "1467bbddf22a8173",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "threads_per_worker": {
+     "OMP_NUM_THREADS": "1",
+     "OPENBLAS_NUM_THREADS": "1",
+     "MKL_NUM_THREADS": "1"
+    },
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   },
+   "admission": {
+    "admitted": true,
+    "exceeded": [],
+    "unknown": [
+     "cpu_hours"
+    ],
+    "override": null,
+    "preflight_caps": {
+     "cpu_hours": {
+      "cap": 6.0,
+      "estimate": null,
+      "status": "unknown",
+      "monitored": true,
+      "enforcement": "no new task starts once the run's summed task seconds reach the cap"
+     },
+     "disk_gb": {
+      "cap": 2.0,
+      "estimate": 0.00166243314743042,
+      "status": "within",
+      "monitored": true,
+      "enforcement": "no new task starts once the labels directory reaches the cap"
+     },
+     "free_disk": {
+      "cap": 12.435646057128906,
+      "estimate": 2.0016624331474304,
+      "status": "within",
+      "monitored": true,
+      "enforcement": "no new task starts while free space is below limits.min_free_disk_gb"
+     }
+    }
+   }
+  }
+ ],
+ "imports": []
+}

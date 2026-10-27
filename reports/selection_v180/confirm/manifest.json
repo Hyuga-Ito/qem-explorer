@@ -1,0 +1,1462 @@
+{
+ "schema": "qemx.selection.manifest/2",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "conf18",
+  "status": "planned",
+  "master_seed": 20261025,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "task"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 1901
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 1911
+      },
+      {
+       "p": 2,
+       "angle_seed": 1912
+      }
+     ],
+     "brickwork": [
+      {
+       "layers": 3,
+       "angle_seed": 1921
+      }
+     ],
+     "ising": [
+      {
+       "steps": 2,
+       "h": 0.75
+      }
+     ]
+    },
+    "inputs": [
+     "default",
+     "plus",
+     "product"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.8,
+       "basis": "Z"
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "z_mid"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 2,
+    "include_default": false
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 1.05
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     4,
+     5
+    ],
+    "families": {
+     "qft": [
+      {
+       "s": 7
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     5
+    ],
+    "families": {
+     "bv": [
+      {
+       "secret": 9
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3
+    ],
+    "families": {
+     "grover": [
+      {
+       "k": 1,
+       "marked": 1
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   }
+  ],
+  "limits": {
+   "task_seconds": 5400,
+   "memory_gb": 3
+  }
+ },
+ "development": [
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1901
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_torino",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_all",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_all",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_torino",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 6,
+   "params": [
+    [
+     "angle_seed",
+     1921
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_all",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 6,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 6,
+   "params": [
+    [
+     "h",
+     0.75
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 3,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 3,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 5,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 5,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 6,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 6,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.8
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "theta",
+     1.05
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "theta",
+     1.05
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qft",
+   "n": 4,
+   "params": [
+    [
+     "s",
+     7
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qft",
+   "n": 4,
+   "params": [
+    [
+     "s",
+     7
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qft",
+   "n": 5,
+   "params": [
+    [
+     "s",
+     7
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qft",
+   "n": 5,
+   "params": [
+    [
+     "s",
+     7
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_all",
+   "device": "fake_fez",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "bv",
+   "n": 5,
+   "params": [
+    [
+     "secret",
+     9
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "bv",
+   "n": 5,
+   "params": [
+    [
+     "secret",
+     9
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "grover",
+   "n": 3,
+   "params": [
+    [
+     "k",
+     1
+    ],
+    [
+     "marked",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "grover",
+   "n": 3,
+   "params": [
+    [
+     "k",
+     1
+    ],
+    [
+     "marked",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  }
+ ],
+ "final": [],
+ "run_identity": "8f20675be7b1652d"
+}

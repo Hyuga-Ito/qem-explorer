@@ -1,0 +1,20 @@
+# 1.9.0 pilot pipeline (prospective, bounded; about 1 CPU-hour of labels on two cores plus the analysis): measures
+# the costs of the new noise-diverse development design and checks every stage on real (small) data. Its numbers are
+# a pilot's, used for planning (fulldev19) — not results.
+#   python -m qemx.selection pipeline configs/pipelines/pilot19.yaml --out runs/pilot19 --workers auto
+schema: qemx.selection.pipeline/1
+name: pilot19
+purpose: pilot
+out: runs/pilot19
+workers: 2
+development: configs/selection/pilot19.yaml
+plot_config: configs/selection/figures18.yaml
+bundles:
+  - {version: pilot19-sim, feature_set: frozen, simulation: true}
+  - {version: pilot19-deployable, feature_set: deployable18, simulation: false}
+recommend_check: {experiment: examples/experiments/qft_known_answer.yaml, budget: 100000, device: fake_fez}
+profile: {widths: "3,4,5,6"}
+scripts:
+  - {name: portfolio, after: analyze, argv: [scripts/portfolio_comparison.py, --labels, "{out}/dev", --out, "{out}/portfolio"]}
+stages: [plan, label, analyze, freeze, nested, freeze-complete, bundles, scripts-analyze, recommend-check, profile,
+         figures, report, status]

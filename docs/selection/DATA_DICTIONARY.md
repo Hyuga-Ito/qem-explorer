@@ -1,4 +1,4 @@
-# Data dictionary — protocol-selection study (1.7.0)
+# Data dictionary — protocol-selection study (1.8.0)
 
 ## Configuration (`configs/selection/*.yaml`, schema `qemx.selection.config/1`)
 
@@ -48,6 +48,17 @@ y_min, y_max, sv_max, sv_min, condition, exact_feature_estimate; research only: 
 oracle_ideal_in_label_range), `design_status`, `prepare_seconds`, `seconds`, `flags`, `arrays` (sha256 of the NPZ;
 a mismatch is refused as corrupted).
 
+1.8.0 additions (seed scheme 2, finding N1): `design_plan` carries `seed_scheme` (1 = the 1.6/1.7 per-study seed
+pool; 2 = streams derived from stable identifiers by `emulate.stream_seed(root, crn_key, protocol, half, index,
+role)`) and `crn` (`task`: one stream namespace per task; `base`: shared by the variants of a base circuit — common
+random numbers declared as a group); every design record adds `instance_id` (the unique design-instance identity:
+seed token plus the identifiers it was derived from) beside the seed token; summaries carry `seed_scheme` and
+`crn_group`. Records are bound to their run (`run_id` = the run's `identity_digest`, mismatch labels included,
+finding F3); a record without `seed_scheme` and with an empty `run_id` is legacy evidence (`legacy_unbound`), never
+mixed into a scheme-2 run. Unavailable or unbounded numbers are written as JSON `null` with a `"$nonfinite"` map of
+their JSON pointers (`"nan"`, `"inf"`, `"-inf"`), restored on reading; 1.7.0 records with `NaN` tokens stay
+readable (finding F9).
+
 NPZ arrays: `est` (2, P, nB, R) unclipped estimates of the selection (0) and evaluation (1) halves, NaN where
 infeasible; `flags` (2, P, nB, 4, R) booleans in the order `cal_fallback`, `fit_fallback`, `learn_fallback`,
 `nonresponse`; `design` (2, P, nB, R) the trial's design index in its half's pool (−1: no design); `trial_seconds`
@@ -67,7 +78,7 @@ per_task_seconds of the tasks labeled in it).
 
 | table | columns |
 |---|---|
-| `labels.csv` | task_id, base_id, family, n, device, truth, protocol, B, feasible, status (ok / infeasible / method-error), reason, ideal, design_mode, r, shots_{calibration, training, diagnostics, selection, execution}, t_exec, circuits_sent, and per half (sel, eval): mse, bias, var, se_mse (matching the estimand: design-level for CDR/NIL under fresh designs), se_mse_trial, se_mse_design, var_between_design, var_within_design, designs, mse_clip, the four flag rates, fail_any (share of trials with ≥ 1 flag; the union), flags_per_trial |
+| `labels.csv` | task_id, base_id, family, n, device, truth, protocol, B, feasible, status (ok / infeasible / method-error), reason, ideal, design_mode, r, shots_{calibration, training, diagnostics, selection, execution}, t_exec, circuits_sent, and per half (sel, eval): mse, bias, var, var_deploy (1.8.0: the one-way random-effects deployment variance σ̂²_W + σ̂²_D of one fresh design and one trial; finding F5 — `var` stays the pooled variance of the trials), se_mse (matching the estimand: design-level for learning protocols under fresh designs), se_mse_trial, se_mse_design, var_between_design, var_within_design, designs, mse_clip, the four flag rates, fail_any (share of trials with ≥ 1 flag; the union), flags_per_trial; 1.8.0: seed_scheme, crn_group |
 | `label_failures.csv` | task_id, status (error / timeout / memory), error_kind, error — label tasks without labels, excluded from the dataset |
 | `collection.json` | legacy (no run.json), manifest size, missing and unexpected task ids, failures, imports, rows, design_mode |
 | `design_diagnostics.csv` | per task, learning protocol, budget (10⁴, 10⁶, 3·10⁷), half and design: task_id, base_id, family, n, device, protocol, B, half, design, design_id, seed, status, fallback, trials, mean_loss, mean_estimate, ideal, fallback_rate, and every `diag_*` diagnostic of the design record |
@@ -79,7 +90,7 @@ per_task_seconds of the tasks labeled in it).
 | `nested_curve.csv` | descriptive sweep of τ on the outer rows: tau, coverage, policy_mse, policy_log10_risk, random_policy_mse, random_policy_log10_risk, accepted_log_regret |
 | `nested_operating.csv` | deploy_tau (frozen by `freeze --complete`), rule, chosen_on, performance, configuration |
 | `nested_groups.csv` | Table S1: group (family / device), value, rows, base_circuits, rejection_rate (base-circuit weighted), statement |
-| `summary_<split>.csv` | split, part, policy, B (or `all`), rows, base_circuits; risk: mean_log10_risk with ci_lo/ci_hi, policy_mse (base-circuit-weighted arithmetic mean MSE); regret against the per-task reference (the protocol identified on the selection half, scored on the evaluation half): mean_log_regret with log_regret_lo/log_regret_hi, median_log_ratio, p90_log_regret, mean_regret, median_regret, p90_regret (absolute, MSE units), p_negative_regret, p_regret_gt_10pct, p_regret_gt_2x, tol_success_10pct and tol_success_2x (share within 10 % / a factor 2 of the reference); raw_degradation (share of rows worse than RAW); fail_share (mean share of trials on a fallback path or without response); coverage, accepted_log10_risk; gap_closed with gap_lo/gap_hi; paired differences diff_vs_sbs (diff_lo/diff_hi), diff_vs_sbsb and diff_vs_sizeb with their `_lo`/`_hi` |
+| `summary_<split>.csv` | (1.8.0 adds the declared tails: p_severe_vs_raw — share of rows whose chosen risk exceeds 10 × RAW's on the same row; p_severe_abs — share of rows with risk > 0.1; q95_risk — 95 % quantile of the chosen risk; worst5_loss_share — share of the total circuit-averaged loss carried by the worst 5 % of base circuits; all base-circuit weighted; finding F7) split, part, policy, B (or `all`), rows, base_circuits; risk: mean_log10_risk with ci_lo/ci_hi, policy_mse (base-circuit-weighted arithmetic mean MSE); regret against the per-task reference (the protocol identified on the selection half, scored on the evaluation half): mean_log_regret with log_regret_lo/log_regret_hi, median_log_ratio, p90_log_regret, mean_regret, median_regret, p90_regret (absolute, MSE units), p_negative_regret, p_regret_gt_10pct, p_regret_gt_2x, tol_success_10pct and tol_success_2x (share within 10 % / a factor 2 of the reference); raw_degradation (share of rows worse than RAW); fail_share (mean share of trials on a fallback path or without response); coverage, accepted_log10_risk; gap_closed with gap_lo/gap_hi; paired differences diff_vs_sbs (diff_lo/diff_hi), diff_vs_sbsb and diff_vs_sizeb with their `_lo`/`_hi` |
 | `choices_<split>.csv` | per test row: split, part, task_id, base_id, family, n, device, B, and per policy `<policy>|choice`, `<policy>|log_ratio`, `<policy>|accepted` |
 | `pooled_<split>.csv` | the columns of `summary_<split>.csv` (without part) for all test rows of the split scored together, one bootstrap over all test base circuits — the reported numbers (computed from `choices_<split>.csv` and `labels.csv`) |
 | `optimism.csv` | per split and reference policy (`ref`: SBS, SBS-B): candidates, base_circuits, naive_best, naive_mean_log10_risk, naive_diff_vs_ref, bbc_mean_log10_risk with bbc_lo/bbc_hi, bbc_diff_vs_ref with bbc_diff_lo/bbc_diff_hi, p_diff_below_0, optimism, ref, samples, selection_frequency (top 5) |
@@ -99,7 +110,7 @@ per_task_seconds of the tasks labeled in it).
 | `interval_coverage.csv` | fold, kind (cv-residual, cv-residual-simultaneous, joint (simultaneous), residual-gaussian, split-conformal, split-conformal-simultaneous), coverage, nominal, width_log10, n, groups, statement (the claims vocabulary), finite (split conformal: false when G calibration circuits are too few for the level, the interval is then unbounded), calibration_circuits, proper_training_circuits, unit |
 | `floor_sensitivity.csv` | variant (floor of the log transform), mean_log10_risk with ci, diff_vs_default with paired diff_lo/diff_hi |
 | `certificates.csv` | task_id, family, B, method (hoeffding, bernstein, two-eps), r, chosen, U_chosen, excess_bound, improves_on_raw, informative (= improves_on_raw), radius (the deviation term t of the chosen protocol: U = min(H, mean + t)), halfwidth ((U − L)/2 with L clipped at 0), units_chosen (independent units of the chosen protocol: trials, or design means for CDR/NIL under fresh designs), mse_clipped, mse_unclipped, statement (finite-sample-bound for the clipped estimator; post-hoc-check for two-eps), scope, eps, regret, bound, holds |
-| `runtime.csv` | `profile`: family, n, repeat, compile_s, deployable_s (features without simulation), simulated_s (simulator-only augmentation), inference_s, label_s (median wall time of labeling one development task of that width, for comparison), label_tasks, peak_rss_mb, rss_kind, configuration |
+| `runtime.csv` | `profile`: kind (`width`; 1.8.0 `rejection`), family, n, repeat, compile_s, deployable_s (features without simulation, timed without the feature cache), simulated_s (simulator-only augmentation), inference_s, preflight_structural_s (every candidate), preflight_design_s (learning candidates), recommend_s (the whole `deploy.recommend` call with the run's deployable bundle) and recommend_status, label_s (median wall time of labeling one development task of that width, for comparison), label_tasks, peak_rss_mb, rss_kind, configuration, bundle, feature_set_timed; `rejection` rows: a GHZ-type chain of n qubits outside every training width (`run.wide_chain_task`), recommend_s, recommend_status, note |
 | `task_features.csv` | one row per task: ancestry, variant fields and every feature |
 | `results.json` | schema `qemx.selection.results/1`: protocols, budgets, row/task/base-circuit counts, the evaluations run (parts, table names) and the extras with their seconds |
 
@@ -171,6 +182,23 @@ exact mixtures P(flag)·R_react(B − d) + (1 − P(flag))·R_model(B − d).
 | `model_training.json` | policy, training rows, excluded base circuits (the mismatch circuits are never in the training set) |
 | `null_check.csv` | p_sup, d, simulated_false_positive (4000 tests under the finite-shot null, scenario `none`) |
 
+## 1.8.0 study outputs (`reports/selection_v180/`)
+
+| file | columns |
+|---|---|
+| `replay/replay_<bundle>.csv` | one row per `deploy.recommend` call on a confirmation (task, budget): task_id, base_id, family, n, B, status (`ok`, `out-of-distribution`, `no-model`, `unsupported`), accepted, choice (the candidate executed), model_choice (the first verified candidate in the model's order), fallback (SBS-B's first verified candidate), ood (number of OOD reasons), margin, skipped (`protocol:status` of higher-ranked candidates the preflight left unverified or infeasible), choice_preflight and choice_level (status and level of the executed candidate's preflight), scored (the choice has feasible labels), risk (its evaluation-half MSE; NaN when unscored — never imputed), seconds (classical, no shots) |
+| `replay/replay_<bundle>.json` | rows, base_circuits, unscored, status counts, accepted, with_skipped_candidates, choice_counts, seconds_median; primary: policy_mean_log10, baseline_mean_log10 (SBS-B), diff with diff_lo/diff_hi (paired bootstrap over base circuits), ratio_geomean_mse_plus_floor (10^diff), policy_mse, baseline_mse, policy_tail and baseline_tail (p_severe_abs, q95_risk, worst5_loss_share); model_component_benchmark (the same summary for the model component of the bundle's configuration on the same rows) and model_component_configuration; bundle, allow_simulation, policy, status_note |
+| `replay/replay_summary.json` | per bundle: rows, unscored, status, accepted, with_skipped_candidates, diff, diff_lo, diff_hi, policy_mse, baseline_mse |
+| `portfolio/portfolio_contrasts.csv` | contrast (expansion_fixed_policy, expansion_attainable, learning_within_<portfolio>_<family>, total_<family>), a, b, diff, lo, hi (paired bootstrap over base circuits), ratio_geomean_mse_plus_floor |
+| `portfolio/portfolio_policies.csv` | policy (`<policy>|<portfolio>`), mean_log10, mse, p_severe_abs, q95_risk, worst5_loss_share, p_severe_vs_raw |
+| `portfolio/portfolio_comparison.json` | status, labels, rows, base_circuits, feature_set, portfolios (candidate lists), metric, contrasts, policies (with the chosen-candidate counts) |
+| `audit18/root_<seed>/` | the crossed audit's labels under one preparation root (layout of `dev/`) |
+| `audit18/analysis/label_stability.csv` | task_id, task, protocol, B, roots_feasible, mean_mse, between_root_var, mean_label_se2, var_ratio (between-root variance / mean squared label SE), log10_spread |
+| `audit18/analysis/ranking_stability.csv` | task_id, task, B, distinct_winners (over the roots), winners, mean_cross_root_log_regret (root a's winner judged by root b's labels) |
+| `audit18/analysis/contract.csv` | task_id, root, protocol, B, preflight (design level with that root's allocation seed), labels_feasible, agree |
+| `audit18/analysis/audit_summary.json` | status, roots, budgets, tasks, var_ratio_median_by_protocol, var_ratio_q90_by_protocol, rows_var_ratio_gt_4, ranking_cells, cells_with_one_winner, mean_cross_root_log_regret, contract_rows, contract_agreement, policy_by_root |
+| `thesis_tables/<table>.csv`, `.tex` | the numbers and the includeable LaTeX of each thesis table (`docs/selection/FIGURES.md`); `thesis_tables.md`, `qem180_thesis_tables.tex/.pdf`, `provenance.json` (generator, sources with sha256) |
+
 ## Estimand comparison, design study, hardware plan (`reports/selection_v170/`)
 
 | file | columns |
@@ -185,16 +213,27 @@ exact mixtures P(flag)·R_react(B − d) + (1 − P(flag))·R_model(B − d).
 
 ## Protocols
 
+The candidates of portfolio-1.8 (`qemx/selection/protocols.py`; portfolio-1.6 = the first eight). Their capability records (applicability, prerequisites, resources, ledger, failure handling, validation) are in `docs/selection/CANDIDATES.md` (`python -m qemx.selection registry --markdown`).
+
 | key | estimator | readout | training share | description |
 |---|---|---|---|---|
 | RAW | raw | none | 0.0 | Unmitigated: all B shots on the target circuit; sample mean of the observable. |
-| RO | raw | tensored | 0.0 | Readout correction only: tensored inverse of per-qubit assignment matrices estimated from two calibration circuits (|0…0⟩, |1…1⟩); calibration/target split by the supplied model. |
-| ZNE-L | zne | tensored | 0.0 | Zero-noise extrapolation, global folding at λ = 1, 3, linear fit, tensored readout correction; shots per scale ∝ |η_j|σ_j of the supplied model (integer optimal split). |
+| RO | raw | tensored | 0.0 | Readout correction only: tensored inverse of per-qubit assignment matrices estimated from two calibration circuits (\|0…0⟩, \|1…1⟩); calibration/target split by the supplied model. |
+| ZNE-L | zne | tensored | 0.0 | Zero-noise extrapolation, global folding at λ = 1, 3, linear fit, tensored readout correction; shots per scale ∝ \|η_j\|σ_j of the supplied model (integer optimal split). |
 | ZNE-R | zne | tensored | 0.0 | ZNE, global folding at λ = 1, 3, 5, Richardson (quadratic) extrapolation, tensored readout correction; supplied-model allocation. |
 | ZNE-E | zne | tensored | 0.0 | ZNE, global folding at λ = 1, 3, 5, exponential fit with a declared linear fallback when the fit fails (counted per trial); tensored readout correction; supplied-model allocation. |
 | PEC | pec | tensored | 0.0 | Probabilistic error cancellation of the device's median-rate depolarizing model (from the calibration record), one shot per sampled circuit (exact signed law), tensored readout correction. |
 | CDR | learning | tensored | 0.25 | Clifford data regression: 16 near-Clifford training circuits with classically computed ideal values, OLS fit, 25 % of B on training (equal per circuit); fallback decided from each trial's own training data; tensored readout correction. |
 | NIL | nil | tensored | 0.5 | Neighbor-informed learning (Chen et al.): weight-1 Pauli neighbors at every position, 2-design training ensemble, ℓ1-bounded (≤ 2) regression without intercept, equal target split; 50 % of B on training; tensored readout correction. |
+| RO-TREX | raw | trex | 0.0 | Readout correction by TREX: the measurement is twirled (random X before it, classical flip after; one randomization per shot), each Z string divided by its value on one twirled \|0…0⟩ calibration circuit; calibration/target split by the supplied model. |
+| RO-TW | raw | tensored | 0.0 | Pauli twirling of the two-qubit gates (one random compilation per shot; gate errors become their Pauli twirl), no estimator, tensored readout correction. |
+| RO-DD | raw | tensored | 0.0 | Dynamical decoupling (XY4 in idle windows; the pulses carry their gate errors), no estimator, tensored readout correction. |
+| ZNE-L-TW | zne | tensored | 0.0 | ZNE-L on Pauli-twirled two-qubit gates (one random compilation per shot): global folding at λ = 1, 3, linear fit, tensored readout correction, supplied-model split. |
+| ZNE-E-B | zne | tensored | 0.0 | ZNE-E (λ = 1, 3, 5, exponential fit, linear fallback) followed by a declared projection of the estimate onto the observable's eigenvalue range — a separately named bounded estimator (review finding F7); ZNE-E itself is unchanged. Labels use ZNE-E's random streams (common random numbers), so each ZNE-E-B trial is the projection of the paired ZNE-E trial. |
+| PEC-TW | pec | tensored | 0.0 | PEC of the median-rate depolarizing model on Pauli-twirled two-qubit gates (twirling makes the executed gate errors Pauli channels, closer to the cancelled model); one shot per sampled circuit; tensored readout correction. |
+| FR | learning | tensored | 0.25 | Feature regression (this project's CDR extension, not NIL): OLS on ⟨O⟩, every ⟨Z_i⟩ and ⟨Z_iZ_j⟩ of 16 near-Clifford training circuits, 25 % of B on training, tensored readout correction; CDR's adaptive training set and fallback. |
+| SV | symmetry | tensored | 0.0 | Symmetry verification: post-selection on the Z-parity checks the task's construction declares (never inferred from its ideal output), rejected shots counted in B, a repeat with no accepted shot is a nonresponse; tensored readout correction. Applicable only with a declared symmetry. |
+| ZNE-L∘SV | chain | tensored | 0.0 | Chained: linear ZNE (λ = 1, 3, global folding) whose every folded circuit is symmetry-verified with the task's declared checks (the inner post-selection applies to each fold; its rejected shots are paid per fold); one calibration shared by every fold; tensored readout correction. Applicable only with a declared symmetry. |
 
 ## Features
 
@@ -226,6 +265,10 @@ Class: available (free), acquired (charged), simulated (supplied-model simulatio
 | `lc_share` | available | noise | lam_lc / lam_total |
 | `lam_ro` | available | noise | Σ over the measured support of the mean readout flip probability |
 | `log10_budget` | available | budget | log10 of the total shot budget B |
+| `lam_lc_2q` | available | noise | lam_lc from the errors of two-qubit gates only (lam_lc_gate − lam_lc_2q is the one-qubit part) |
+| `ro_asym` | available | noise | mean |P(1|0) − P(0|1)| of the readout of the observable's measured qubits (readout asymmetry) |
+| `err2q_spread` | available | noise | max / median reported error of the two-qubit gates the compiled circuit uses (spatial heterogeneity; 1 with fewer than two) |
+| `duration_t2` | available | noise | scheduled duration / median T2 of the used qubits (relaxation exposure scale) |
 | `pec_log_gamma` | available | protocol | ln γ of PEC's quasi-probability decomposition of the snapshot's median-rate model (readout γ included): its standard deviation grows as γ |
 | `zne_eta_l1_linear` | available | protocol | Σ|η_j| of linear extrapolation at the achieved fold λ (gate counts): ZNE-L's noise amplification of the per-scale means |
 | `zne_eta_l1_richardson` | available | protocol | Σ|η_j| of Richardson extrapolation at λ = 1, 3, 5 |
@@ -238,4 +281,4 @@ Class: available (free), acquired (charged), simulated (supplied-model simulatio
 | `ideal` | oracle | oracle | exact ideal value μ |
 | `raw_bias_true` | oracle | oracle | exact bias of the unmitigated estimator under the execution law |
 
-Feature sets: `size_budget` (4); `structure` (13); `lightcone` (9); `deployable` (27); `deployable+simulated` (33).
+Feature sets: `size_budget` (4), `structure` (13), `lightcone` (9), `deployable` (27), `deployable+simulated` (33), `deployable18` (31), `deployable18+simulated` (37). `deployable` and `deployable+simulated` are frozen by name (the 1.7.0 bundles' fingerprints); 1.8.0 adds the four noise descriptors `lam_lc_2q`, `ro_asym`, `err2q_spread`, `duration_t2` in `deployable18` and `deployable18+simulated`.

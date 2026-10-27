@@ -1,3 +1,6 @@
 # Primary records and frozen manifests are hashed: keep their bytes as committed on every platform.
 data/** -text
 manifests/*.yaml text eol=lf
+# Study records (label JSON, analysis CSV, figures' source data) are hashed in provenance files and run bindings:
+# keep their bytes as written on every platform (no CRLF conversion on Windows checkouts). 1.8.0.
+reports/** -text

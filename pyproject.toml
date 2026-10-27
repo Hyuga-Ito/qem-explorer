@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "qem-explorer"
-version = "1.7.0"
+dynamic = ["version"]              # the single source is qemx/__init__.py (__version__); tests/test_release_metadata.py
 description = "Interactive exploration of quantum error mitigation (ZNE, PEC, learning, VD, symmetry verification, readout, twirling, DD) with Streamlit, Plotly and Qiskit"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -9,9 +13,15 @@ dependencies = ["streamlit>=1.64,<2", "plotly>=6.0", "numpy>=1.26", "scipy>=1.11
                 "qiskit-aer>=0.13", "qiskit-ibm-runtime>=0.40", "kaleido>=1.0", "pyyaml>=6", "jsonschema>=4",
                 "threadpoolctl>=3"]
 
+[project.urls]
+Repository = "https://github.com/Hyuga-Ito/qem-explorer"
+
 [project.optional-dependencies]
-dev = ["pytest>=8", "playwright>=1.45"]
+dev = ["pytest>=8", "nbclient>=0.10", "ipykernel>=6", "tomli>=2.0; python_version < '3.11'"]   # = requirements-dev.txt
 phase = ["pyarrow>=14"]          # Parquet tables of qemx.phase (CSV is always written)
+
+[tool.setuptools.dynamic]
+version = {attr = "qemx.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["qemx*"]

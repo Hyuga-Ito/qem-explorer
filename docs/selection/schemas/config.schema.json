@@ -18,12 +18,70 @@
   "name": {
    "type": "string"
   },
+  "status": {
+   "enum": [
+    "executed",
+    "planned",
+    "unexecuted",
+    "smoke"
+   ]
+  },
   "master_seed": {
-   "type": "integer"
+   "type": "integer",
+   "minimum": 0
   },
   "R": {
    "type": "integer",
    "minimum": 2
+  },
+  "expansion_policy": {
+   "enum": [
+    "legacy",
+    "explicit"
+   ]
+  },
+  "learning_designs": {
+   "oneOf": [
+    {
+     "type": "integer",
+     "minimum": 1
+    },
+    {
+     "type": "object",
+     "required": [
+      "mode"
+     ],
+     "properties": {
+      "mode": {
+       "enum": [
+        "fresh",
+        "fixed-shared"
+       ]
+      },
+      "per_half": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "count": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "seed_scheme": {
+       "enum": [
+        1,
+        2
+       ]
+      },
+      "crn": {
+       "enum": [
+        "task",
+        "base"
+       ]
+      }
+     },
+     "additionalProperties": false
+    }
+   ]
   },
   "budgets": {
    "type": "array",
@@ -31,7 +89,8 @@
     "type": "integer",
     "minimum": 1
    },
-   "minItems": 1
+   "minItems": 1,
+   "uniqueItems": true
   },
   "protocols": {
    "type": "array",
@@ -44,10 +103,20 @@
      "ZNE-E",
      "PEC",
      "CDR",
-     "NIL"
+     "NIL",
+     "RO-TREX",
+     "RO-TW",
+     "RO-DD",
+     "ZNE-L-TW",
+     "ZNE-E-B",
+     "PEC-TW",
+     "FR",
+     "SV",
+     "ZNE-L∘SV"
     ]
    },
-   "minItems": 1
+   "minItems": 1,
+   "uniqueItems": true
   },
   "final_test_fraction": {
    "type": "number",
@@ -58,74 +127,1043 @@
    "type": "string"
   },
   "tasks": {
+   "oneOf": [
+    {
+     "type": "object",
+     "required": [
+      "widths",
+      "families"
+     ],
+     "properties": {
+      "widths": {
+       "type": "array",
+       "items": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 12
+       },
+       "minItems": 1,
+       "uniqueItems": true
+      },
+      "widths_by_family": {
+       "type": "object",
+       "propertyNames": {
+        "enum": [
+         "brickwork",
+         "bv",
+         "ghz",
+         "grover",
+         "hea",
+         "ising",
+         "qaoa",
+         "qft"
+        ]
+       },
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        }
+       }
+      },
+      "families": {
+       "type": "object",
+       "minProperties": 1,
+       "properties": {
+        "qft": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "m": {
+            "type": [
+             "integer",
+             "null"
+            ],
+            "minimum": 1
+           },
+           "s": {
+            "type": "integer"
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "ghz": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "theta": {
+            "type": "number"
+           },
+           "basis": {
+            "enum": [
+             "X",
+             "Z"
+            ]
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "ising": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "steps": {
+            "type": "integer",
+            "minimum": 1
+           },
+           "T": {
+            "type": "number"
+           },
+           "J": {
+            "type": "number"
+           },
+           "h": {
+            "type": "number"
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "brickwork": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "layers": {
+            "type": "integer",
+            "minimum": 1
+           },
+           "angle_seed": {
+            "type": "integer"
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "grover": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "k": {
+            "type": "integer",
+            "minimum": 1
+           },
+           "marked": {
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "bv": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "secret": {
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "hea": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "layers": {
+            "type": "integer",
+            "minimum": 1
+           },
+           "angle_seed": {
+            "type": "integer"
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "qaoa": {
+         "type": [
+          "array",
+          "null"
+         ],
+         "items": {
+          "type": [
+           "object",
+           "null"
+          ],
+          "properties": {
+           "p": {
+            "type": "integer",
+            "minimum": 1
+           },
+           "angle_seed": {
+            "type": "integer"
+           },
+           "seed": {
+            "type": "integer"
+           }
+          },
+          "additionalProperties": false
+         }
+        }
+       },
+       "additionalProperties": false
+      },
+      "inputs": {
+       "type": "array",
+       "items": {
+        "enum": [
+         "default",
+         "plus",
+         "product"
+        ]
+       },
+       "minItems": 1,
+       "uniqueItems": true
+      },
+      "observables": {
+       "type": "array",
+       "items": {
+        "enum": [
+         "default",
+         "z_mid",
+         "zz_mid",
+         "z_all"
+        ]
+       },
+       "minItems": 1,
+       "uniqueItems": true
+      },
+      "layouts": {
+       "type": "array",
+       "items": {
+        "enum": [
+         "best",
+         "alt"
+        ]
+       },
+       "minItems": 1,
+       "uniqueItems": true
+      },
+      "devices": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "pattern": "^fake_[a-z0-9_]+(@[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}(,[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}){0,9})?$"
+       },
+       "minItems": 1,
+       "uniqueItems": true
+      },
+      "variants_per_base": {
+       "oneOf": [
+        {
+         "type": "integer",
+         "minimum": 0
+        },
+        {
+         "const": "all"
+        }
+       ]
+      },
+      "include_default": {
+       "type": "boolean"
+      }
+     },
+     "additionalProperties": false
+    },
+    {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "widths",
+       "families"
+      ],
+      "properties": {
+       "widths": {
+        "type": "array",
+        "items": {
+         "type": "integer",
+         "minimum": 2,
+         "maximum": 12
+        },
+        "minItems": 1,
+        "uniqueItems": true
+       },
+       "widths_by_family": {
+        "type": "object",
+        "propertyNames": {
+         "enum": [
+          "brickwork",
+          "bv",
+          "ghz",
+          "grover",
+          "hea",
+          "ising",
+          "qaoa",
+          "qft"
+         ]
+        },
+        "additionalProperties": {
+         "type": "array",
+         "items": {
+          "type": "integer"
+         }
+        }
+       },
+       "families": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+         "qft": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "m": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 1
+            },
+            "s": {
+             "type": "integer"
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "ghz": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "theta": {
+             "type": "number"
+            },
+            "basis": {
+             "enum": [
+              "X",
+              "Z"
+             ]
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "ising": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "steps": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "T": {
+             "type": "number"
+            },
+            "J": {
+             "type": "number"
+            },
+            "h": {
+             "type": "number"
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "brickwork": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "layers": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "angle_seed": {
+             "type": "integer"
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "grover": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "k": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "marked": {
+             "type": [
+              "integer",
+              "null"
+             ]
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "bv": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "secret": {
+             "type": [
+              "integer",
+              "null"
+             ]
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "hea": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "layers": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "angle_seed": {
+             "type": "integer"
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         },
+         "qaoa": {
+          "type": [
+           "array",
+           "null"
+          ],
+          "items": {
+           "type": [
+            "object",
+            "null"
+           ],
+           "properties": {
+            "p": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "angle_seed": {
+             "type": "integer"
+            },
+            "seed": {
+             "type": "integer"
+            }
+           },
+           "additionalProperties": false
+          }
+         }
+        },
+        "additionalProperties": false
+       },
+       "inputs": {
+        "type": "array",
+        "items": {
+         "enum": [
+          "default",
+          "plus",
+          "product"
+         ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+       },
+       "observables": {
+        "type": "array",
+        "items": {
+         "enum": [
+          "default",
+          "z_mid",
+          "zz_mid",
+          "z_all"
+         ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+       },
+       "layouts": {
+        "type": "array",
+        "items": {
+         "enum": [
+          "best",
+          "alt"
+         ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+       },
+       "devices": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "pattern": "^fake_[a-z0-9_]+(@[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}(,[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}){0,9})?$"
+        },
+        "minItems": 1,
+        "uniqueItems": true
+       },
+       "variants_per_base": {
+        "oneOf": [
+         {
+          "type": "integer",
+          "minimum": 0
+         },
+         {
+          "const": "all"
+         }
+        ]
+       },
+       "include_default": {
+        "type": "boolean"
+       }
+      },
+      "additionalProperties": false
+     },
+     "minItems": 1
+    }
+   ]
+  },
+  "limits": {
    "type": "object",
-   "required": [
-    "widths",
-    "families"
-   ],
    "properties": {
-    "widths": {
-     "type": "array",
-     "items": {
-      "type": "integer"
-     }
+    "task_seconds": {
+     "type": "number",
+     "minimum": 0
     },
-    "widths_by_family": {
-     "type": "object"
+    "memory_gb": {
+     "type": "number",
+     "minimum": 0
     },
-    "families": {
-     "type": "object"
+    "cpu_hours": {
+     "type": "number",
+     "minimum": 0
     },
-    "inputs": {
-     "type": "array",
-     "items": {
-      "enum": [
-       "default",
-       "plus",
-       "product"
-      ]
-     }
+    "disk_gb": {
+     "type": "number",
+     "minimum": 0
     },
-    "observables": {
-     "type": "array",
-     "items": {
-      "enum": [
-       "default",
-       "z_mid",
-       "zz_mid",
-       "z_all"
-      ]
-     }
-    },
-    "layouts": {
+    "min_free_disk_gb": {
+     "type": "number",
+     "minimum": 0
+    }
+   },
+   "additionalProperties": false
+  },
+  "analysis": {
+   "type": "object",
+   "properties": {
+    "splits": {
      "type": "array",
      "items": {
       "enum": [
-       "best",
-       "alt"
+       "same-distribution",
+       "family",
+       "device",
+       "width",
+       "budget-extrap",
+       "budget-interp",
+       "device-base",
+       "noise",
+       "joint"
       ]
+     },
+     "uniqueItems": true
+    },
+    "split_options": {
+     "type": "object",
+     "additionalProperties": false,
+     "properties": {
+      "same-distribution": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "additionalProperties": false
+      },
+      "family": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "additionalProperties": false
+      },
+      "device": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "test_device": {
+         "type": "string",
+         "pattern": "^fake_[a-z0-9_]+(@[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}(,[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}){0,9})?$"
+        }
+       },
+       "additionalProperties": false
+      },
+      "width": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "min_test_n": {
+         "type": "integer",
+         "minimum": 2
+        }
+       },
+       "additionalProperties": false
+      },
+      "budget-extrap": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "max_train_B": {
+         "type": "number",
+         "exclusiveMinimum": 0
+        }
+       },
+       "additionalProperties": false
+      },
+      "budget-interp": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "additionalProperties": false
+      },
+      "device-base": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "test_device": {
+         "type": "string",
+         "pattern": "^fake_[a-z0-9_]+$"
+        }
+       },
+       "additionalProperties": false
+      },
+      "noise": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "test_noise": {
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      },
+      "joint": {
+       "type": "object",
+       "properties": {
+        "k": {
+         "type": "integer",
+         "minimum": 2
+        },
+        "seed": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "test_family": {
+         "type": "string"
+        },
+        "test_noise": {
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      }
      }
     },
-    "devices": {
+    "feature_sets": {
      "type": "array",
      "items": {
       "type": "string"
-     }
+     },
+     "minItems": 1,
+     "uniqueItems": true
     },
-    "variants_per_base": {
+    "model_families": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "ridge",
+       "enet",
+       "hgb",
+       "mlp",
+       "struct"
+      ]
+     },
+     "minItems": 1,
+     "uniqueItems": true
+    },
+    "abstain_family": {
+     "enum": [
+      "ridge",
+      "enet",
+      "hgb",
+      "mlp",
+      "struct"
+     ]
+    },
+    "deployed_family": {
+     "enum": [
+      "ridge",
+      "enet",
+      "hgb",
+      "mlp",
+      "struct"
+     ]
+    },
+    "abstain_set": {
+     "type": "string"
+    },
+    "ablation_set": {
+     "type": "string"
+    },
+    "deployed_set": {
+     "type": "string"
+    },
+    "other_split_sets": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "uniqueItems": true
+    },
+    "other_split_families": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "ridge",
+       "enet",
+       "hgb",
+       "mlp",
+       "struct"
+      ]
+     },
+     "minItems": 1,
+     "uniqueItems": true
+    },
+    "bootstrap": {
      "type": "integer",
-     "minimum": 0
+     "minimum": 1
+    },
+    "selective_bootstrap": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "lc_repeats": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "nested_inner_k": {
+     "type": "integer",
+     "minimum": 2
+    },
+    "extras": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "ablation",
+       "learning_curve",
+       "abstention",
+       "interval_coverage",
+       "certificates",
+       "floor_sensitivity",
+       "budget_generalization",
+       "deployed",
+       "selective",
+       "nested_selective",
+       "design_diagnostics"
+      ]
+     },
+     "uniqueItems": true
     }
-   }
-  },
-  "limits": {
-   "type": "object"
-  },
-  "analysis": {
-   "type": "object"
+   },
+   "additionalProperties": false
   },
   "mismatch": {
+   "type": "object",
+   "required": [
+    "scenarios"
+   ],
+   "properties": {
+    "scenarios": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "uniqueItems": true
+    },
+    "diag_fraction": {
+     "type": "number",
+     "exclusiveMinimum": 0,
+     "exclusiveMaximum": 1
+    },
+    "diag_min": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "alpha": {
+     "type": "number",
+     "exclusiveMinimum": 0,
+     "exclusiveMaximum": 1
+    },
+    "model_family": {
+     "enum": [
+      "ridge",
+      "enet",
+      "hgb",
+      "mlp",
+      "struct"
+     ]
+    },
+    "model_set": {
+     "type": "string"
+    },
+    "diagnostic_draws": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "robust": {
+     "type": "string"
+    },
+    "reaction_holdout": {
+     "enum": [
+      "type"
+     ]
+    }
+   },
+   "additionalProperties": false
+  },
+  "regimes": {
+   "type": "object",
+   "properties": {
+    "noise_axis": {
+     "type": "string"
+    },
+    "model_policy": {
+     "type": "string"
+    },
+    "observable_budget": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "noise_budget": {
+     "type": "integer",
+     "minimum": 1
+    }
+   },
+   "additionalProperties": false
+  },
+  "study": {
    "type": "object"
   }
- }
+ },
+ "additionalProperties": false
 }

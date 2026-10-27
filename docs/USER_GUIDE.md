@@ -1,4 +1,4 @@
-# QEM Explorer 1.7.0 — user and developer guide to the research parts
+# QEM Explorer 1.9.0 — user and developer guide to the research parts
 
 This guide covers the experiment model, the statistics, the costs, the studies and the hardware path. For the app's
 pages see `README.md`; for the equations and sources see the Theory page (`docs/theory.md`). Conventions:
@@ -257,10 +257,13 @@ a transpilation) cannot be interrupted inside the process: public hosting needs 
   recommender's sensitivity, not into every interval.
 - **Sources not fully read.** See `docs/literature_matrix.md`.
 
-## 11. Protocol selection (1.6.0, `qemx/selection/`, `docs/selection/`)
+## 11. Protocol selection (`qemx/selection/`, `docs/selection/`; since 1.6.0)
 
-The 1.6.0 study asks which complete QEM protocol to run on a task at a fully charged shot budget, and when a learned
-choice beats a fixed one. It is independent of the Direction A pipeline (§6) and has its own documents:
+The study asks which complete QEM protocol to run on a task at a fully charged shot budget, and when a learned
+choice beats a fixed one. 1.8.0 expands the candidates to 17 (`docs/selection/CANDIDATES.md`), evaluates the deployed
+application policy itself (not only its model component) and adds the documents
+`docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md` (interpretation, open questions, ranked next experiments) and
+`docs/ISSUE_EVIDENCE_MATRIX.md` (every review finding, its fix and its evidence). It is independent of the Direction A pipeline (§6) and has its own documents:
 
 | document | content |
 |---|---|
@@ -269,13 +272,27 @@ choice beats a fixed one. It is independent of the Direction A pipeline (§6) an
 | `docs/selection/DATA_DICTIONARY.md` | every column of every saved table |
 | `docs/selection/COMMANDS.md` | commands, workflows, outputs, resource limits |
 | `docs/selection/RESULTS.md` | what was executed, the results and their limits, compute and estimates |
-| `docs/selection/FIGURES.md` | every figure and table: its question, panels, inputs, plotting configuration and checks |
+| `docs/selection/FIGURES.md` | every figure and table: its question, panels, inputs, plotting configuration and checks; the thesis tables |
+| `docs/selection/CANDIDATES.md` | the 17 candidates' capability records (generated: `python -m qemx.selection registry --markdown`) |
 
 A typical session: `python -m qemx.selection plan CONFIG` (task count and a resource estimate), `label`
 (resumable; interrupt and restart at will), `analyze`, `figures`, `report`; `freeze` and `final` once, at the end;
-`regimes` (the controlled regime study) and `profile` (classical cost against width) after the freeze. The bundled
-studies are shown on the QEM Performance page, tab *Protocol selection study*: the corrected pilot of 1.7.0
-(`reports/selection_v170/`) first, the 1.6.0 pilot (`reports/selection_pilot/`) after it, marked historical. For each:
+`regimes` (the controlled regime study) and `profile` (classical cost against width) after the freeze.
+
+**Since 1.9.0** a whole study is better run with the pipeline runner, which knows the order of these steps and what
+each has produced: `python -m qemx.selection pipeline configs/pipelines/pilot19.yaml --out runs/pilot19 --workers auto`.
+Interrupt it at any moment and rerun the same command: complete labels are verified and kept, a freeze or once-only
+evaluation that exists is verified (never redone), and a failed stage stops everything that depends on it. Before a
+large run: `check-config` (the file's format and semantics), `plan --tasks-csv` (the expanded task table — which
+variants, inputs and devices the configuration actually produces) and `plan --measured LABELS_DIR` (CPU, disk and
+memory from measured rates against the configuration's `limits`). While and after it runs, `status --out RUN` gives
+the completion of every labels directory. Exit codes: 0 complete, 1 incomplete (failed or missing tasks, reported on
+every rerun), 2 refused, 3 a cap would refuse the run (`plan`). Failed tasks are retried only with `--retry-failed`;
+corrupted arrays are moved aside only with `--quarantine-corrupted`. YAML formats and expansion rules:
+`docs/selection/YAML_FORMATS.md`; the next study designs and their costs: `docs/selection/RESEARCH_PLAN_v19.md`. The bundled
+studies are shown on the QEM Performance page, tab *Protocol selection study*: the 1.8.0 study
+(`reports/selection_v180/`) first, then the corrected pilot of 1.7.0 (`reports/selection_v170/`) and the 1.6.0 pilot
+(`reports/selection_pilot/`), marked historical. For each:
 the policy table; a task drill-down — every protocol's risk per budget and each policy's choice, then the task and its circuit
 (with a text drawing of the logical circuit on request), the protocols' settings and allocations at a chosen budget,
 the shot ledger (calibration, training, diagnostics, selection, execution), the distribution of the repeated trials
@@ -289,26 +306,52 @@ circuits (the next one in its ranking where it is infeasible); and every interva
 independent evidence.
 
 
-## 12. The 1.7 recommender (`qemx/selection/deploy.py`, QEM Performance → *Recommend for my circuit*)
+## 12. The recommender (`qemx/selection/deploy.py`, QEM Performance → *Recommend for my circuit*)
 
 The recommendation tab turns the Playground's experiment — circuit, inputs, measurement bases and bit order,
 observable — into the same `DeploymentTask` the command line uses (`python -m qemx.selection recommend --state
 STATE.json --budget B --device D`). Choose a model bundle, the device snapshot the protocols would use (the Playground's
-backend when it is a fake device) and the total shot budget B, then *Recommend*. The result shows:
+backend when it is a fake device) and the total shot budget B, then *Recommend*. 1.8.0 runs policy
+`qemx.selection.policy/2`, the same policy the study evaluated on its confirmation set:
 
-- the **choice**: the model's choice when its margin over the runner-up is at least the frozen threshold τ, otherwise
-  the budget-only fallback SBS-B — and why;
-- **out-of-distribution** reasons (device, budget, width or a feature outside the training support): then the
-  model's prediction is not used and the fallback is recommended;
-- **unsupported** experiments (no device snapshot, an observable the study does not cover) are reported, not guessed;
-- the predicted log10 risk of every protocol (model-conditional) with its structural feasibility at B;
-- every feature with its information class (available / simulated), its value, its cost in seconds and its method.
+1. a **guard** checks the request before compilation (width, depth, observable form) — a wide circuit is rejected
+   early, never sent to a dense engine;
+2. the **features** the bundle needs are computed (deployable features only unless simulation is allowed), and
+   **out-of-distribution** checks run (device, budget, width, features outside the training support);
+3. a **preflight** gives every candidate a status — *verified-feasible*, *infeasible* or *unverified* — at the
+   structural level (ledger and budget arithmetic), the design level (a learning candidate's training design is built
+   and its ideal training values computed) or the allocation level (the study's own allocation on the supplied noise
+   model; needs simulation, at most 11 qubits);
+4. the candidates are walked in the order of their predicted risk: the first **verified** one is the model's choice;
+   infeasible and unverified candidates are skipped and listed (*skipped candidates*) — an unverified candidate is
+   never returned;
+5. the frozen margin rule (bundles that have one) and the **fallback**: SBS-B's first verified candidate when the
+   request is out of distribution or the margin is below τ.
 
-Two bundles are shipped: `qemx-rec-1.7.0-deployable` (preselected; deployable features only; no selective threshold
-was validated for it, so it always shows the model's choice) and `qemx-rec-1.7.0` (the configuration frozen and
-confirmed in the study, with its threshold τ; it also uses simulated features). Only deployable features are
-computed by default — no simulation of the circuit. A bundle whose model uses simulated
-features asks for permission (*Allow simulated features*); their cost grows exponentially with width. A
-recommendation is marked out of date when anything it depends on changes. Benchmark labels (the study's emulated
-trials) are never computed here. The 1.5 recommender (a ridge on the old benchmark tables) is in the expander
-labelled *Legacy 1.5 recommender* (another model, data, candidate set and budget definition).
+The result shows the choice and why, the skipped candidates with their reasons, each candidate's predicted log10 risk
+(model-conditional) with its preflight status and level, every feature with its information class (available /
+simulated), value, cost and method, the execution note, and each candidate's capability record (what it can mitigate,
+what it needs, how it spends B). Unsupported experiments (no device snapshot, an observable the study does not cover)
+are reported, not guessed.
+
+Four bundles are shipped:
+
+| bundle | features | preflight level | evidence (1.8.0 confirmation, full deployed policy vs SBS-B) |
+|---|---|---|---|
+| `qemx-rec-1.8.0-deployable` (preselected) | deployable (`deployable18`), no simulation | design | −0.084 [−0.179, −0.002] — favourable, not robustly resolved; on GHZ tasks it cannot verify symmetry verification without a simulation |
+| `qemx-rec-1.8.0` | deployable + simulator-only (`deployable18+simulated`); needs *Allow simulated features* | allocation | −0.144 [−0.231, −0.076] — the configuration the study's declared rule established (simulation, 3–6 qubits) |
+| `qemx-rec-1.7.0-deployable`, `qemx-rec-1.7.0` | the 1.7.0 sets | as above | the 1.7.0 study; they still load (recognized by their recorded fingerprints) and run under policy/2 |
+
+Only deployable features are computed by default — no simulation of the circuit. A bundle whose model uses simulated
+features asks for permission (*Allow simulated features*); their cost grows exponentially with width (about 0.2–0.9 s
+at 3–7 qubits on the build machine). A bundle whose candidate or feature definitions differ from the code is refused
+with the reason; a device whose calibration snapshot changed since training is treated as a transfer (out of
+distribution). A recommendation is marked out of date when anything it depends on changes — since 1.9.0 including
+the *Allow simulated features* switch. Since 1.9.0 the result also shows the **effective device** (an explicitly chosen
+device overrides the experiment's backend), the requested and physical **layout**, the **declared symmetry** used and
+where it came from (a study construction, or the experiment's declaration after it was checked to hold on the ideal
+measured distribution — a declaration that does not hold is not used, with a note), and any conversion notes. The
+Playground state, a YAML experiment and the command line therefore give the same recommendation for the same
+experiment. Benchmark labels (the
+study's emulated trials) are never computed here. The 1.5 recommender (a ridge on the old benchmark tables) is in the
+expander labelled *Legacy 1.5 recommender* (another model, data, candidate set and budget definition).

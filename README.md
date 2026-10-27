@@ -1,4 +1,4 @@
-# QEM Explorer 1.7.0
+# QEM Explorer 1.9.1
 
 An interactive laboratory for quantum error mitigation (QEM): build a circuit, inject exactly the noise you
 want (or a real IBM device's calibration), look at the circuits each method really runs, scrub through the
@@ -21,6 +21,9 @@ python -m pip install -r requirements-dev.txt
 python -m streamlit run app.py            # then open http://localhost:8501
 ```
 
+In **PowerShell** the activation is `.venv\Scripts\Activate.ps1` (if scripts are blocked:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`). A step-by-step first run on Windows, including a check of the
+installation, is in `docs/WINDOWS_FIRST_RUN.md`.
 With Anaconda: `conda create -n qemx python=3.12`, `conda activate qemx`, then the `pip install` line above.
 `requirements-lock.txt` pins the exact versions the release was tested with (Python 3.12); use it for a reproducible
 environment. **VS Code**: open the folder, run *Python: Create Environment* (venv, tick `requirements-dev.txt`), then
@@ -32,7 +35,138 @@ the small static-TLS reserve, so the app's learning methods or the tests fail on
 Python — `export GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2048` (add it to `.venv/bin/activate` to make it
 permanent) — as the CI does. Windows and macOS are not affected; no package or code change is needed.
 
-## What is new in 1.7.0
+## What is new in 1.9.1
+
+1.9.1 is a focused corrective release of 1.9.0, answering an independent review of 1.9.0 before local experiments
+start. Every finding was reproduced on 1.9.0 first and has a regression test (`docs/ISSUE_EVIDENCE_MATRIX.md`, part
+1.9.1); no scientific result changes, and the historical data, confirmation and figure are untouched.
+
+* **Full development pipeline (F1).** The shipped `fulldev19` order failed at `freeze-complete`: the deployed and
+  nested tables were computed before the freeze for a configuration outside the declared grid and then reused. They
+  are now deferred until the freeze; reused nested tables are validated (configuration, data, evaluation settings,
+  code), and stale ones are set aside and recomputed. A run started with 1.9.0: `docs/MIGRATION.md` (Part 00000).
+  A quick `run` (no freeze) now leaves the figures of the frozen configuration pending until `freeze`.
+* **Stale analyses are not frozen (F2).** The first `freeze` checks the analysis against the configuration, labels and
+  code, requires every declared split and grid configuration, and chooses only within the declared grid; a code
+  change needs `--accept-changes` (recorded).
+* **CPU accounting that persists (F3).** A consumed-resource ledger over every attempt of every invocation (failed,
+  retried, quarantined, interrupted); CPU ceilings and admission start from it.
+* **Cost table (F4).** The wall time is computed for a declared hypothetical computer; the labeling estimate is
+  conditional; the analysis is sized by its model fits (`plan` prints them), not by rows.
+* **Process supervision (F5).** Workers watch their parent through the multiprocessing parent handle (works in
+  containers whose PID views differ); lock liveness is checked in the process's own PID view.
+* **Planning notes.** One-circuit test strata are marked descriptive; conf19's estimand, population and size options
+  are written out (`docs/selection/RESEARCH_PLAN_v19.md`); conf19 stays unexecuted.
+
+## What was new in 1.9.0
+
+1.9.0 makes the research pipeline dependable for large local experiments. It answers the independent review of 1.8.0
+and the second review that supplements and partly corrects it; every finding was reproduced (or not) on 1.8.0 before
+anything changed (`docs/ISSUE_EVIDENCE_MATRIX.md`: reproduction, root cause, fix, regression test, result, what
+remains). The 1.8.0 study's numbers do not change; two errors in the text of one supplementary figure are corrected
+beside the historical file (`docs/selection/ERRATA_v180.md`). Behaviour changes: `docs/MIGRATION.md` (Part 0000);
+verification: `docs/QA_SUMMARY.md`; Windows: `docs/WINDOWS_FIRST_RUN.md`.
+
+* **Truthful completion.** Every labeling command reports the whole run — expected, completed, failed (by reason),
+  missing, corrupted — and exits 0 only when it is complete (1 incomplete, 2 refused). Failed tasks are kept and
+  reported on every rerun until `--retry-failed`; corrupted arrays stop labeling until `--quarantine-corrupted`;
+  `status` reports any run; `analyze` and `freeze` refuse incomplete labels unless explicitly marked partial.
+* **Resource limits that hold.** A preflight from measured rates, admission against `limits.cpu_hours`, `disk_gb` and
+  `min_free_disk_gb` (refused unless `--override-limits "reason"`, recorded), monitored ceilings while labeling, and
+  `--workers auto` sized by memory as well as cores.
+* **Interrupt and resume.** `python -m qemx.selection pipeline FILE --out DIR` runs a study stage by stage (argument
+  arrays, no shell; Windows, Linux and macOS alike), verifies and keeps completed once-only steps, and stops every
+  dependent stage on a failure. One writer per run; Ctrl+C or SIGTERM stops the workers; orphaned workers end
+  themselves.
+* **Replay and tables bound to their data.** Replay uses the manifest's population (incomplete → refused; a subset only
+  with a stated reason), cached tables are re-derived from the arrays, the SBS-B baseline is checked against its rule;
+  a freeze is bound to its development data; analyses of another configuration, data or code are never merged silently.
+* **One recommendation everywhere.** A saved state, a YAML experiment, the app and the command line give the same task,
+  device, layout, symmetry and choice. A declared symmetry is used only when it holds; an explicit device overrides the
+  state's backend; a shown recommendation goes out of date when the simulation switch changes.
+* **YAML you can check before running.** Each YAML format is validated by its own parser (`check-config`); typos are
+  refused inside nested sections too; semantic checks run before labeling; `plan --tasks-csv` exports the expanded task
+  table; new studies use `expansion_policy: explicit` (`docs/selection/YAML_FORMATS.md`).
+* **CI.** The optional trial-data job verifies only the study whose arrays it receives and fails (never skips) without
+  them; the Windows job labels, analyzes partially and runs the pipeline's first stages in a Japanese path. (Not yet run on GitHub: nothing was pushed.)
+* **Next research stage.** Smoke and pilot designs (both executed), a full development design and a reserved
+  confirmation (planned, with measured costs), all with noise-diverse training and held-out noise, device and joint
+  shifts; a joint execution audit (recommend → returned design → allocation → execution); a versioned figure/table
+  specification and tables as CSV + LaTeX (`docs/selection/RESEARCH_PLAN_v19.md`, `reports/tables_v190/`).
+
+**1.9.0 research in one paragraph** (emulation only; `docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md` Part I): the 1.8.0
+confirmation stands unchanged (frozen full policy −0.144 [−0.231, −0.076] against SBS-B, recomputed from the arrays).
+Executing the design the recommender actually returns, instead of scoring the fresh-design average risk, moves that
+contrast by −0.024 [−0.047, +0.000] on eight audit circuits (weak evidence for learning candidates, which are rarely
+returned there). An exploratory pilot with noise-diverse training (27 new circuits, six calibration-visible noise
+settings) finds no learned policy better than SBS-B out of fold: deployable-feature learners are worse by 0.09–0.14
+decades, more so among 17 than among 8 candidates, and a budget rule refitted per noise setting is worse too (+0.07),
+although the winning protocol does change with the noise setting — the signal exists but is not yet estimable from this
+few circuits. The planned development study (fulldev19, 82 circuits) is designed to separate data-limited from
+information-limited learning; the reserved confirmation should be resized for power before it is frozen.
+
+```
+python -m qemx.selection check-config configs/selection/smoke19.yaml configs/pipelines/smoke19.yaml
+python -m qemx.selection pipeline configs/pipelines/smoke19.yaml --out runs/smoke19 --workers 2    # minutes
+python -m qemx.selection status --out runs/smoke19
+python -m qemx.selection plan configs/selection/pilot19.yaml --workers auto --tasks-csv runs/pilot19_tasks.csv
+python -m qemx.selection pipeline configs/pipelines/pilot19.yaml --out runs/pilot19 --workers auto  # about an hour
+python -m qemx.selection.tables19                                                                   # the 1.9.0 tables
+```
+
+## What was new in 1.8.0
+
+1.8.0 answers the review of 1.7.0 and its follow-up (`docs/ISSUE_EVIDENCE_MATRIX.md`: every finding, the change and
+its evidence), fixes the two failures of the 1.7.0 CI run (`docs/CI_FAILURE_ANALYSIS.md`), and runs a new,
+pre-declared study with an expanded candidate portfolio. Every change of meaning is listed in `docs/MIGRATION.md`
+(Part 000) and `docs/selection/METHODS.md` §16; the interpretation, open questions and next experiments are in
+`docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md`.
+
+* **The deployed policy is what is evaluated.** One execution/preflight contract (verified-feasible, infeasible,
+  unverified; structural, design and allocation levels) is shared by labeling, the app, the command line and the
+  hardware plan; the recommender never returns an unverified candidate, records the ones it skipped and falls back to
+  SBS-B's first verified candidate. The ten 1.7.0 deployment regressions (degenerate CDR/NIL training designs) are
+  resolved, and the confirmation now reports the full deployed policy beside its model component.
+* **Bounded cost.** Inputs are checked before compilation; calibration marginals are factorized where the noise model
+  permits; wide observables are compact Pauli terms; a sentinel test proves a 24-qubit request never reaches a dense
+  engine.
+* **Provenance and statistics.** Records bound to their run (mismatch labels included); bundles checked for
+  scientific compatibility; namespaced preparation seeds (seed scheme 2) with explicit common-random-number groups;
+  the variance of one deployment separated from the pooled label variance; declared tail metrics beside the primary
+  log metric; strict JSON; independent shot-level references for the estimators whose labels drive decisions.
+* **17 candidates.** The eight 1.6/1.7 protocols plus TREX readout, Pauli-twirled and dynamical-decoupling variants,
+  twirled ZNE and PEC, a bounded exponential ZNE, feature regression, symmetry verification and ZNE∘SV — each with a
+  capability record (`docs/selection/CANDIDATES.md`). Virtual distillation and M3 are documented as not emulable as
+  separate candidates here.
+* **Study and outputs.** A development study on 44 new logical circuits and a once-only confirmation on 29 more; a
+  crossed circuit × preparation-root audit; controlled regime and noise-composition studies; four new supplementary
+  figures; thesis tables as CSV, LaTeX and PDF.
+* **Windows and CI.** A Windows first-run guide (`docs/WINDOWS_FIRST_RUN.md`); the CI separates file-name encoding
+  from text encoding and reruns the numerically sensitive tests without AVX-512.
+
+**1.8.0 study in one paragraph** (emulation only, `docs/selection/RESULTS.md` Part I): on 29 new logical circuits,
+evaluated once, the full deployed policy of the frozen recommender (boosted trees on deployable and simulator-only
+features, with its preflight, out-of-distribution checks and fallback) improves on choosing the best protocol per budget
+by −0.14 [−0.23, −0.08] decades of geometric-mean MSE, and its development out-of-fold difference is resolved too, so
+the rule declared before the confirmation was evaluated is met for this simulated task distribution — with the
+optimism-corrected development difference not resolved, a primary estimand fixed after the development results were
+seen, and a recommender that needs exact simulation (about 0.65 s per circuit at 3–6 qubits). The default bundle without simulation reaches −0.08
+[−0.18, −0.002], not robustly resolved. On identical development labels the larger portfolio gives a resolved gain
+(−0.07 [−0.13, −0.01] for SBS-B over 17 instead of 8 candidates) while learning on deployable features does not. The
+confirmation and full-policy numbers were reproduced by independent code.
+The run is shipped in `reports/selection_v180/`; its per-trial arrays are in two separate trial-data archives
+(`reports/selection_v180/README.md`).
+
+```
+python -m qemx.selection recommend --experiment examples/experiments/qft_known_answer.yaml --budget 100000 --device fake_fez
+python -m qemx.selection recommend --experiment examples/experiments/qft_known_answer.yaml --budget 100000 --device fake_fez \
+    --bundle qemx/selection/bundles/qemx-rec-1.8.0 --allow-simulation          # the frozen (confirmed) configuration
+python -m qemx.selection figures configs/selection/dev18.yaml --out reports/selection_v180 --plot-config configs/selection/figures18.yaml
+python -m qemx.selection.thesis_tables --run reports/selection_v180 --out reports/selection_v180/thesis_tables
+bash scripts/reproduce_v18.sh                                                                              # the whole 1.8.0 study
+```
+
+## What was new in 1.7.0
 
 1.7.0 answers an independent review of 1.6.0 (`docs/REVIEW_RESPONSE_1.7.md`): it repairs the foundations of the
 protocol-selection study, relabels its pilot with the corrected sampling, extends the research with focused
@@ -56,7 +190,7 @@ experiments, and connects the new recommender to the Playground. Every change of
   discrepancy types, a learning-design study, a physics-informed risk model and the confirmation; revised figures with
   a methods box each; a hardware-validation plan under one shared 600 s ceiling (prepared, never submitted).
 
-**Corrected pilot in one line** (emulation only): choosing the protocol per budget remains most of the gain (−0.14 decades against the single best protocol); the frozen learned recommender is −0.04 [−0.11, 0.03] decades against that budget-only rule on held-out development circuits and −0.09 [−0.16, −0.02] on 25 new confirmation circuits — favourable on both, resolved only on the confirmation, so by the declared rule the claim is not yet established (`docs/selection/RESULTS.md`). The run is shipped in `reports/selection_v170/`; its per-trial arrays are in two separate trial-data archives (`reports/selection_v170/README.md`).
+**Corrected pilot in one line** (emulation only): choosing the protocol per budget remains most of the gain (−0.14 decades against the single best protocol); the frozen learned recommender is −0.04 [−0.11, 0.03] decades against that budget-only rule on held-out development circuits and −0.09 [−0.16, −0.02] on 25 new confirmation circuits — favourable on both, resolved only on the confirmation, so by the declared rule the claim is not yet established (`docs/selection/RESULTS.md` Part II). The run is shipped in `reports/selection_v170/`; its per-trial arrays are in two separate trial-data archives (`reports/selection_v170/README.md`).
 
 ```
 python -m qemx.selection plan      configs/selection/full17.yaml --measured reports/selection_v170/dev   # size, cost, caps
@@ -208,6 +342,8 @@ gate error and relaxation rate by 2, switches readout errors off, and runs the e
 | **Head-to-head sweeps** | Any number of contenders over p₁, p₂, damping, over-rotation, readout error or a noise scale; a "who wins where" map over (parameter, shots) |
 | **Theory & sources** | A research handbook in six parts with a contents column and diagrams for every algorithm: every equation behind the app, including the equal-budget accounting; advanced mitigation (symmetry expansion, pulse-level ZNE and PEA, QSE, classical shadows, M3, chained mitigation); the road to fault tolerance (stabilizer formalism, code taxonomy, decoding, threshold, logical QEM); **Part VI, research methods**: the light-cone fault rate, equal-budget phase diagrams, a device against its component model, context-dependent noise on heavy hex and the diagnostics that explain the gap; 123 references with DOIs; calculators |
 | **Run on IBM Quantum** | The Playground's experiment as sampler jobs — a local rehearsal on a fake device, then real hardware — with every contender's budget allocated exactly as in simulation and the Playground's full results view and ZIP |
+| **QEM Performance & Selection** | The protocol-selection studies (1.8.0 first; policy tables, task drill-down, figures with their notes), *Recommend for my circuit* (the shipped model bundle on the Playground's experiment: choice, fallback and why, the preflight status of every candidate, out-of-distribution reasons, feature costs), the drill-down analyses and the feature dictionary |
+| **Noise Models & Discrepancy** | Where a specified noise model fails to predict circuit behavior: stored divergence and rehearsal results with matched protocols and calibrated statistics, and calculators on numbers you type (nothing executed) |
 
 ### Playground
 
@@ -344,20 +480,38 @@ environment this project cannot set).
 ```
 app.py                      landing page
 pages/                      Playground, Cost vs precision, Bias–variance, Model mismatch, Head-to-head,
-                            Theory & sources, Run on IBM Quantum, Batch run, Learn
+                            Theory & sources, Run on IBM Quantum, Batch run, Learn, QEM Performance & Selection,
+                            Noise Models & Discrepancy
 qemx/                       engine (no Streamlit): circuit, templates, observables, hamiltonian, noise, compile,
                             stages, layout_search, device, backends/, transforms, methods/, recipes, analysis,
                             insight, variational, batch, sweep, learn, timeline, hardware, budget, report, export,
-                            bundle, resources, explain, viz/
+                            bundle, resources, explain, viz/, phase/ (Direction A), experiment (experiment
+                            documents), textio (UTF-8 and strict JSON)
+qemx/selection/             the protocol-selection study and the deployed recommender (no Streamlit); model bundles
+                            in qemx/selection/bundles/
 ui/                         Streamlit glue: navigation, session state, widgets, sidebar, drag-and-drop composer,
-                            results (the shared results view), tooltips (math in help texts), figures (diagrams)
+                            results (the shared results view), selection_view and recommend_view (QEM Performance),
+                            tooltips (math in help texts), figures (diagrams)
+configs/selection/          study configurations (YAML; schema in docs/selection/schemas/), ancestry registry,
+                            plotting configurations, the 1.9.0 figure/table specification
+configs/pipelines/          study pipelines for `python -m qemx.selection pipeline` (smoke19, pilot19, fulldev19,
+                            reproduce_v18)
+examples/experiments/       experiment documents for `python -m qemx.experiment` and `qemx.selection recommend`
 tests/                      pytest
 manifests/                  study manifests (pre-registered ones are never edited; the final holdout is frozen)
 data/pilot_v2/              primary records of the main-study pilot (with SHA-256 sums)
-reports/                    the pilot report, the discrepancy rehearsal, the diagnostic-policy study, the hardware plan
-docs/                       USER_GUIDE.md, MIGRATION.md, RELEASE_NOTES.md, QA_SUMMARY.md, ARCHITECTURE.md, theory.md
-                            (the handbook), hardware_preflight.md, FINAL_HOLDOUT.md, feature_dictionary.md,
-                            literature_matrix.md, research/ (study designs), learn/ (Learn chapters), figures/
-scripts/                    study analysis, hardware planning, validations, reproduction, profiling
+reports/                    the protocol-selection studies (selection_v180, selection_v170, selection_pilot), the
+                            1.9.0 pilot, execution audit, tables and corrections (pilot_v190, execution_audit_v190,
+                            tables_v190, corrections_v190), the main-study pilot report, the discrepancy rehearsal, the diagnostic-policy study, the hardware plan
+docs/                       USER_GUIDE.md, MIGRATION.md, RELEASE_NOTES.md, QA_SUMMARY.md, ARCHITECTURE.md,
+                            RESEARCH_FINDINGS_AND_NEXT_STEPS.md, ISSUE_EVIDENCE_MATRIX.md, CI_FAILURE_ANALYSIS.md,
+                            WINDOWS_FIRST_RUN.md, RELEASE_CONSISTENCY.md, OWNER_DECISIONS.md, theory.md (the
+                            handbook), hardware_preflight.md, FINAL_HOLDOUT.md, feature_dictionary.md,
+                            literature_matrix.md, selection/ (the study's methods, commands, data dictionary,
+                            figures, candidates, results), research/ (study designs), learn/ (Learn chapters), figures/
+scripts/                    study analysis, hardware planning, validations, reproduction, profiling, CI helpers
 scripts/make_figures.py     rebuilds docs/figures/*.svg from quantikz sources (pdflatex + pdftocairo)
+.streamlit/config.toml      server and theme settings (headless, XSRF protection, 20 MB uploads, no stack traces)
+.vscode/                    launch and task definitions for VS Code (Streamlit app, tests)
+.github/workflows/ci.yml    CI: locked, latest (3.10/3.12/3.13), oldest Streamlit, legacy-locale text encoding, Windows
 ```

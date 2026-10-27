@@ -64,6 +64,15 @@ DICTIONARY = (
     F("lc_share", "available", "noise", "lam_lc / lam_total"),
     F("lam_ro", "available", "noise", "Σ over the measured support of the mean readout flip probability"),
     F("log10_budget", "available", "budget", "log10 of the total shot budget B"),
+    # 1.8.0 noise-composition descriptors (calibration snapshot only; prompt section 4). Not part of the 1.7 sets.
+    F("lam_lc_2q", "available", "noise", "lam_lc from the errors of two-qubit gates only (lam_lc_gate − lam_lc_2q is "
+      "the one-qubit part)"),
+    F("ro_asym", "available", "noise", "mean |P(1|0) − P(0|1)| of the readout of the observable's measured qubits "
+      "(readout asymmetry)"),
+    F("err2q_spread", "available", "noise", "max / median reported error of the two-qubit gates the compiled "
+      "circuit uses (spatial heterogeneity; 1 with fewer than two)"),
+    F("duration_t2", "available", "noise", "scheduled duration / median T2 of the used qubits (relaxation exposure "
+      "scale)"),
     F("pec_log_gamma", "available", "protocol", "ln γ of PEC's quasi-probability decomposition of the snapshot's "
       "median-rate model (readout γ included): its standard deviation grows as γ"),
     F("zne_eta_l1_linear", "available", "protocol", "Σ|η_j| of linear extrapolation at the achieved fold λ (gate "
@@ -90,15 +99,24 @@ SETS = {
                   "idle_fraction", "duration_us", "obs_weight", "obs_terms", "obs_support", "log10_budget"),
     "lightcone": ("n", "two_qubit", "depth", "obs_weight", "lc_qubits", "lc_gates", "lc_2q", "lc_locations",
                   "log10_budget"),
-    "deployable": tuple(f.name for f in DICTIONARY if f.info == "available"),
-    "deployable+simulated": tuple(f.name for f in DICTIONARY if f.info in ("available", "simulated")),
+    # the 1.7.0 sets, frozen by name (1.8.0 added features must not change them: bundles and analyses refer to them)
+    "deployable": ("n", "two_qubit_logical", "non_clifford", "two_qubit", "depth", "pulses_1q", "non_clifford_slots",
+                   "idle_fraction", "duration_us", "obs_weight", "obs_terms", "obs_support", "lc_qubits", "lc_gates",
+                   "lc_2q", "lc_locations", "lam_lc", "lam_lc_exact", "lam_lc_gate", "lam_lc_idle", "lam_total",
+                   "lc_share", "lam_ro", "log10_budget", "pec_log_gamma", "zne_eta_l1_linear",
+                   "zne_eta_l1_richardson"),
 }
+SETS["deployable+simulated"] = SETS["deployable"] + ("log10_v_raw_sup", "log10_v_zne_sup", "log10_v_pec_sup",
+                                                     "abs_signal_sup", "entropy_half", "output_entropy_bits")
+NOISE18 = ("lam_lc_2q", "ro_asym", "err2q_spread", "duration_t2")
+SETS["deployable18"] = SETS["deployable"] + NOISE18                               # 1.8.0
+SETS["deployable18+simulated"] = SETS["deployable+simulated"] + NOISE18
 GROUPS = sorted({f.group for f in DICTIONARY if f.info != "oracle"})
 # Every feature computed from the backward light cone (1.7.0, review of Figure 3): the structural light-cone group and
 # the noise-weighted sums restricted to it. Removing the "lightcone" group alone leaves lam_lc and lc_share in the
 # noise group; the semantic ablation removes all of these.
 LIGHTCONE_DERIVED = ("lc_qubits", "lc_gates", "lc_2q", "lc_locations", "lam_lc", "lam_lc_exact", "lam_lc_gate",
-                     "lam_lc_idle", "lc_share")
+                     "lam_lc_idle", "lc_share", "lam_lc_2q")
 SEMANTIC_ABLATIONS = {"-lightcone (all derived)": LIGHTCONE_DERIVED,
                       "-noise (calibration)": tuple(f.name for f in DICTIONARY if f.group == "noise"),
                       "-simulated": tuple(f.name for f in DICTIONARY if f.info == "simulated")}
@@ -133,6 +151,7 @@ def task_features(prep) -> dict:
                lc_locations=float(rep.n_loc_lc), lam_lc=float(rep.lam_lc), lam_lc_exact=float(rep.lam_lc_exact),
                lam_lc_gate=float(rep.lam_lc_gate), lam_lc_idle=float(rep.lam_lc_idle), lam_total=float(rep.lam_total),
                lc_share=float(rep.lam_lc / rep.lam_total) if rep.lam_total > 0 else 0.0, lam_ro=float(rep.lam_ro))
+    out.update(noise18(comp, dm, obs, rep))
     s = prep.supplied
     pec = s.get("PEC")
     out["pec_log_gamma"] = float(math.log(pec.gamma)) if _ok(pec) and pec.gamma > 0 else math.nan
@@ -156,6 +175,28 @@ def task_features(prep) -> dict:
     raw_t = prep.truth.get("RAW")
     out["raw_bias_true"] = float(raw_t.mean - built.ideal) if _ok(raw_t) else math.nan
     return out
+
+
+def noise18(comp, dm, obs=None, rep=None, support_bits=None) -> dict:
+    """The 1.8.0 noise-composition descriptors (NOISE18) from the compiled circuit, the snapshot model and the light
+    cone report; ``support_bits``: the observable's classical bits (else from ``obs``)."""
+    from ..phase.lightcone import observable_support
+    mm = comp.measure_map or {}
+    if support_bits is None:
+        sup = observable_support(obs, mm, comp.implemented.n)              # physical (compact) qubits
+    else:
+        sup = tuple(sorted({int(mm.get(b, b)) for b in support_bits}))
+    asym = [abs(dm.qubits[q].p01 - dm.qubits[q].p10) for q in sup]
+    e2 = sorted(v for (nm, qa), v in dm.errors.items() if len(qa) == 2 and v is not None
+                and any(o.k == 2 and tuple(o.qubits) in (tuple(qa), tuple(qa)[::-1]) for o in comp.implemented.ops
+                        if o.kind == "gate"))
+    from ..context_noise import alap_schedule
+    dur = float(alap_schedule(comp.implemented, dm.durations)[3])
+    t2 = [q.t2 for q in dm.qubits if q.t2 and np.isfinite(q.t2)]
+    return dict(lam_lc_2q=float(getattr(rep, "lam_lc_2q", math.nan)) if rep is not None else math.nan,
+                ro_asym=float(np.mean(asym)) if asym else 0.0,
+                err2q_spread=float(e2[-1] / np.median(e2)) if len(e2) >= 2 and np.median(e2) > 0 else 1.0,
+                duration_t2=float(dur / np.median(t2)) if t2 else math.nan)
 
 
 def _ok(r) -> bool:

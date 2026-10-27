@@ -9,8 +9,10 @@ Conventions, fixed before any result was computed:
   regret Δ = R̂_eval(π) − R̂_eval(a*) and the ratio ρ = (R̂_eval(π) + ε0)/(R̂_eval(a*) + ε0) (theory companion
   Eq. 1.18; the comparator is the declared candidate set, not every conceivable protocol).
 * **Aggregate.** The primary score of a policy at a budget is the mean over test base circuits (each base circuit
-  weighs the same; its rows averaged first) of log10(R̂_eval(π) + ε0) — the geometric-mean risk, robust to the few
-  tasks whose risk dominates an arithmetic mean. The arithmetic policy MSE is reported beside it.
+  weighs the same; its rows averaged first) of log10(R̂_eval(π) + ε0), ε0 = 1e-6 — the log of the geometric mean of
+  *risk plus the floor*, robust to the few tasks whose risk dominates an arithmetic mean. A difference Δ in it is a
+  ratio 10^Δ of geometric means of (MSE + 1e-6), not of MSE itself (1.8.0 wording; finding F6). The arithmetic
+  policy MSE and, from 1.8.0, declared tail metrics (``tail_metrics``, ``p_severe_vs_raw``) are reported beside it.
 * **Gap closed** = (m_SBS − m_π)/(m_SBS − m_VBS) with m the primary aggregate: 1 is the per-task oracle, 0 the
   training-selected single best protocol, below 0 worse than it (ASlib orientation; Lindauer et al. use the opposite).
 * **Uncertainty.** 95 % percentile intervals from a bootstrap over test base circuits (2 000 resamples; paired
@@ -32,6 +34,28 @@ import math
 import numpy as np
 
 from .models import EPS0
+
+
+SEVERE_VS_RAW = 10.0        # 1.8.0: severe degradation = risk > 10 × RAW's risk on the same row (declared)
+SEVERE_ABS = 0.1            # 1.8.0: severe absolute error = risk > 0.1 (RMSE > 0.32 on an observable with |O| ≤ 1)
+TAIL_SHARE = 0.05           # 1.8.0: concentration = share of the total loss from the worst 5 % of base circuits
+
+
+def tail_metrics(risk, groups) -> dict:
+    """Arithmetic-scale tail of a policy's chosen risks (1.8.0; finding F7), beside the shifted-log primary metric:
+    base-circuit-weighted probability of a severe absolute risk, the 95 % quantile of the risk, and the share of the
+    total (circuit-averaged) loss carried by the worst TAIL_SHARE of base circuits — how concentrated the loss is."""
+    r = np.asarray(risk, float)
+    g = np.asarray(groups)
+    m, _ = _by_group(r, g)
+    m = m[np.isfinite(m)]
+    if not m.size:
+        return dict(p_severe_abs=math.nan, q95_risk=math.nan, worst5_loss_share=math.nan)
+    k = max(1, int(math.ceil(TAIL_SHARE * m.size)))
+    tot = float(m.sum())
+    sev = np.where(np.isfinite(r), (r > SEVERE_ABS).astype(float), np.nan)    # a missing risk is not "not severe"
+    return dict(p_severe_abs=wmean(sev, g), q95_risk=wquantile(r, g, 0.95),
+                worst5_loss_share=float(np.sort(m)[::-1][:k].sum() / tot) if tot > 0 else 0.0)
 
 
 def scores(ds, idx, chosen) -> dict:
@@ -95,11 +119,23 @@ def bootstrap(values_by_policy: dict, groups, reps: int = 2000, seed: int = 0) -
     return out, M, picks
 
 
+def _inference(circuits: int) -> str:
+    """What an interval over ``circuits`` independent base circuits can mean (1.9.1; independent review §4): with
+    one circuit the bootstrap over circuits resamples one group, so its interval is degenerate and says nothing about
+    between-circuit variability — such a stratum (e.g. one part of a held-out-noise or joint split) is descriptive."""
+    if circuits < 2:
+        return "descriptive: one base circuit (no between-circuit interval)"
+    if circuits < 5:
+        return "few base circuits (%d): interval unreliable, descriptive" % circuits
+    return "bootstrap over %d base circuits" % circuits
+
+
 def summarize_scores(per_policy: dict, groups, B, reps: int = 2000, seed: int = 0) -> list:
     """Per policy and per budget (and over all budgets): base-circuit-weighted mean log10 risk with a bootstrap
     interval over base circuits, the arithmetic policy MSE, regret tails, coverage, the gap closed and the paired
     difference to SBS. ``per_policy[name]`` holds per-row arrays ``log_risk``, ``risk``, ``log_ratio``,
-    ``accepted``; ``groups`` and ``B`` are per-row base-circuit ids and budgets."""
+    ``accepted``; ``groups`` and ``B`` are per-row base-circuit ids and budgets. ``inference`` (1.9.1) marks rows
+    over fewer than five base circuits as descriptive (``_inference``)."""
     groups, B = np.asarray(groups), np.asarray(B)
     budgets = sorted(set(B.tolist()))
     summary = []
@@ -122,7 +158,8 @@ def summarize_scores(per_policy: dict, groups, B, reps: int = 2000, seed: int = 
                      median_log_ratio=wquantile(lr_s, gs, 0.5),
                      p_regret_gt_10pct=wmean((lr_s > math.log10(1.1)).astype(float), gs),
                      p_regret_gt_2x=wmean((lr_s > math.log10(2.0)).astype(float), gs),
-                     coverage=wmean(np.asarray(v["accepted"][sel], float), gs), weighting="base circuits")
+                     coverage=wmean(np.asarray(v["accepted"][sel], float), gs), weighting="base circuits",
+                     inference=_inference(len(set(gs.tolist()))))
             if m_sbs is not None and m_vbs is not None:
                 m = M[p]
                 gap = (np.nanmean(m_sbs) - np.nanmean(m)) / (np.nanmean(m_sbs) - np.nanmean(m_vbs)) \
@@ -157,6 +194,12 @@ def summarize_scores(per_policy: dict, groups, B, reps: int = 2000, seed: int = 
             if raw is not None:
                 worse = np.log10((v["risk"][sel] + EPS0) / (raw["risk"][sel] + EPS0)) > math.log10(1.1)
                 d.update(raw_degradation=float(np.nanmean(_by_group(worse.astype(float), g_)[0])))
+                # 1.8.0 (finding F7), declared before any 1.8.0 result: a severe degradation is a chosen risk more
+                # than ten times RAW's on the same row
+                rp, rr = np.asarray(v["risk"][sel], float), np.asarray(raw["risk"][sel], float)
+                sev = np.where(np.isfinite(rp) & np.isfinite(rr), (rp > SEVERE_VS_RAW * rr).astype(float), np.nan)
+                d.update(p_severe_vs_raw=float(np.nanmean(_by_group(sev, g_)[0])))
+            d.update(tail_metrics(v["risk"][sel], g_))
             if "fail" in v:
                 d.update(fail_share=float(np.nanmean(_by_group(np.asarray(v["fail"], float)[sel], g_)[0])))
             if v["accepted"][sel].size and not v["accepted"][sel].all():
@@ -278,8 +321,16 @@ def splits(ds, kind: str, *, k: int = 5, seed: int = 0, **kw) -> list:
     width              train on n < ``min_test_n``, test on n ≥ it (a base circuit has one width)
     budget-extrap      train on B ≤ ``max_train_B``, test above (extrapolation in budget), crossed with the folds
     budget-interp      train on every other budget of the grid, test on the rest, crossed with the folds
+    device-base        (1.9.0) train on every *base* device but ``test_device`` (all its noise settings held out
+                       together), crossed with the folds — a new device, not a new noise setting of a known one
+    noise              (1.9.0) train on every noise setting (the device modifiers after '@', or ``native``) but
+                       ``test_noise``, crossed with the folds — a held-out noise strength or composition
+    joint              (1.9.0) hold out a family *and* a noise setting together: test rows of family f under noise
+                       c; train rows of other families under other noise settings (``test_family``, ``test_noise``;
+                       default every pair with both sides non-empty) — a joint circuit/noise shift
 
-    No base circuit is on both sides of any split.
+    No base circuit is on both sides of any split. Noise settings are calibration-supplied snapshot modifiers (what
+    a user's calibration shows), never hidden execution-law parameters.
     """
     from .models import group_kfold
     allr = np.arange(len(ds.rows))
@@ -304,6 +355,29 @@ def splits(ds, kind: str, *, k: int = 5, seed: int = 0, **kw) -> list:
         td = kw.get("test_device")
         devs = [td] if td else sorted(set(dev.tolist()))
         return [p for d in devs if (dev != d).any() for p in crossed("device=%s" % d, dev != d, dev == d)]
+    if kind == "device-base":
+        base = np.array([str(d).split("@")[0] for d in ds.col("device")])
+        td = kw.get("test_device")
+        devs = [td] if td else sorted(set(base.tolist()))
+        return [p for d in devs if (base != d).any() for p in crossed("device-base=%s" % d, base != d, base == d)]
+    if kind == "noise":
+        nz = noise_setting(ds.col("device"))
+        tn = kw.get("test_noise")
+        sets = [tn] if tn else sorted(set(nz.tolist()))
+        return [p for c in sets if (nz != c).any() for p in crossed("noise=%s" % c, nz != c, nz == c)]
+    if kind == "joint":
+        nz = noise_setting(ds.col("device"))
+        fam = ds.col("family")
+        fs = [kw["test_family"]] if kw.get("test_family") else sorted(set(fam.tolist()))
+        cs = [kw["test_noise"]] if kw.get("test_noise") else sorted(set(nz.tolist()))
+        out = []
+        for f in fs:
+            for c in cs:
+                te = allr[(fam == f) & (nz == c)]
+                tr = allr[(fam != f) & (nz != c)]
+                if len(te) and len(tr):
+                    out.append(("family=%s&noise=%s" % (f, c), tr, te))
+        return out
     if kind == "width":                      # a base circuit has one width: no variant crosses this split
         n = ds.col("n").astype(int)
         m = int(kw.get("min_test_n", n.max()))
@@ -318,6 +392,19 @@ def splits(ds, kind: str, *, k: int = 5, seed: int = 0, **kw) -> list:
         tr_b = np.isin(B, grid[0::2])
         return crossed("interp", tr_b, ~tr_b)
     raise ValueError(kind)
+
+
+def noise_setting(devices) -> np.ndarray:
+    """The noise setting of each device specification: its modifiers after '@' in a canonical order, or 'native'."""
+    out = []
+    for d in devices:
+        d = str(d)
+        if "@" not in d:
+            out.append("native")
+        else:
+            out.append(",".join(sorted(x for x in d.split("@", 1)[1].split(",") if not x.startswith("eng="))) or
+                       "native")
+    return np.array(out)
 
 
 def label_noise(ds, idx, chosen, draws: int = 200, seed: int = 0) -> tuple:

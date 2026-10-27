@@ -1,0 +1,45 @@
+# Reserved confirmation set of the next research stage (1.9.0; PLANNED — not labeled, not inspected). New logical
+# circuits only (angle seeds 196x–198x, fields 0.5x/0.8x), disjoint from every earlier study including smoke19,
+# pilot19 and fulldev19 (registered with role "planned" in configs/selection/ancestry_registry.json). It is labeled
+# and evaluated ONCE, after fulldev19's policy, metric, split design, stopping rules and analysis are frozen
+# (docs/selection/RESEARCH_PLAN_v19.md); conf18 and earlier confirmations are inspected data, not confirmations of a
+# new policy. Population (1.9.1 correction of "same task distribution as fulldev19"): the five families hea, qaoa,
+# brickwork, ising and ghz at widths 3–6 with fulldev19's noise settings; it has none of fulldev19's qft, bv and grover
+# circuits, so a confirmation on it speaks for that five-family population only. No held-out shift: a shift test
+# needs its own declared set. Its size (32 circuits) is a draft with ≈ 45–58 % power at Δ = 0.08: the estimand,
+# population and size options to decide before labeling are in docs/selection/RESEARCH_PLAN_v19.md (conf19 options).
+schema: qemx.selection.config/1
+name: conf19
+status: planned
+expansion_policy: explicit
+master_seed: 20261120
+R: 60
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 6, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4, 5, 6]
+    families:
+      hea: [{layers: 2, angle_seed: 1961}, {layers: 3, angle_seed: 1962}]
+      qaoa: [{p: 1, angle_seed: 1971}, {p: 2, angle_seed: 1972}]
+      brickwork: [{layers: 3, angle_seed: 1981}]
+      ising: [{steps: 2, h: 0.53}, {steps: 1, h: 0.83}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=0.5", "fake_torino@s=2", "fake_kyiv@g2=2",
+              "fake_fez@t=2", "fake_torino@ro=2", "fake_fez@chi=0.25"]
+    include_default: false
+    variants_per_base: 2
+  - widths: [3, 4, 5, 6]
+    families:
+      ghz: [{theta: 0.67, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=2", "fake_kyiv@t=2", "fake_torino@g2=2"]
+    include_default: false
+    variants_per_base: 2
+limits: {task_seconds: 7200, memory_gb: 3, cpu_hours: 30, disk_gb: 10, min_free_disk_gb: 5}

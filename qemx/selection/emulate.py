@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .protocols import PORTFOLIO, Allocation, allocate
+from .protocols import PORTFOLIO, PORTFOLIO_16, Allocation, allocate
 
 FLAGS = ("cal_fallback", "fit_fallback", "learn_fallback", "nonresponse")
 NO_DESIGN = -1                      # design index of a trial of a protocol without a training design
@@ -58,6 +58,9 @@ class DesignPlan:
     mode: str = "fixed-shared"
     count: int = 1                  # fixed-shared: designs shared by both halves (1.6.0 ``learning_designs``)
     per_half: int = 0               # fresh: independent designs per label half
+    seed_scheme: int = 1            # 1.8.0 (finding N1): 1 = 1.6/1.7 seeds; 2 = namespaced streams (``stream_seed``)
+    crn: str = "task"               # scheme 2: the common-random-number group sharing design streams: "task" (each
+    #                                 task its own designs) or "base" (variants of one base circuit share them)
 
     @staticmethod
     def from_config(v) -> "DesignPlan":
@@ -72,15 +75,24 @@ class DesignPlan:
                 raise ValueError("learning_designs must be ≥ 1, got %d" % v)
             return DesignPlan("fixed-shared", int(v), 0)
         if isinstance(v, dict):
-            extra = set(v) - {"mode", "per_half", "count"}
+            extra = set(v) - {"mode", "per_half", "count", "seed_scheme", "crn"}
             if extra:
                 raise ValueError("unknown learning_designs keys: %s" % ", ".join(sorted(extra)))
             mode = v.get("mode", "fresh")
+            scheme, crn = int(v.get("seed_scheme", 1)), str(v.get("crn", "task"))
+            if scheme not in (1, 2):
+                raise ValueError("learning_designs.seed_scheme must be 1 or 2, got %r" % (v.get("seed_scheme"),))
+            if crn not in ("task", "base"):
+                raise ValueError("learning_designs.crn must be 'task' or 'base', got %r" % (crn,))
+            if scheme == 1 and "crn" in v:
+                raise ValueError("learning_designs.crn needs seed_scheme 2")
             if mode == "fresh":
                 k = int(v.get("per_half", 0))
                 if k < 1:
                     raise ValueError("learning_designs.per_half must be ≥ 1 for fresh designs")
-                return DesignPlan("fresh", 1, k)
+                return DesignPlan("fresh", 1, k, scheme, crn)
+            if scheme != 1:
+                raise ValueError("seed_scheme 2 is defined for fresh designs only")
             if mode == "fixed-shared":
                 return DesignPlan("fixed-shared", int(v.get("count", 1)), 0)
             raise ValueError("learning_designs.mode must be 'fresh' or 'fixed-shared', got %r" % (mode,))
@@ -90,12 +102,38 @@ class DesignPlan:
         """The configuration value (an integer for the 1.6.0 form, so its configuration digests are unchanged)."""
         if self.mode == "fixed-shared":
             return int(self.count)
-        return dict(mode="fresh", per_half=int(self.per_half))
+        if self.seed_scheme == 1:                       # 1.7.0 form: its digests are unchanged
+            return dict(mode="fresh", per_half=int(self.per_half))
+        return dict(mode="fresh", per_half=int(self.per_half), seed_scheme=int(self.seed_scheme), crn=self.crn)
 
     @property
     def estimand(self) -> str:
         return ("risk conditional on %d fixed designs shared by both halves" % self.count
                 if self.mode == "fixed-shared" else "fresh-design risk (independent design pools per half)")
+
+
+def stream_seed(root: int, crn_key: str, protocol: str, half: int, index: int, role: str) -> int:
+    """Method seed of one preparation stream under seed scheme 2 (1.8.0; finding N1): a stable digest of
+    (root seed, common-random-number group, protocol, label half, design index, role) — never Python's randomized
+    ``hash`` — so streams are independent across tasks (or base circuits, ``crn='base'``) and protocols, identical
+    after reordering, resuming or a different number of processes, and the same across budgets (a design is reused
+    over the budget grid by declaration). Roles: ``allocation`` (the design the allocation is computed from; half −1)
+    and ``design`` (a pool member)."""
+    import hashlib
+    h = hashlib.sha256(("qemx.seed/2|%d|%s|%s|%d|%d|%s" % (int(root), crn_key, protocol, int(half), int(index), role)
+                        ).encode("utf-8")).digest()
+    return int.from_bytes(h[:4], "little") & 0x7FFFFFFF
+
+
+def allocation_seed(rec: dict, protocol: str) -> int:
+    """The method seed a label record's allocation of ``protocol`` was computed with (the design the benchmark's
+    feasibility was decided on): the record's master seed under seed scheme 1, its namespaced allocation stream
+    (``stream_seed(root, crn_group, protocol, −1, 0, 'allocation')``) under scheme 2 — exactly as ``prepare`` derives
+    it. Used to replay a study's own designs (``replay(..., design_seeds='study')``) and by the root audit."""
+    seed = int(rec["master_seed"]) % (2 ** 31)
+    if int(rec.get("seed_scheme", 1) or 1) == 1:
+        return seed
+    return stream_seed(seed, str(rec.get("crn_group", "")), protocol, -1, 0, "allocation")
 
 
 def pool_seed(seed: int, half: int, k: int) -> int:
@@ -123,8 +161,11 @@ def design_record(key: str, res, ctx, *, seed: int, half: int, index: int, ideal
     research-only diagnostics: the exact-feature fit's error and whether μ lies inside the training labels' range."""
     import hashlib
     import json as _json
+    # design_id is a *seed token* (protocol and seed only, as in 1.7.0): equal tokens in two tasks do not mean equal
+    # circuits. instance_id (1.8.0) identifies the physical design: task, protocol, seed and its content digest.
     rec = dict(protocol=key, half=int(half), index=int(index), seed=int(seed),
                design_id=hashlib.sha256(("%s|%d" % (key, int(seed))).encode()).hexdigest()[:16])
+    task_id = str(getattr(getattr(ctx, "built_spec", None), "task_id", "") or "")
     if isinstance(res, Exception):
         rec.update(status="error", error="%s: %s" % (type(res).__name__, str(res)[:200]))
         return rec
@@ -136,6 +177,9 @@ def design_record(key: str, res, ctx, *, seed: int, half: int, index: int, ideal
         return None if x is None else np.round(np.asarray(x, float), 12).tolist()
     content = [d.get("names"), _arr(d.get("y_train")), _arr(d.get("X")), _arr(d.get("x_train"))]
     rec["content_digest"] = hashlib.sha256(_json.dumps(content, default=str).encode()).hexdigest()[:16]
+    if task_id:
+        rec["instance_id"] = hashlib.sha256(("%s|%s|%d|%s" % (task_id, key, int(seed), rec["content_digest"])
+                                             ).encode()).hexdigest()[:16]
     y = np.asarray(d.get("y_train") if d.get("y_train") is not None else [], float)
     X = d.get("X")
     diag = dict(n_train=int(len(y)), n_features=int(d.get("n_features") or 0), rank=d.get("rank"),
@@ -210,12 +254,23 @@ def prepare(built, protocols=None, seed: int = 0, designs=1, halves=(0, 1)) -> P
     sup_noise = device.get_model(spec.supplied_backend, phys).equivalent_noise()
     plan = DesignPlan.from_config(designs)
     out = Prepared(built, same_law=same, plan=plan)
-    for key in (protocols or list(PORTFOLIO)):
+    crn_key = ""
+    if plan.seed_scheme == 2:
+        crn_key = str(spec.task_id if plan.crn == "task" else spec.base_id)
+    from .protocols import NotApplicable
+    for key in (protocols or list(PORTFOLIO_16)):
         pr = PORTFOLIO[key]
-        rc = pr.recipe()
-        meth = REGISTRY[pr.estimator]
         t0 = time.perf_counter()
-        ctx_t = _context(built, rc, r_truth, sup_noise, seed)
+        try:
+            rc = pr.recipe(spec)                       # 1.8.0: declared parameters resolved from the task
+        except NotApplicable as e:                     # a precondition the task does not meet: infeasible, not error
+            out.truth[key] = out.supplied[key] = e
+            out.seconds[key] = time.perf_counter() - t0
+            continue
+        meth = REGISTRY[pr.estimator]
+        a_seed = int(seed) if plan.seed_scheme == 1 else stream_seed(seed, crn_key, key, -1, 0, "allocation")
+        ctx_t = _context(built, rc, r_truth, sup_noise, a_seed)
+        ctx_t.built_spec = spec
         try:
             out.truth[key] = meth.run(ctx_t, **rc.p)
             out.ctx_truth[key] = ctx_t
@@ -225,13 +280,14 @@ def prepare(built, protocols=None, seed: int = 0, designs=1, halves=(0, 1)) -> P
             out.supplied[key] = out.truth[key]
         else:
             try:
-                out.supplied[key] = meth.run(_context(built, rc, r_sup, sup_noise, seed), **rc.p)
+                out.supplied[key] = meth.run(_context(built, rc, r_sup, sup_noise, a_seed), **rc.p)
             except Exception as e:                   # noqa: BLE001
                 out.supplied[key] = e
         ideal = float(built.ideal) if built.ideal is not None else None    # deployment: unknown (no oracle)
 
         def draw(sd, half, idx):
             ctx_k = _context(built, rc, r_truth, sup_noise, sd, moments=False)
+            ctx_k.built_spec = spec
             try:
                 res_k = meth.run(ctx_k, **rc.p)
             except Exception as e:                   # noqa: BLE001 - a design that cannot be built is recorded
@@ -243,16 +299,17 @@ def prepare(built, protocols=None, seed: int = 0, designs=1, halves=(0, 1)) -> P
             if plan.mode == "fixed-shared" and plan.count > 1:
                 out.designs[key] = [(out.truth[key], out.ctx_truth[key])]
                 out.design_records.setdefault(key, []).append(design_record(
-                    key, out.truth[key], out.ctx_truth[key], seed=seed, half=-1, index=0, ideal=ideal))
+                    key, out.truth[key], out.ctx_truth[key], seed=a_seed, half=-1, index=0, ideal=ideal))
                 for k in range(1, plan.count):
                     out.designs[key].append(draw(design_seed(seed, k), -1, k))
             elif plan.mode == "fresh":
-                used = {int(seed) % (2 ** 31)}
+                used = {int(a_seed) % (2 ** 31)}
                 out.pools[key] = {}
                 for half in halves:
                     pool, k = [], 0
                     while len(pool) < plan.per_half:
-                        sd = pool_seed(seed, half, k)
+                        sd = pool_seed(seed, half, k) if plan.seed_scheme == 1 else \
+                            stream_seed(seed, crn_key, key, half, k, "design")
                         k += 1
                         if sd in used:                   # never reuse a seed (allocation design or the other half)
                             continue
@@ -288,11 +345,16 @@ def trials(prep: Prepared, key: str, B: int, R: int, rng, *, diagnostics: int = 
     Status: ``method-error`` when the method could not be run at all on this task (a software or modeling failure,
     with its message — never mixed with infeasibility), ``infeasible`` when the allocation cannot meet the
     protocol's minima at B (the reason is recorded), else ``ok``."""
+    from .protocols import NotApplicable
     pr = PORTFOLIO[key]
     res_t, res_s = prep.truth.get(key), prep.supplied.get(key)
     R = int(R)
     nan = np.full(R, np.nan)
     none = np.full(R, NO_DESIGN, np.int16)
+    if isinstance(res_t, NotApplicable):               # 1.8.0: a precondition, recorded as infeasible with its reason
+        a = Allocation(key, int(B), False, "not applicable: %s" % res_t).to_json()
+        a["status"] = "infeasible"
+        return Trials(key, int(B), a, nan, {f: np.zeros(R, bool) for f in FLAGS}, design=none, status="infeasible")
     if isinstance(res_t, Exception) or isinstance(res_s, Exception) or res_t is None or res_s is None:
         why = repr(res_t if isinstance(res_t, Exception) else res_s)[:200]
         a = Allocation(key, int(B), False, "method failed: " + why).to_json()
@@ -346,9 +408,10 @@ def _run(pr, res_t, ctx, alloc, R: int, rng) -> tuple:
             theta[bad] = 0.0
             flags["cal_fallback"] = bad
     kw = dict(theta=theta)
-    if pr.estimator == "zne":
+    if pr.needs_split:                                 # ZNE, and chains whose outer estimator is ZNE (1.8.0)
         est, failed = res_t.sampler(int(alloc.N), R, rng, theta=theta, split=list(alloc.split), with_failures=True)
-        if dict(pr.params).get("rule") == "exponential":
+        rule = dict(pr.params).get("rule", dict(pr.params).get("zne_rule"))
+        if rule == "exponential":
             flags["fit_fallback"] = np.asarray(failed, bool) & np.isfinite(est)
     elif pr.estimator == "learning":
         est = res_t.sampler(int(alloc.N), R, rng, theta=theta, deployable=True, s_tr=int(alloc.s_tr))
@@ -360,6 +423,9 @@ def _run(pr, res_t, ctx, alloc, R: int, rng) -> tuple:
     else:
         est = res_t.sampler(int(alloc.N), R, rng, **kw)
     est = np.asarray(est, float)
+    if pr.post == "clip-observable-range":              # 1.8.0: declared projection (ZNE-E-B); NaN stays NaN
+        o = np.asarray(ctx.obs.o, float)
+        est = np.where(np.isfinite(est), np.clip(est, float(o.min()), float(o.max())), est)
     if pr.learning and structural_fallback(res_t):      # declared fallback for every trial (1.7.0: was unflagged
         flags["learn_fallback"] = np.ones(R, bool)      # for NIL, and for CDR on Clifford/degenerate designs)
     flags["nonresponse"] = ~np.isfinite(est)

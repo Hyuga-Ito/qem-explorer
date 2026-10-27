@@ -1,0 +1,248 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-24T20:49:43+00:00",
+ "identity": {
+  "stage": "regimes",
+  "labels_config": "52739717e2125a10",
+  "tasks": "ed86f543ab4d362f",
+  "n_tasks": 21,
+  "split": {
+   "final_test_fraction": 0.0,
+   "salt": "qemx-1.6-final",
+   "development": "e1a4f1f737b358a6",
+   "final": "4f53cda18c2baa0c"
+  },
+  "portfolio": "d97de6fc55ac3e22",
+  "devices": {
+   "fake_fez": "4eb21db4db0cca8f",
+   "fake_fez@eng=exact": "6916f73eab2f1fb1",
+   "fake_fez@s=0.5": "932e7d0d5b8e51a9",
+   "fake_fez@s=0.5,eng=exact": "02b440b8b4e752f5",
+   "fake_fez@s=1.5": "21a6ac7effc695df",
+   "fake_fez@s=1.5,eng=exact": "01834b08b0f44972",
+   "fake_fez@s=2": "705698089f93dca8",
+   "fake_fez@s=2,eng=exact": "3b1abde0d12d9a81",
+   "fake_fez@s=3": "982f5dbf94da6c36",
+   "fake_fez@s=3,eng=exact": "fd2dcfa43b1a2de0"
+  }
+ },
+ "identity_digest": "1650cdf2763a2b62",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "status": "planned",
+  "name": "regimes18",
+  "master_seed": 20261027,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "base"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ],
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 2
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 3
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_fez@s=0.5",
+     "fake_fez@s=1.5",
+     "fake_fez@s=2",
+     "fake_fez@s=3"
+    ],
+    "variants_per_base": "all"
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez"
+    ],
+    "variants_per_base": "all"
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ],
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 2
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 3
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez"
+    ],
+    "variants_per_base": "all"
+   }
+  ],
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3
+  },
+  "regimes": {
+   "noise_axis": "s",
+   "model_policy": "frozen",
+   "observable_budget": 100000,
+   "noise_budget": 100000
+  }
+ },
+ "manifest": [
+  "005384bdd996930b0c4f",
+  "11e81730224943fe9b6b",
+  "1edb9342a7f0e7048a69",
+  "26c2e79045cfe04b0595",
+  "35ceb6d45d7e2088eb5c",
+  "441e2e761d4fdfc23732",
+  "57915348675cdccc297b",
+  "5b89a55e5b48b2db7559",
+  "68bf1e8e1e9b9b09f628",
+  "897ce4e0c94f6594e2cc",
+  "8b77d7d57b0eeaf5b0bc",
+  "9b44efd16699121a8281",
+  "9fa4bf3f460fcd8e790a",
+  "a3baf677b76f4c1a9b00",
+  "a5966fe7408371b9b5fc",
+  "ab10cd04bb57b3ab9ad1",
+  "cc32cd199c6393d47e00",
+  "e55f303053eceb3e1e08",
+  "eb66901c821979bb3d72",
+  "ee435e5af70770c4e7e0",
+  "fa28de034495ddfce366"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-24T20:49:43+00:00",
+   "execution": {
+    "code": "4cc546f4a32d3f00",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  }
+ ],
+ "imports": []
+}

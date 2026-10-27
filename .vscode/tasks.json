@@ -1,6 +1,9 @@
 {
   // Terminal > Run Task… : the same actions without the debugger.
   "version": "2.0.0",
+  // GLIBC_TUNABLES: Linux only (glibc), ignored elsewhere — scikit-learn and qiskit-aer load two OpenMP runtimes that
+  // need more static TLS than glibc reserves by default (README, Linux note). Set here so tasks do not depend on the shell.
+  "options": { "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" } },
   "tasks": [
     {
       "label": "Install requirements",

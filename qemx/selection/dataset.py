@@ -63,6 +63,20 @@ class Dataset:
                        sub(self.flag_rates), sub(self.ERR), list(self.failures), self.design_mode)
 
 
+def with_protocols(ds: Dataset, keys) -> Dataset:
+    """The same rows with only the candidates ``keys`` (1.8.0: a portfolio restricted to a subset, e.g. portfolio-1.6
+    inside a portfolio-1.8 study, so that a larger portfolio and learned selection are compared on identical tasks
+    and labels)."""
+    j = [ds.protocols.index(k) for k in keys]
+
+    def col(a):
+        return None if a is None else a[:, j]
+    return Dataset(list(keys), ds.budgets, list(ds.rows), col(ds.Y_sel), col(ds.Y_eval), col(ds.SE_eval), col(ds.F),
+                   col(ds.Yc_eval), col(ds.fail), col(ds.SE_eval_trial),
+                   None if ds.flag_rates is None else ds.flag_rates[:, j], col(ds.ERR), list(ds.failures),
+                   ds.design_mode)
+
+
 def build(out_dir: str, task_ids=None) -> Dataset:
     """Every labeled task and budget of a labels directory (or only ``task_ids``, a run's manifest)."""
     ids = LB.task_ids(out_dir) if task_ids is None else sorted(task_ids)

@@ -6,6 +6,8 @@ a file name is built from them; nothing is simulated here)."""
 from __future__ import annotations
 
 import json
+
+from qemx import textio as TX
 import os
 import re
 
@@ -21,20 +23,20 @@ _TASK_ID = re.compile(r"^[0-9a-f]{20}$")
 
 
 def studies(reports: str) -> list:
-    """Study directories under ``reports`` (those with ``analysis/results.json``): fresh-design studies (1.7.0) first,
-    then historical ones (1.6.0 fixed-shared designs), each group by name."""
+    """Study directories under ``reports`` (those with ``analysis/results.json``): fresh-design studies (1.7.0 on)
+    first, newest name first (``selection_v180`` before ``selection_v170``), then historical ones (1.6.0
+    fixed-shared designs)."""
     if not os.path.isdir(reports):
         return []
-    names = [d for d in sorted(os.listdir(reports))
+    names = [d for d in sorted(os.listdir(reports), reverse=True)
              if os.path.exists(os.path.join(reports, d, "analysis", "results.json"))]
-    return sorted(names, key=lambda d: (design_mode(os.path.join(reports, d)) != "fresh", d))
+    return sorted(names, key=lambda d: design_mode(os.path.join(reports, d)) != "fresh")     # stable: keeps the order
 
 
 def design_mode(path: str) -> str:
     """The learning-design plan of a study's labels (``fresh`` from 1.7.0 on; ``fixed-shared`` for 1.6.0)."""
     try:
-        with open(os.path.join(path, "analysis", "results.json"), encoding="utf-8") as f:
-            return json.load(f).get("design_mode") or "fixed-shared"
+        return TX.read_json(os.path.join(path, "analysis", "results.json")).get("design_mode") or "fixed-shared"
     except (OSError, ValueError):
         return "unknown"
 
@@ -87,11 +89,11 @@ def _record(path: str, task_id: str, key=()):
         j = os.path.join(path, part, "tasks", task_id + ".json")
         z = os.path.join(path, part, "tasks", task_id + ".npz")
         if os.path.exists(j) and os.path.exists(z):
-            rec = json.load(open(j, encoding="utf-8"))
+            rec = TX.read_json(j)
             with np.load(z, allow_pickle=False) as f:
                 arr = {k: f[k] for k in ("est", "flags", "design") if k in f.files}
             prov = os.path.join(path, part, "provenance.json")
-            pv = json.load(open(prov, encoding="utf-8")) if os.path.exists(prov) else {}
+            pv = TX.read_json(prov) if os.path.exists(prov) else {}
             return dict(part=part, rec=rec, est=arr.get("est"), flags=arr.get("flags"), provenance=pv)
     return None
 
@@ -199,7 +201,7 @@ def _tasks(d: dict, path: str = "") -> None:
     if rec is None:
         st.info("The trial files of this task are not in the study folder; the drill-down below needs "
                 "`dev/tasks/<task_id>.json` and `.npz`. The source archive ships the per-trial arrays (`.npz`) of "
-                "the corrected pilot in a separate trial-data archive (see `reports/selection_v170/README.md`).",
+                "the shipped studies in separate trial-data archives (see the study folder's `README.md`).",
                 icon=":material/info:")
         return
     _drill(rec, lab[lab.task_id == tid])

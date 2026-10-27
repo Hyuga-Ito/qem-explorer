@@ -1,0 +1,32 @@
+# Noise-composition study (1.8.0; exploratory) — matched circuits, one composition at a time, at *matched light-cone
+# exposure*: is the winning protocol a function of the exposure alone? Declared before labeling. The three controlled
+# circuits of the 1.7.0 composition study (n = 4, fake_fez best chain) under: the snapshot (s = 1); every rate × 2
+# (s = 2); two-qubit gate errors only × 2.3 (g2 = 2.3) and relaxation only (T1, T2 ÷ 5.5, t = 5.5) — both chosen so
+# that lam_lc matches s = 2 within ±10 % on all three circuits (computed with qemx.phase.lightcone before labeling:
+# s=2 0.106/0.054/0.128; g2=2.3 ≈ 0.106/0.053/0.127; t=5.5 ≈ 0.107/0.051/0.143); s = 2 with half of every gate's
+# non-relaxation error coherent (chi = 0.5: the same twirled exposure, different coherent structure); readout × 3
+# (ro = 3, gates at the snapshot). Snapshot and execution law change together (no mismatch). The expanded portfolio.
+schema: qemx.selection.config/1
+name: noisecomp18
+status: planned
+master_seed: 20261026
+R: 60
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 6, seed_scheme: 2, crn: base}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  widths: [4]
+  families:
+    ising: [{steps: 2}]
+    hea: [{layers: 2, angle_seed: 2}]
+    qaoa: [{p: 1, angle_seed: 3}]
+  inputs: [default]
+  observables: [default]
+  layouts: [best]
+  devices: [fake_fez, "fake_fez@s=2", "fake_fez@g2=2.3", "fake_fez@t=5.5", "fake_fez@s=2,chi=0.5", "fake_fez@ro=3"]
+  variants_per_base: all
+limits: {task_seconds: 3600, memory_gb: 3}
+regimes:
+  noise_axis: component

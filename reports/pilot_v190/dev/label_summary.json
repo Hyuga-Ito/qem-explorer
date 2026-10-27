@@ -1,0 +1,163 @@
+{
+ "tasks": 54,
+ "ok": 54,
+ "skipped": 0,
+ "errors": 0,
+ "seconds": 1596.3916073970004,
+ "per_task_seconds": [
+  30.53230022300022,
+  33.70002220999959,
+  46.27530511999976,
+  54.42857801700029,
+  42.29214630499973,
+  48.70983801099965,
+  46.71784404100026,
+  78.07957540799998,
+  99.01266614199994,
+  73.51449471800015,
+  60.62905481200005,
+  65.61265286799971,
+  40.0784593620001,
+  61.716689608999786,
+  75.33802082700004,
+  72.73453605299983,
+  46.81645234300004,
+  52.99182238399999,
+  76.44303939300016,
+  87.12200256200003,
+  65.76374113099973,
+  78.26598686000034,
+  130.74159946200007,
+  49.87050801700025,
+  27.68382058499992,
+  153.6967092939999,
+  16.71874869200019,
+  46.79844083700027,
+  56.15034843300009,
+  48.54359681099959,
+  68.16351187300052,
+  46.01054894000026,
+  67.89871906400003,
+  97.07228939000015,
+  64.59708427300029,
+  70.00111095400007,
+  37.78689513200061,
+  41.65661430899945,
+  34.13707134700053,
+  30.793615585000225,
+  37.80355590799991,
+  69.0337497620003,
+  70.20286920600029,
+  84.64948846000061,
+  77.68375804199968,
+  64.82482597200033,
+  61.255106427999635,
+  39.91721207899991,
+  27.37408565900023,
+  22.054424646999905,
+  27.957583507999516,
+  35.284648591000405,
+  39.64325964,
+  31.46396654199998
+ ],
+ "retained_failures": [],
+ "not_started": 0,
+ "stopped": null,
+ "limit": null,
+ "status": "complete",
+ "exit_code": 0,
+ "run": {
+  "schema": "qemx.selection.completion/1",
+  "target": "dev",
+  "bound": true,
+  "run_identity": "ba37652708958c4f",
+  "expected": 54,
+  "completed": 54,
+  "failed": {},
+  "n_failed": 0,
+  "missing": [],
+  "corrupted": [],
+  "unexpected": [],
+  "complete": true,
+  "status": "complete",
+  "check_arrays": "digest",
+  "recorded_task_seconds": 3102.219111613002,
+  "data_digest": "11de17abb99f63503a8422f9d6a77981024e512ae25760b9f4d7b82eb7cd3fd7"
+ },
+ "admission": {
+  "admitted": true,
+  "exceeded": [],
+  "unknown": [
+   "cpu_hours"
+  ],
+  "override": null
+ },
+ "preflight": {
+  "cpu": {
+   "status": "unknown",
+   "total_hours": null,
+   "remaining_hours": null,
+   "note": "no measured rates: label a few tasks first (label --limit N, then plan --out the same directory) or pass --measured DIR of a comparable run"
+  },
+  "wall": {
+   "status": "unknown",
+   "remaining_hours": null,
+   "parallel": 2
+  },
+  "disk": {
+   "source": "array shapes (compressed size assumed one third of raw)",
+   "labels_total_gb": 0.00166243314743042,
+   "labels_remaining_gb": 0.00166243314743042,
+   "current_gb": 0.0,
+   "free_gb": 12.435646057128906,
+   "min_free_gb": 2.0
+  },
+  "memory": {
+   "workers": 2,
+   "per_task_limit_gb": 3.0,
+   "workers_times_limit_gb": 6.6,
+   "measured_peak_per_task_gb": null,
+   "expected_peak_gb": null,
+   "ram_gb": 7.839435577392578,
+   "ram_available_gb": 7.240436553955078,
+   "note": "memory_gb is a per-task limit enforced by the supervisor, not a usage; the total of several workers plus the parent is not limited by it"
+  },
+  "caps": {
+   "cpu_hours": {
+    "cap": 6.0,
+    "estimate": null,
+    "status": "unknown",
+    "monitored": true,
+    "enforcement": "no new task starts once the run's summed task seconds reach the cap"
+   },
+   "disk_gb": {
+    "cap": 2.0,
+    "estimate": 0.00166243314743042,
+    "status": "within",
+    "monitored": true,
+    "enforcement": "no new task starts once the labels directory reaches the cap"
+   },
+   "free_disk": {
+    "cap": 12.435646057128906,
+    "estimate": 2.0016624331474304,
+    "status": "within",
+    "monitored": true,
+    "enforcement": "no new task starts while free space is below limits.min_free_disk_gb"
+   }
+  }
+ },
+ "supervision": {
+  "platform": "posix",
+  "timeout": "parent-enforced wall clock (all platforms)",
+  "threads_per_worker": {
+   "OMP_NUM_THREADS": "1",
+   "OPENBLAS_NUM_THREADS": "1",
+   "MKL_NUM_THREADS": "1"
+  },
+  "memory_watchdog": true,
+  "child_address_space_limit": true,
+  "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+ },
+ "stage": "dev",
+ "finished": "2026-10-25T09:52:45+00:00"
+}

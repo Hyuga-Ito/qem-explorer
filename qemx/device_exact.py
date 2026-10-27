@@ -236,3 +236,61 @@ def final_state(spec: CircuitSpec, dm, *, twirl: str = "none", dd: str = "none",
     instr, exec_ops = instructions(spec, dm, twirl=twirl, dd=dd, corrections=corrections)
     rho, _ = NumpyBackend().execute(instr, spec.n)
     return rho, exec_ops
+
+
+# ---------------------------------------------------------------------------------------------- factorized product runs
+class NotFactorizable(ValueError):
+    """The circuit's resolved noise instructions are not all single-qubit, so its output does not factorize."""
+
+
+def _apply_1q(rho: np.ndarray, ins) -> np.ndarray:
+    d = ins.data
+    if ins.kind == "unitary":
+        U = np.asarray(d, complex)
+        return U @ rho @ U.conj().T
+    if ins.kind == "kraus":
+        return sum(np.asarray(K, complex) @ rho @ np.asarray(K, complex).conj().T for K in d)
+    if ins.kind == "mixture":
+        return sum(float(w) * (np.asarray(U, complex) @ rho @ np.asarray(U, complex).conj().T) for w, U in d)
+    raise ValueError("unknown instruction kind %r" % (ins.kind,))
+
+
+def product_marginals(spec: CircuitSpec, dm, *, twirl: str = "none", dd: str = "none") -> np.ndarray:
+    """P(qubit q ends in |1⟩) for every compact qubit of a circuit whose *every* resolved instruction (gates, gate
+    errors, idle relaxation, DD pulses) acts on one qubit — e.g. the readout-calibration circuits |0…0⟩ and X on every
+    qubit (1.8.0; review finding F2). Each qubit then evolves by its own sequence of single-qubit channels from |0⟩,
+    so the n-qubit output state is the product of n 2×2 density matrices: O(n) memory instead of the dense engine's
+    4^n. The same instruction list as ``final_state`` is used, so this is the same model, not an approximation.
+    Raises NotFactorizable if any instruction acts on two or more qubits (a two-qubit gate, crosstalk or a
+    correlated channel): the product calculation would then be wrong, and the caller must decide (dense engine within
+    a declared width limit, or an explicit unsupported/cost status)."""
+    instr, _ = instructions(spec, dm, twirl=twirl, dd=dd)
+    multi = sorted({tuple(i.qubits) for i in instr if len(i.qubits) > 1})
+    if multi:
+        raise NotFactorizable("%d instruction(s) act on several qubits (first on %s): the output state is not a "
+                              "product" % (sum(1 for i in instr if len(i.qubits) > 1), multi[0]))
+    rhos = [np.array([[1.0, 0.0], [0.0, 0.0]], complex) for _ in range(spec.n)]
+    for ins in instr:
+        q = int(ins.qubits[0])
+        rhos[q] = _apply_1q(rhos[q], ins)
+    return np.array([float(np.real(r[1, 1])) for r in rhos])
+
+
+def product_calibration(n: int, dm, measure_map: dict) -> list:
+    """Per-classical-bit assignment matrices A[i] = [[P(0|0), P(0|1)], [P(1|0), P(1|1)]] of the two readout-calibration
+    circuits (|0…0⟩; X on every qubit) on the device model, computed with ``product_marginals`` and each qubit's own
+    readout matrix — the quantities ``methods.base.Context.calibration`` obtains from the dense engine. Classical bit i
+    reads compact qubit measure_map[i]. Raises NotFactorizable when the calibration circuits do not factorize."""
+    from .circuit import Op
+    zero = CircuitSpec(n, (), "cal-0")
+    one = CircuitSpec(n, tuple(Op("x", (q,), (), "gate", "prep") for q in range(n)), "cal-1")
+    m0, m1 = product_marginals(zero, dm), product_marginals(one, dm)
+    ro = dm.readout_matrices()
+    A = []
+    for i in range(n):
+        q = int(measure_map.get(i, i)) if measure_map else i
+        R = ro[q]                                  # [[1 − p01, p10], [p01, 1 − p10]]
+        read1_given_zero = (1 - m0[q]) * R[1, 0] + m0[q] * R[1, 1]
+        read0_given_one = (1 - m1[q]) * R[0, 0] + m1[q] * R[0, 1]
+        A.append(np.array([[1 - read1_given_zero, read0_given_one], [read1_given_zero, 1 - read0_given_one]]))
+    return A

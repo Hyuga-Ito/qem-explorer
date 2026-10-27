@@ -1,0 +1,59 @@
+# Pilot of the 1.9.0 development design (bounded; executed in 1.9.0 to measure costs and check the pipeline, NOT a
+# result). Calibration-supplied noise diversity in the training data: the native snapshots of three devices and
+# controlled modifications of their reported calibration — overall error scale (s = 0.5, 2), two-qubit gate errors
+# (g2 = 2), relaxation (t = 2), readout (ro = 2). The modifiers change the snapshot the user's calibration shows and
+# the execution law together (no hidden parameter: the recommender's features read the modified snapshot). Held-out
+# analyses: noise setting, base device, and joint family × noise. New logical circuits (angle seeds 19xx, fields
+# 0.6x) not used by any earlier study (configs/selection/ancestry_registry.json). Declared before labeling.
+schema: qemx.selection.config/1
+name: pilot19
+status: planned
+expansion_policy: explicit
+master_seed: 20261102
+R: 24
+budgets: [1000, 30000, 1000000, 30000000]
+learning_designs: {mode: fresh, per_half: 3, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4, 5]
+    families:
+      hea: [{layers: 2, angle_seed: 1911}, {layers: 3, angle_seed: 1914}]
+      qaoa: [{p: 1, angle_seed: 1912}, {p: 2, angle_seed: 1915}]
+      ising: [{steps: 2, h: 0.63}, {steps: 1, h: 0.87}]
+      brickwork: [{layers: 2, angle_seed: 1913}, {layers: 3, angle_seed: 1916}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid]
+    layouts: [best]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=0.5", "fake_fez@s=2", "fake_torino@g2=2",
+              "fake_kyiv@t=2", "fake_fez@ro=2"]
+    include_default: false             # two variants sampled from the whole grid: noise settings roughly balanced
+    variants_per_base: 2
+  - widths: [3, 4, 5]
+    families:
+      ghz: [{theta: 0.75, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best]
+    devices: [fake_fez, "fake_torino@g2=2", "fake_kyiv@t=2"]
+    include_default: false
+    variants_per_base: 2
+limits: {task_seconds: 3600, memory_gb: 3, cpu_hours: 6, disk_gb: 2, min_free_disk_gb: 2}
+analysis:
+  splits: [same-distribution, noise, device-base, joint]
+  split_options:
+    same-distribution: {k: 5}
+    noise: {k: 3}
+    device-base: {k: 3}
+    joint: {test_family: hea, test_noise: g2=2}
+  feature_sets: [size_budget, deployable18, deployable18+simulated]
+  model_families: [ridge, enet, hgb, struct]
+  abstain_family: hgb
+  abstain_set: deployable18
+  ablation_set: deployable18
+  other_split_sets: [size_budget, deployable18]
+  other_split_families: [ridge, hgb]
+  bootstrap: 500
+  lc_repeats: 2
+  extras: [design_diagnostics, learning_curve]

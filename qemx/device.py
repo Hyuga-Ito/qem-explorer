@@ -857,3 +857,31 @@ def finish(rho, dm: DeviceModel, mm: dict, n: int, exec_ops, snaps, exact: bool 
         t = np.moveaxis(np.tensordot(A[mm.get(i, i)], t, axes=([1], [ax])), 0, ax)
     pm = t.reshape(-1)
     return RunResult(n, p, pm, rho, exec_ops, list(range(len(exec_ops))), snaps, 1)
+
+
+@lru_cache(maxsize=16)
+def snapshot_fingerprint(name: str) -> str:
+    """Identity of a fake device's calibration snapshot (1.8.0; review finding F4): a digest of every instruction's
+    reported error and duration and every qubit's T1/T2 in the backend's Target, independent of the modifiers of a
+    specification (``fake_fez@s=2`` and ``fake_fez`` share the snapshot; the modifiers are part of the task). The
+    same device name with a different snapshot (another qiskit-ibm-runtime release) gives another fingerprint."""
+    import hashlib
+    import json
+    be = fake_backend(base_name(name))
+    tg = be.target
+
+    def r(x):
+        return None if x is None else float("%.12g" % float(x))
+    rows = []
+    for inst in sorted(tg.operation_names):
+        for qa, props in sorted((tuple(int(q) for q in (k or ())), v) for k, v in tg[inst].items()):
+            rows.append([inst, list(qa), r(getattr(props, "error", None)) if props else None,
+                         r(getattr(props, "duration", None)) if props else None])
+    qp = [[r(getattr(q, "t1", None)), r(getattr(q, "t2", None))] for q in (tg.qubit_properties or [])]
+    blob = json.dumps(dict(n=int(tg.num_qubits), instructions=rows, qubits=qp), sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def num_qubits(name: str) -> int:
+    """Physical qubits of a fake device (cheap: the backend's Target, no model build)."""
+    return int(fake_backend(base_name(name)).target.num_qubits)

@@ -19,6 +19,16 @@ DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "pilot_c
 RECS = [json.load(open(p, encoding="utf-8")) for p in sorted(glob.glob(os.path.join(DATA, "*.json")))]
 GRID = [int(round(10 ** (3 + 0.1 * k))) for k in range(41)]           # the pilot's budget grid (manifest)
 
+# Cross-platform tolerance for a recomputed lam_lc against a stored record (1.8.0, docs/CI_FAILURE_ANALYSIS.md).
+# Each fault probability is an inverse Walsh-Hadamard combination of PTM eigenvalues that are 1 - O(1e-4): the
+# subtraction amplifies the eigenvalues' rounding (~700x for this circuit). NumPy dispatches different SIMD kernels on
+# AVX-512 and AVX2 machines (GitHub's runners vary), which changes the eigenvalues by about one ulp and lam_lc by
+# 8.7e-14 relative (reproduced with NPY_DISABLE_CPU_FEATURES; one ulp of random eigenvalue rounding gives 7.9e-14).
+# 1e-12 covers ~4-16 ulp per eigenvalue (test_lam_lc_tolerance_is_rounding_level_not_physical) and is 1e6 times
+# smaller than the change from a 1e-6 relative change of the device's error rates. Within one process the same
+# inputs give bitwise-identical values, and the tests below demand that.
+LAM_LC_REL_TOL = 1e-12
+
 
 def _injector():
     from qemx.noise import PRESETS
@@ -63,11 +73,10 @@ def test_stored_cell_as_live_experiment_has_identical_features(rec):
         a, b = live[k], stored[k]
         assert (math.isnan(a) and math.isnan(b)) or a == pytest.approx(b, rel=1e-12, abs=1e-15), (k, a, b)
     assert not lmiss and not smiss
-    # lam_lc is a sum of ~10² fault probabilities: recomputed on another NumPy its last bits can differ (pairwise
-    # summation order; 1.3e-14 relative observed on Python 3.10). The same 1e-12 relative tolerance as the features
-    # above is three orders of magnitude tighter than any physical difference and far looser than rounding.
+    # recomputed on another NumPy or CPU its last bits can differ (see LAM_LC_REL_TOL; 1.3e-14 relative observed on
+    # Python 3.10, 8.7e-14 on GitHub runners without AVX-512)
     assert live["scale"] == rec["cell"]["scale"]
-    assert live["lam_lc"] == pytest.approx(rec["lambda"]["lam_lc"], rel=1e-12, abs=0.0)
+    assert live["lam_lc"] == pytest.approx(rec["lambda"]["lam_lc"], rel=LAM_LC_REL_TOL, abs=0.0)
 
 
 @pytest.mark.parametrize("rec", RECS, ids=[r["cell_id"] for r in RECS])
@@ -106,17 +115,57 @@ def test_live_noise_features_come_from_the_selected_device_not_the_injector():
     from qemx.phase.lightcone import calculate_lambda_lc
     rec = next(r for r in RECS if r["cell"]["family"] == "qft")
     fc, comp, ctx = _live(rec)
+    vals = []
     for inj in (NoiseSpec(), NoiseSpec(p1=0.01, p2=0.05), _injector()):
         c2 = RX.live_context(comp, ctx.backend, inj, fc.observable)
         v, _ = RX.live_features(c2, 1e4, ["lam_lc", "lam_ro", "scale", "coherent_fraction"])
-        assert v == dict(lam_lc=rec["lambda"]["lam_lc"], lam_ro=rec["lambda"]["lam_ro"], scale=0.5,
-                         coherent_fraction=0.0)
+        vals.append(v)
+    # the injector is ignored: the three injectors give bitwise-identical features (same machine, same inputs)
+    assert vals[0] == vals[1] == vals[2], vals
+    v = vals[0]
+    # and they are the selected device's features stored by the study (exact where no linear algebra is involved;
+    # lam_lc within the documented cross-platform rounding tolerance)
+    assert (v["lam_ro"], v["scale"], v["coherent_fraction"]) == (rec["lambda"]["lam_ro"], 0.5, 0.0)
+    assert v["lam_lc"] == pytest.approx(rec["lambda"]["lam_lc"], rel=LAM_LC_REL_TOL, abs=0.0)
     inj_lam = calculate_lambda_lc(comp, _injector(), fc.observable).lam_lc
     assert abs(inj_lam - rec["lambda"]["lam_lc"]) > 0.1                 # what 1.5.0's page computed instead
     # the injector backend: no device scale (NaN with a reason), never a silent 1.0
     c3 = RX.live_context(comp, "numpy", _injector(), fc.observable)
     v, m = RX.live_features(c3, 1e4, ["scale", "lam_lc"])
     assert math.isnan(v["scale"]) and "injector" in m["scale"] and v["lam_lc"] == pytest.approx(inj_lam)
+
+
+def test_lam_lc_tolerance_is_rounding_level_not_physical(monkeypatch):
+    """LAM_LC_REL_TOL is justified by measurement, not chosen to make a test pass: random one-ulp perturbations of
+    every PTM eigenvalue move lam_lc by less than a tenth of it (the size of the observed CI difference), sixteen-ulp
+    perturbations by at most about it, while a 1e-6 relative change of the device's error rates moves lam_lc by
+    ~1e-6, a million times more."""
+    import numpy as np
+    from qemx.phase import lightcone as LC
+    rec = next(r for r in RECS if r["cell"]["family"] == "qft")
+    fc, comp, ctx = _live(rec)
+    base = LC.calculate_lambda_lc(comp, ctx.backend, fc.observable).lam_lc
+    assert base == pytest.approx(rec["lambda"]["lam_lc"], rel=LAM_LC_REL_TOL, abs=0.0)
+    orig, u = LC.pauli_probs_from_eigs, np.finfo(float).eps / 2
+
+    def lam_with(ulps, seed):
+        rng = np.random.default_rng(seed)
+
+        def perturbed(eigs, k):
+            e = np.asarray(eigs, float)
+            return orig(e * (1.0 + ulps * u * rng.choice([-1.0, 1.0], size=e.shape)), k)
+        LC._PROBS.clear()
+        monkeypatch.setattr(LC, "pauli_probs_from_eigs", perturbed)
+        try:
+            return LC.calculate_lambda_lc(comp, ctx.backend, fc.observable).lam_lc
+        finally:
+            monkeypatch.setattr(LC, "pauli_probs_from_eigs", orig)
+            LC._PROBS.clear()
+    one = max(abs(lam_with(1, s) - base) / base for s in range(3))
+    sixteen = max(abs(lam_with(16, s) - base) / base for s in range(3))
+    assert 0.0 < one < LAM_LC_REL_TOL / 10 and sixteen < 2.0 * LAM_LC_REL_TOL, (one, sixteen)
+    physical = LC.calculate_lambda_lc(comp, ctx.backend.replace("s=0.5", "s=0.5000005"), fc.observable).lam_lc
+    assert abs(physical - base) / base > 1e5 * LAM_LC_REL_TOL
 
 
 def test_methods_json_v2_names_the_protocol_and_v1_is_refused(tmp_path):

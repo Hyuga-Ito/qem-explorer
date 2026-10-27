@@ -18,11 +18,12 @@ Conventions shared by all figures:
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 
 import numpy as np
+
+from .. import textio as TX
 
 from .figures import (LABEL_SIM, PROTOCOL_COLORS, PROTOCOL_MARKERS, _plt, _save, _seq_cmap, _div_cmap)
 from .models import EPS0
@@ -126,8 +127,9 @@ FIG_META = {
          "dev/tasks/<task_id>.json, .npz": "spec, budgets, protocols, ideal, est (trial estimates)"}),
     "supp_runtime": (
         "What does one recommendation cost classically as the circuit grows?",
-        {"analysis/runtime.csv": "n, compile_s, deployable_s, simulated_s, inference_s, label_s, label_tasks, "
-                                 "peak_rss_mb, rss_kind"}),
+        {"analysis/runtime.csv": "kind, n, compile_s, deployable_s, simulated_s, inference_s, "
+                                 "preflight_structural_s, preflight_design_s, recommend_s, recommend_status, label_s, "
+                                 "label_tasks, peak_rss_mb, rss_kind (1.8.0 columns optional)"}),
     "supp_design_variability": (
         "How much do CDR's and NIL's errors depend on the training design drawn, and does another training "
         "allocation change that?",
@@ -163,7 +165,7 @@ FIG_METHODS = {
                "input, layout and observable within a slice",
         counts="{reg_tasks} regime tasks on {reg_base} base circuits; r = {reg_r} trials per half",
         uncertainty="unresolved cells: runner-up within 1.96 approximate SE of the difference (pointwise, not "
-        "simultaneous over cells or candidates; design-level SE for CDR and NIL)",
+        "simultaneous over cells or candidates; design-level SE for the learning candidates (CDR, NIL; FR in 1.8.0))",
         status="exploratory, descriptive empirical map — not a phase diagram and not a simultaneous guarantee",
         missing="hatched/white: unresolved or fewer trials than the plotting minimum; infeasible candidates shown "
         "in the support panel; signed regret keeps negative empirical values"),
@@ -172,7 +174,7 @@ FIG_METHODS = {
                "(D) one noise component at a time — everything else held fixed within a panel",
         counts=DEV + "; panels B–D: single tasks per point ({nc_tasks} noise-composition tasks on {nc_base} base "
         "circuits)", uncertainty="(A) 95 % bootstrap over base circuits of the paired difference; (B, C) ±1.96 SE "
-        "over trials (over designs for CDR and NIL); (D) pointwise resolution of the top two",
+        "over trials (over designs for the learning candidates (CDR, NIL; FR in 1.8.0)); (D) pointwise resolution of the top two",
         status="exploratory; (B–D) controlled single-task comparisons of hypotheses declared before labeling",
         missing="infeasible candidates omitted per cell; unresolved top-two hatched in (D)"),
     "fig04_generalization_learning": dict(
@@ -223,6 +225,12 @@ FIG_METHODS = {
         uncertainty="designs as the independent unit within a task", status="exploratory",
         missing="infeasible variants listed in design_study/designs.csv"),
 }
+
+
+# 1.8.0 supplementary figures (qemx.selection.plots18): their questions, inputs and methods boxes
+from .plots18 import FIG_META_18 as _FM18, FIG_METHODS_18 as _FX18  # noqa: E402
+FIG_META.update(_FM18)
+FIG_METHODS.update(_FX18)
 
 
 def run_counts(run_dir: str) -> dict:
@@ -305,16 +313,28 @@ def annotate(out_dir: str, name: str, command: str, cfg_path: str | None = None,
         fh.write(out)
 
 
+PLOT_DESCRIPTIVE_KEYS = ("release", "description")      # recorded with a plotting configuration, not read
+
+
 def load_config(path: str | None = None) -> dict:
-    """The plotting configuration (``configs/selection/figures.yaml`` by default), merged over the defaults."""
+    """The plotting configuration (``configs/selection/figures.yaml`` by default), merged over the defaults.
+
+    1.9.0 (second review N6): an explicitly given file must exist (1.8.0 silently fell back to the defaults), is read
+    as UTF-8 with an optional byte-order mark, and unknown keys are refused (``release`` and ``description`` are
+    descriptive)."""
     import copy
     cfg = copy.deepcopy(DEFAULTS)
+    explicit = path is not None
     path = path or os.path.join(ROOT, "configs", "selection", "figures.yaml")
+    if explicit and not os.path.exists(path):
+        raise FileNotFoundError("plotting configuration %s does not exist" % path)
     if os.path.exists(path):
-        import yaml
-        user = yaml.safe_load(open(path, encoding="utf-8")) or {}
+        user = TX.read_yaml(path) or {}
         if user.get("schema", cfg["schema"]) != cfg["schema"]:
             raise ValueError("%s: schema must be %s" % (path, cfg["schema"]))
+        unknown = sorted(set(user) - set(DEFAULTS) - set(PLOT_DESCRIPTIVE_KEYS))
+        if unknown:
+            raise ValueError("%s: unknown plotting keys %s (known: %s)" % (path, unknown, sorted(DEFAULTS)))
         for k, v in user.items():
             if isinstance(v, dict) and isinstance(cfg.get(k), dict):
                 cfg[k].update(v)
@@ -325,7 +345,7 @@ def load_config(path: str | None = None) -> dict:
 
 def frozen_policy(run_dir: str) -> str | None:
     p = os.path.join(run_dir, "freeze.json")
-    return json.load(open(p, encoding="utf-8"))["policy"] if os.path.exists(p) else None
+    return TX.read_json(p)["policy"] if os.path.exists(p) else None
 
 
 def _resolve(name: str, run_dir: str) -> str:
@@ -515,7 +535,7 @@ def fig01_budget_efficiency(run_dir: str, out_dir: str, cfg: dict | None = None)
                          bbox=dict(fc="white", ec="none", pad=0.3))
         axC.axvline(0, color="#333333", lw=0.8)
         axC.set_yticks(y, ["%s (%d)" % (f, n) for f, n in zip(fb.family, fb.base_circuits)])
-        axC.set_xlabel("Δ mean log10 MSE\nproposed − SBS-B (< 0 favors it)")
+        axC.set_xlabel("Δ mean log10(MSE + 10⁻⁶)\nproposed − SBS-B (< 0 favors it)")
         axC.set_title("C  paired effect by family", loc="left")
         axC2.errorbar(fb.diff_mse[many], y[many], xerr=[(fb.diff_mse - fb.diff_mse_lo)[many],
                                                         (fb.diff_mse_hi - fb.diff_mse)[many]],
@@ -570,7 +590,7 @@ def fig01_budget_efficiency(run_dir: str, out_dir: str, cfg: dict | None = None)
            "fraction of tasks whose regret (policy MSE minus the MSE of the protocol identified on the independent "
            "selection half) is at most the tolerance; budgets are not merged. The reference is estimated, so some "
            "regrets are negative (share for the selected model: %s); they count as within every tolerance and are "
-           "not clipped. (C) Paired difference of log10 MSE between the proposed policy and SBS-B by circuit family, "
+           "not clipped. (C) Paired difference of log10(MSE + 10⁻⁶) between the proposed policy and SBS-B by circuit family, "
            "all budgets, 95 %% bootstrap intervals over the family's base circuits (count in parentheses; a family "
            "with fewer than three base circuits is drawn open, without an interval); negative values favor the "
            "proposed policy; beside it the same paired difference in absolute mean MSE (symmetric-log axis), "
@@ -586,7 +606,7 @@ def fig01_budget_efficiency(run_dir: str, out_dir: str, cfg: dict | None = None)
         m, lo, hi = _wmean_ci(dl, a_.base_id.to_numpy())
         mm, mlo, mhi = _wmean_ci(dm, a_.base_id.to_numpy())
         parts.append("over all budgets the frozen recommender's paired difference to SBS-B is %+.3f [%+.3f, %+.3f] "
-                     "in mean log10 MSE and %+.2g [%+.2g, %+.2g] in mean MSE (negative favors the recommender)"
+                     "in mean log10(MSE + 10⁻⁶) and %+.2g [%+.2g, %+.2g] in mean MSE (negative favors the recommender)"
                      % (m, lo, hi, mm, mlo, mhi))
         if m < 0 < mm or mm < 0 < m:
             both = lo < 0 < hi and mlo < 0 < mhi
@@ -627,6 +647,12 @@ def fig02_performance_regimes(run_dir: str, out_dir: str, cfg: dict | None = Non
     scales = sorted(cells.noise_scale.unique())
     protos = list(PROTOCOL_COLORS)
     cmap = ListedColormap([PROTOCOL_COLORS[p] for p in protos])
+    # 1.8.0: the number of candidates of the study (8 in 1.6/1.7, 17 in 1.8), not of the palette — a cell is marked
+    # "a candidate infeasible" against the candidates the study labeled
+    lab_p = os.path.join(run_dir, "regimes", "analysis", "labels.csv")
+    n_cand = (int(pd.read_csv(lab_p, encoding="utf-8", usecols=["protocol"]).protocol.nunique())
+              if os.path.exists(lab_p) else int(cells.n_feasible.max()))
+    used = [p for p in protos if p in set(cells.reference) | set(cells.policy_choice)]
     reg = cells.log_regret_policy.to_numpy(float)
     # signed empirical regret on a zero-centred diverging scale (1.7.0; review of Figure 2): negative values (the
     # reference estimated on the other half was worse) are drawn as they are, never clipped to 0
@@ -645,6 +671,9 @@ def fig02_performance_regimes(run_dir: str, out_dir: str, cfg: dict | None = Non
         unres = np.zeros_like(G_ref, bool)
         abst = np.zeros_like(G_ref, bool)
         insuff = np.ones_like(G_ref, bool)
+        # 1.8.0: "a candidate infeasible" against the candidates applicable to this slice (feasible in some cell of
+        # it), so a candidate the circuit never admits (e.g. SV without a declared symmetry) does not mark every cell
+        n_slice = int(d.n_feasible.max()) if len(d) else n_cand
         for _, c in d.iterrows():
             i, j = scales.index(c.noise_scale), budgets.index(c.B)
             ok = c.trials_per_candidate >= 2 * cfg["regime"]["min_trials"]
@@ -678,7 +707,7 @@ def fig02_performance_regimes(run_dir: str, out_dir: str, cfg: dict | None = Non
                 if u:
                     a_.plot(j, i, marker="x", ms=3, color="#999999")
             for (i, j), nf in np.ndenumerate(G_sup):
-                if np.isfinite(nf) and nf < len(protos):
+                if np.isfinite(nf) and nf < n_slice:
                     a_.plot(j + 0.38, i + 0.36, marker="v", ms=2.2, color="#000000", ls="")
             a_.set_title("%s — %s" % (fam, title), fontsize=7, loc="left")
         a_ = axes[r, 2]
@@ -689,12 +718,12 @@ def fig02_performance_regimes(run_dir: str, out_dir: str, cfg: dict | None = Non
                 a_.plot(j, i, marker="x", ms=3, color="#999999")
         a_.set_title("%s — signed empirical regret" % fam, fontsize=7, loc="left")
         a_ = axes[r, 3]
-        a_.imshow(np.ma.masked_invalid(G_sup), cmap=_seq_cmap(), vmin=0, vmax=len(protos), origin="lower",
+        a_.imshow(np.ma.masked_invalid(G_sup), cmap=_seq_cmap(), vmin=0, vmax=n_cand, origin="lower",
                   aspect="auto", extent=ext, interpolation="nearest")
         for (i, j), nf in np.ndenumerate(G_sup):
-            if np.isfinite(nf) and (j % 2 == 0 or nf < len(protos)):
-                a_.text(j, i, "%d" % nf, ha="center", va="center", fontsize=6.5,
-                        color="#FFFFFF" if nf > 5 else "#000000")
+            if np.isfinite(nf) and (j % 2 == 0 or (nf < n_slice and len(budgets) <= 6)):
+                a_.text(j, i, "%d" % nf, ha="center", va="center", fontsize=6.0 if n_cand < 10 else 5.5,
+                        color="#FFFFFF" if nf > 0.6 * n_cand else "#000000")
         a_.set_title("support: feasible candidates", fontsize=7, loc="left")
         for k in range(4):
             a_ = axes[r, k]
@@ -706,10 +735,10 @@ def fig02_performance_regimes(run_dir: str, out_dir: str, cfg: dict | None = Non
             if r == len(slices) - 1:
                 a_.set_xlabel("total budget B", fontsize=6.5)
     fig.colorbar(im, ax=axes[:, 2], fraction=0.05, pad=0.01, label="log10 regret ratio\n(signed; < 0: reference noise)")
-    handles = [plt.Line2D([], [], marker="s", ls="", color=PROTOCOL_COLORS[p], label=p, ms=5) for p in protos]
+    handles = [plt.Line2D([], [], marker="s", ls="", color=PROTOCOL_COLORS[p], label=p, ms=5) for p in used]
     handles += [plt.Line2D([], [], marker="o", ls="", mfc="none", mec="#000000",
                            label="abstained (SBS-B's choice shown)"),
-                plt.Line2D([], [], marker="v", ls="", color="#000000", ms=3, label="a candidate infeasible"),
+                plt.Line2D([], [], marker="v", ls="", color="#000000", ms=3, label="a candidate of the slice infeasible here"),
                 plt.Rectangle((0, 0), 1, 1, fc="#888888", hatch="////", ec="#FFFFFF", label="unresolved")]
     fig.legend(handles=handles, loc="outside lower center", ncol=6, frameon=False, fontsize=6.5)
     fig.suptitle(LABEL_SIM, fontsize=6.5, color="#555555")
@@ -861,10 +890,10 @@ def fig03_feature_mechanisms(run_dir: str, out_dir: str, cfg: dict | None = None
             f = feats[(feats.family == op["family"]) & (feats.observable == o) & (feats.device == op["device"]) &
                       (feats.layout == op["layout"])]
             if len(f):
-                txt = "%s\nw=%d\nLC=%d\nλ=%s" % (o, int(f.obs_weight.iloc[0]), int(f.lc_qubits.iloc[0]),
-                                                ("%.3f" % float(f.lam_lc.iloc[0])).lstrip("0"))
+                txt = "%s\nw%d·LC%d\nλ=%s" % (o, int(f.obs_weight.iloc[0]), int(f.lc_qubits.iloc[0]),
+                                             ("%.3f" % float(f.lam_lc.iloc[0])).lstrip("0"))
         lab_.append(txt)
-    axB.set_xticks(range(len(obs_order)), lab_, fontsize=6)
+    axB.set_xticks(range(len(obs_order)), lab_, fontsize=6 if len(obs_order) <= 3 else 5.5)
     axB.plot([], [], ls="", marker="o", ms=7, mfc="none", mec="#000000", mew=0.9, label="model's choice")
     axB.plot([], [], ls="", marker="^", ms=3.5, color="#000000", label="measured best (below its point)")
     axB.legend(frameon=False, fontsize=6.5, loc="upper left")
@@ -891,10 +920,17 @@ def fig03_feature_mechanisms(run_dir: str, out_dir: str, cfg: dict | None = None
         axC.plot([r_.s], [r_.mse_pooled * 0.45], marker="^", ms=3.5, color="#000000")
     axC.set_yscale("log")
     yl = axC.get_ylim()
-    axC.set_ylim(yl[0], yl[1] * 60)                  # headroom: the legend sits above the data
+    many = len(protos) > 8                           # 1.8.0: 17 candidates — one legend for B and C below the figure
+    axC.set_ylim(yl[0], yl[1] * (3 if many else 60))  # headroom: the legend sits above the data (≤ 8 candidates)
     axC.set_xlabel("device error scale s (all rates × s)")
     axC.set_title("C  noise strength (%s, B = %s)" % (npn["family"], _blabel(npn["budget"])), loc="left")
-    axC.legend(frameon=False, fontsize=6.5, ncol=2, loc="upper left")
+    if many:
+        fig.legend(handles=[plt.Line2D([], [], marker=PROTOCOL_MARKERS[p], color=PROTOCOL_COLORS[p], ms=4, lw=1,
+                                       label=p) for p in protos],
+                   loc="outside lower center", ncol=9, frameon=False, fontsize=6, title="candidates (B, C)",
+                   title_fontsize=6)
+    else:
+        axC.legend(frameon=False, fontsize=6.5, ncol=2, loc="upper left")
     # D: noise composition (one component changed at a time; three circuits)
     ncp = cfg.get("noise_composition_panel", {}) or {}
     BD_ = int(ncp.get("budget", 100000))
@@ -916,10 +952,14 @@ def fig03_feature_mechanisms(run_dir: str, out_dir: str, cfg: dict | None = None
                 if bool(r_.unresolved):
                     axD.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fc="none", ec="#555555", lw=0, hatch="////"))
                 agree = r_.model_choice == r_.reference
-                axD.text(j, i - 0.2, r_.reference, ha="center", va="center", fontsize=6.5, fontweight="bold")
-                axD.text(j, i + 0.05, "λ=%.2f" % r_.lam_total, ha="center", va="center", fontsize=6)
+                # a light box keeps the text legible over the hatching of unresolved cells
+                bx = dict(boxstyle="round,pad=0.12", fc="#FFFFFF", ec="none", alpha=0.85) if bool(r_.unresolved) \
+                    else None
+                axD.text(j, i - 0.2, r_.reference, ha="center", va="center", fontsize=6.5, fontweight="bold",
+                         bbox=bx)
+                axD.text(j, i + 0.05, "λ=%.2f" % r_.lam_total, ha="center", va="center", fontsize=6, bbox=bx)
                 axD.text(j, i + 0.28, "model %s" % r_.model_choice, ha="center", va="center", fontsize=6,
-                         color="#000000")
+                         color="#000000", bbox=bx)
                 if not agree:                         # the disagreement mark sits in the cell's corner
                     axD.text(j + 0.44, i - 0.4, "✗", ha="right", va="top", fontsize=7, color="#000000",
                              fontweight="bold")
@@ -955,7 +995,7 @@ def fig03_feature_mechanisms(run_dir: str, out_dir: str, cfg: dict | None = None
            "to the full model with 95 %% bootstrap intervals over base circuits; predictive, not causal, importance. "
            "(B) One circuit, input, device and budget with only the observable changing (support weight w, light-cone "
            "qubits LC and light-cone fault weight λ under each label): candidate MSEs over both label halves with "
-           "±1.96 SE (SE over trials; over learning designs for CDR and NIL under fresh designs); ring: the frozen "
+           "±1.96 SE (SE over trials; over learning designs for the learning candidates under fresh designs); ring: the frozen "
            "model's own choice (before abstention); triangle: the measured best. (C) The same task with every "
            "calibrated error rate of the device (snapshot and truth alike) multiplied by s at a fixed budget; marks "
            "as in (B). (D) The noise-composition study: %d circuits (one task per cell; n = 4 on the calibration-best "
@@ -999,6 +1039,17 @@ BG_COLORS = {"SBS-B": "#D55E00", "MODEL[ridge|deployable]": "#E69F00", "MODEL[st
              "MODEL[hgb|deployable]": "#0072B2"}
 BG_MARKERS = {"SBS-B": "D", "MODEL[ridge|deployable]": "s", "MODEL[struct|deployable]": "^",
               "MODEL[hgb|deployable]": "o"}
+_BG_FAMILY = {"ridge": ("#E69F00", "s"), "struct": ("#009E73", "^"), "hgb": ("#0072B2", "o")}
+
+
+def _bg_style(p: str) -> tuple:
+    """(colour, marker) of a policy in the budget-extrapolation panel: by name, else by model family (1.8.0: the
+    configurations are named with the deployable18 set; a family keeps its colour whatever the feature set)."""
+    if p in BG_COLORS:
+        return BG_COLORS[p], BG_MARKERS.get(p, "o")
+    if p.startswith("MODEL["):
+        return _BG_FAMILY.get(p[len("MODEL["):].split("|")[0], ("#555555", "o"))
+    return "#555555", "o"
 
 
 def _short_policy(p: str) -> str:
@@ -1059,15 +1110,19 @@ def fig04_generalization_learning(run_dir: str, out_dir: str, cfg: dict | None =
     # B learning curve
     lc = pd.read_csv(os.path.join(adir, "learning_curve.csv"), encoding="utf-8")
     key = "mean_log_regret" if "mean_log_regret" in lc.columns else "diff_vs_sbs"
-    g = lc.groupby("train_base_circuits").agg(m=(key, "mean"), lo=(key, lambda x: np.nanquantile(x, 0.1)),
-                                              hi=(key, lambda x: np.nanquantile(x, 0.9)), draws=(key, "size"))
-    g = g.reset_index()
-    axB.plot(g.train_base_circuits, g.m, "o-", color="#0072B2", ms=3.5, lw=1.4, label="model (fixed setting)")
-    axB.fill_between(g.train_base_circuits, g.lo, g.hi, color="#0072B2", alpha=0.15, lw=0)
+    # one point per training fraction (every fold and repeat of it), at its mean number of training circuits: the
+    # fold sizes differ by one circuit, and grouping by the exact count would draw single draws as separate points
+    grp = "fraction" if "fraction" in lc.columns else "train_base_circuits"
+    g = lc.groupby(grp).agg(n=("train_base_circuits", "mean"), m=(key, "mean"),
+                            lo=(key, lambda x: np.nanquantile(x, 0.1)), hi=(key, lambda x: np.nanquantile(x, 0.9)),
+                            draws=(key, "size"))
+    g = g.reset_index().sort_values("n")
+    axB.plot(g.n, g.m, "o-", color="#0072B2", ms=3.5, lw=1.4, label="model (fixed setting)")
+    axB.fill_between(g.n, g.lo, g.hi, color="#0072B2", alpha=0.15, lw=0)
     gs_ = None
     if "sbs_mean_log_regret" in lc.columns:
-        gs_ = lc.groupby("train_base_circuits").sbs_mean_log_regret.mean()
-        axB.plot(gs_.index, gs_.values, "s--", color="#E69F00", ms=3, lw=1.1, label="SBS (same subset)")
+        gs_ = lc.groupby(grp).agg(n=("train_base_circuits", "mean"), m=("sbs_mean_log_regret", "mean")).sort_values("n")
+        axB.plot(gs_.n, gs_.m, "s--", color="#E69F00", ms=3, lw=1.1, label="SBS (same subset)")
     axB.set_xlabel("independent training base circuits")
     axB.set_ylabel("mean log10 regret (held-out folds)")
     axB.set_title("B  learning curve", loc="left")
@@ -1081,8 +1136,7 @@ def fig04_generalization_learning(run_dir: str, out_dir: str, cfg: dict | None =
             e = bg[(bg.max_train_B.astype(str) == rg) & (bg.policy == p)].sort_values("B")
             if e.empty:
                 continue
-            c = BG_COLORS.get(p, "#555555")
-            mk = BG_MARKERS.get(p, "o")
+            c, mk = _bg_style(p)
             ax.plot(e.B, e.mean_log_regret, "-", color=c, lw=1.1)
             inr = e[e.regime == "in range"]
             ext = e[e.regime != "in range"]
@@ -1100,7 +1154,7 @@ def fig04_generalization_learning(run_dir: str, out_dir: str, cfg: dict | None =
         else:
             plt.setp(ax.get_yticklabels(), visible=False)
     if axC:
-        hd = [plt.Line2D([], [], color=BG_COLORS.get(p, "#555555"), marker=BG_MARKERS.get(p, "o"), ms=3.2, lw=1.1,
+        hd = [plt.Line2D([], [], color=_bg_style(p)[0], marker=_bg_style(p)[1], ms=3.2, lw=1.1,
                          label=_short_policy(p)) for p in pols]
         hd += [plt.Line2D([], [], ls="", marker="o", mfc="white", mec="#333333", label="extrapolation (shaded)")]
         fig.legend(handles=hd, frameon=False, fontsize=6.5, loc="outside lower center", ncol=5)
@@ -1128,9 +1182,10 @@ def fig04_generalization_learning(run_dir: str, out_dir: str, cfg: dict | None =
         if len(t) and "diff_vs_sbsb" in t.columns:
             r_ = t.iloc[0]
             diffs.append("%s %+.3f [%+.3f, %+.3f]" % (split, r_.diff_vs_sbsb, r_.diff_vs_sbsb_lo, r_.diff_vs_sbsb_hi))
-    lc_txt = ("learning curve: mean log10 regret %.3f at %d and %.3f at %d training base circuits (SBS %.3f and "
-              "%.3f)" % (g.m.iloc[0], g.train_base_circuits.iloc[0], g.m.iloc[-1], g.train_base_circuits.iloc[-1],
-                         gs_.iloc[0], gs_.iloc[-1])) if len(g) and gs_ is not None else ""
+    lc_txt = ("learning curve: mean log10 regret %.3f at %.0f and %.3f at %.0f training base circuits (mean over "
+              "folds and repeats; SBS %.3f and %.3f)" % (g.m.iloc[0], g.n.iloc[0], g.m.iloc[-1], g.n.iloc[-1],
+                                                        gs_.m.iloc[0], gs_.m.iloc[-1])) \
+        if len(g) and gs_ is not None else ""
     ext_txt = []
     for rg in ranges:
         if rg == "full":
@@ -1140,7 +1195,7 @@ def fig04_generalization_learning(run_dir: str, out_dir: str, cfg: dict | None =
             m_ = e.groupby("policy").mean_log_regret.mean()
             ext_txt.append("train B ≤ %s: %s" % (rg, ", ".join("%s %.3f" % (_short_policy(p), m_[p]) for p in pols
                                                                 if p in m_.index)))
-    interp = ("Observation: paired difference of the nonlinear column to SBS-B in mean log10 MSE (< 0 favors the "
+    interp = ("Observation: paired difference of the nonlinear column to SBS-B in mean log10(MSE + 10⁻⁶) (< 0 favors the "
               "model): %s; %s. Mean log10 regret over the extrapolated budgets: %s. Matrix rows are different claims "
               "(interpolation in the same distribution, extrapolation in family, device and width); panel C "
               "separates budget interpolation from extrapolation." % ("; ".join(diffs) or "n/a", lc_txt or "n/a",
@@ -1211,11 +1266,11 @@ def fig05_reliability_abstention(run_dir: str, out_dir: str, cfg: dict | None = 
                      [sm.loc[o, "diff_log_vs_sbsb_hi"] - sm.loc[o, "diff_log_vs_sbsb"] for o in order]],
                fmt="o", color="#0072B2", ms=4, capsize=2)
     for yy, o in zip(y, order):
-        a.annotate("MSE %.2g" % sm.loc[o, "mse"], (sm.loc[o, "diff_log_vs_sbsb_hi"], yy), xytext=(4, -2),
+        a.annotate("MSE %.2g" % sm.loc[o, "mse"], (sm.loc[o, "diff_log_vs_sbsb_hi"], yy), xytext=(5, 0), va="center",
                    textcoords="offset points", fontsize=6.5, color="#333333")
     a.axvline(0, color="#333333", lw=0.8)
     a.set_yticks(y, [o if o != "policy" else "selective (nested τ)" for o in order])
-    a.set_xlabel("Δ mean log10 MSE vs SBS-B (< 0 better), 95 % CI")
+    a.set_xlabel("Δ mean log10(MSE + 10⁻⁶) vs SBS-B (< 0 better), 95 % CI")
     a.set_title("C  nested operating point vs baselines", loc="left")
     a = ax[1, 1]
     g = cal.groupby(["kind", "nominal"]).agg(cov=("coverage", "mean"), lo=("coverage", "min"),
@@ -1259,7 +1314,7 @@ def fig05_reliability_abstention(run_dir: str, out_dir: str, cfg: dict | None = 
            "nested operating point and the pooled one. (B) Whole-policy arithmetic MSE over all rows with the "
            "fallback's loss included (base circuits weighted equally); random rejection at the operating point's "
            "coverage per fold (expected value; bar: 2.5–97.5 %% of random acceptance sets). (C) Paired difference to "
-           "SBS-B in mean log10 MSE with 95 %% base-circuit bootstrap intervals; arithmetic MSE annotated. (D) Measured "
+           "SBS-B in mean log10(MSE + 10⁻⁶) with 95 %% base-circuit bootstrap intervals; arithmetic MSE annotated. (D) Measured "
            "coverage of log10-risk intervals on held-out circuits: inner-CV residual intervals (statement kind "
            "cv-residual: no finite-sample guarantee; bars: range over folds) per candidate, for the selected candidate "
            "and Bonferroni-simultaneous; group split-conformal intervals (calibration circuits held out of the fit; "
@@ -1269,7 +1324,7 @@ def fig05_reliability_abstention(run_dir: str, out_dir: str, cfg: dict | None = 
                                                          tau_txt, LABEL_SIM))
     verdict = ("At the nested operating point (coverage %.2f) the whole-policy mean MSE is %.3g [%.3g, %.3g], against "
                "%.3g for the model alone, %.3g for SBS-B alone and %.3g for random rejection at the same coverage; "
-               "Δ mean log10 MSE vs SBS-B %+.3f [%+.3f, %+.3f], vs random rejection %+.3f [%+.3f, %+.3f]." % (
+               "Δ mean log10(MSE + 10⁻⁶) vs SBS-B %+.3f [%+.3f, %+.3f], vs random rejection %+.3f [%+.3f, %+.3f]." % (
                    p_.coverage, p_.mse, p_.mse_lo, p_.mse_hi, sm.loc["model", "mse"], sm.loc["fallback (SBS-B)", "mse"],
                    rr.mse, p_.diff_log_vs_sbsb, p_.diff_log_vs_sbsb_lo, p_.diff_log_vs_sbsb_hi, p_.diff_log_vs_random,
                    p_.diff_log_vs_random_lo, p_.diff_log_vs_random_hi))
@@ -1376,7 +1431,7 @@ def fig06_mismatch_diagnostics(run_dir: str, out_dir: str, cfg: dict | None = No
     fr = d.groupby("type").flag_rate.mean()
     axC.set_yticks(range(len(types)), ["%s (flag %.0f %%)" % (t, 100 * fr.get(t, np.nan)) for t in types])
     axC.invert_yaxis()
-    axC.set_xlabel("Δ mean log10 MSE vs no diagnostic (all B shots on\nthe target; < 0: the reaction helps; equal "
+    axC.set_xlabel("Δ mean log10(MSE + 10⁻⁶) vs no diagnostic (all B shots on\nthe target; < 0: the reaction helps; equal "
                    "total budget)")
     axC.set_title("C  equal-budget gains and losses", loc="left", fontsize=7)
     lab = {"DIAG-RESELECT": "learned reselection\n(type held out)", "RANDOM→reaction": "same reaction,\nrandom trigger",
@@ -1393,7 +1448,7 @@ def fig06_mismatch_diagnostics(run_dir: str, out_dir: str, cfg: dict | None = No
            "injected strength in physical units, at three budgets; 95 %% bootstrap intervals over base circuits. (B) "
            "What one deployment observes: single draws of the echo statistic |z| (d(B) = %d … %d shots charged to B) "
            "against the recommender's log10 regret on that task and budget; AUC: how well one deployment's |z| ranks "
-           "failures (log10 regret > 0.3) above non-failures. (C) Paired difference of mean log10 MSE to spending all "
+           "failures (log10 regret > 0.3) above non-failures. (C) Paired difference of mean log10(MSE + 10⁻⁶) to spending all "
            "B shots on the target without a diagnostic, every grid budget pooled, by discrepancy type: withholding "
            "the diagnostic's shots without reacting; reacting to a flag with ZNE-L or SBS-B (declared fallbacks); a "
            "learned reselection (per budget, the reaction that minimized the risk on the other discrepancy types — "
@@ -1440,39 +1495,55 @@ def supp_target_precision(run_dir: str, out_dir: str, cfg: dict | None = None) -
                 rows.append(dict(task_id=t, protocol=p, target=eps, kind=kind,
                                  B_min=float(d.B.iloc[ok[0]]) if len(ok) else math.inf, attained=bool(len(ok))))
     df = pd.DataFrame(rows)
-    fig, ax = plt.subplots(1, len(targets), figsize=(7.4, 2.8), sharey=True, layout="constrained")
     protos = [p for p in PROTOCOL_COLORS if p in set(df.protocol)]
+    # the height grows with the portfolio (1.8.0: 17 candidates) so that the two rows of a protocol stay legible
+    fig, ax = plt.subplots(1, len(targets), figsize=(7.4, max(2.8, 0.29 * len(protos) + 0.8)), sharey=True,
+                           layout="constrained")
     summ = []
+    fs = 6.5 if len(protos) <= 8 else 5.6
     for k, eps in enumerate(targets):
         for q, p in enumerate(protos):
-            for kind, off, mk in (("point", -0.15, "o"), ("upper 95 %", 0.15, "s")):
+            res = {}
+            for kind in ("point", "upper 95 %"):
                 e = df[(df.target == eps) & (df.protocol == p) & (df.kind == kind)]
                 med = float(np.median(e.B_min)) if len(e) else math.inf
                 frac = float(e.attained.mean()) if len(e) else 0.0
+                res[kind] = (med, frac)
                 summ.append(dict(target=eps, protocol=p, kind=kind, median_B_min=med, share_attained=frac,
                                  tasks=int(len(e))))
+            if not any(np.isfinite(res[k_][0]) for k_ in res):      # neither attained: one line for both
+                ax[k].text(1.3e3, q, "not reached (%.0f %% | %.0f %%)" % (100 * res["point"][1],
+                                                                       100 * res["upper 95 %"][1]),
+                           fontsize=fs, va="center", color="#777777")
+                continue
+            for kind, off, mk in (("point", -0.2, "o"), ("upper 95 %", 0.2, "s")):
+                med, frac = res[kind]
                 if np.isfinite(med):
-                    ax[k].plot([med], [q + off], marker=mk, color=PROTOCOL_COLORS[p], ms=4,
-                               mfc=PROTOCOL_COLORS[p] if kind == "point" else "white")
-                    ax[k].text(med * 1.6, q + off, "%.0f %%" % (100 * frac), fontsize=6.5, va="center",
+                    ax[k].plot([med], [q + off], marker=mk, color=PROTOCOL_COLORS[p], ms=3.6,
+                               mfc=PROTOCOL_COLORS[p] if kind == "point" else "white", ls="")
+                    ax[k].text(med * 1.6, q + off, "%.0f %%" % (100 * frac), fontsize=fs, va="center",
                                color="#333333")
                 else:
-                    ax[k].text(1.3e3, q + off, "not reached (%.0f %%)" % (100 * frac), fontsize=6.5, va="center",
-                               color="#777777")
+                    ax[k].text(1.3e3, q + off, "%s not reached (%.0f %%)" % ("upper" if off > 0 else "point",
+                                                                         100 * frac),
+                               fontsize=fs, va="center", color="#777777")
         ax[k].set_xscale("log")
         ax[k].set_xlim(8e2, 3e8)
         ax[k].set_title("MSE target %s" % _blabel(eps).replace("10", "10", 1), loc="left", fontsize=7)
         ax[k].set_xlabel("median minimal budget B")
     ax[0].set_yticks(range(len(protos)), protos)
-    ax[0].set_ylim(-0.6, len(protos) - 0.4)
-    ax[0].plot([], [], "o", color="#555555", label="point estimate")
-    ax[0].plot([], [], "s", mfc="white", color="#555555", label="upper 95 % bound")
-    ax[0].legend(frameon=False, fontsize=6.5, loc="upper right")
+    ax[0].set_ylim(len(protos) - 0.4, -0.6)
+    hd = [plt.Line2D([], [], marker="o", color="#555555", ls=""),
+          plt.Line2D([], [], marker="s", mfc="white", color="#555555", ls="")]
+    hd.append(plt.Line2D([], [], ls=""))
+    fig.legend(hd, ["point estimate", "upper 95 % bound (pointwise)",
+                    "%: share of tasks attaining; not reached (point | upper)"], frameon=False, fontsize=6.5,
+               loc="outside lower center", ncol=3)
     fig.suptitle(LABEL_SIM, fontsize=6.5, color="#555555")
     ntask = int(df.task_id.nunique())
     cap = ("Budget needed to meet an MSE target (%d development tasks, evaluation half): per task and protocol the "
            "smallest evaluated budget whose MSE point estimate (filled) or approximate pointwise upper limit "
-           "MSE + 1.96 SE (open; SE matching the estimand, over training designs for CDR and NIL under fresh designs) "
+           "MSE + 1.96 SE (open; SE matching the estimand, over training designs for the learning candidates (CDR, NIL; FR in 1.8.0) under fresh designs) "
            "is at most the target; the median over tasks is drawn with the share of tasks that attain it. The upper "
            "limit is pointwise at each budget: the first grid budget that passes it is not a guaranteed minimum budget "
            "(the grid is searched, and the intervals are not simultaneous). Infeasible protocol–budget pairs count as "
@@ -1516,7 +1587,10 @@ def _bias_variance_table(labels_dir: str, task_ids, protocols, half: int = 1):
                                  se_kind="design" if learning and plan.get("mode") == "fresh" else "trial",
                                  bias2_corrected=eb ** 2 - se ** 2,
                                  bias2_lo=max(abs(eb) - 1.96 * se, 0.0) ** 2, bias2_hi=(abs(eb) + 1.96 * se) ** 2,
-                                 var_one=float(e.var(ddof=1)), var_between_design=st["var_between"],
+                                 # 1.8.0 (finding F5): one fresh deployment's variance σ̂_W² + σ̂_D², not the pooled
+                                 # sample variance (kept as var_pooled)
+                                 var_one=LB.deployment_variance(e, arr["design"][half, i, j])["var_deploy"],
+                                 var_pooled=float(e.var(ddof=1)), var_between_design=st["var_between"],
                                  var_within_design=st["var_within"], mse=float((e ** 2).mean())))
     return pd.DataFrame(rows)
 
@@ -1573,7 +1647,7 @@ def supp_bias_variance(run_dir: str, out_dir: str, cfg: dict | None = None) -> d
     cap = ("Bias–variance decomposition and error floors for the three regime slices at s = %g (evaluation half, "
            "r = %s trials per cell) and %d protocols. Top: squared bias corrected for finite samples, ē² − SE(ē)², "
            "where SE(ē) matches the estimand — over trials for protocols without a training design, over the "
-           "%s fresh training designs of a half for CDR and NIL (cluster-robust); bands: squares of the 95 %% "
+           "%s fresh training designs of a half for the learning candidates (CDR, NIL; FR in 1.8.0) (cluster-robust); bands: squares of the 95 %% "
            "interval of the mean error, lower end clipped at 0; estimates ≤ 0 (a bias below the resolution of the "
            "data) are drawn as open markers at 10⁻¹⁰ and the line is broken there. Bottom: variance of one estimate "
            "(solid) and, for the learning protocols, its between-design component Var_D(E[X̂|D]) from a one-way "
@@ -1616,21 +1690,25 @@ def _runner_up_table(pr):
 
 
 def supp_prediction_quality(run_dir: str, out_dir: str, cfg: dict | None = None) -> dict:
-    """Predicted against evaluated log10 MSE per candidate (facets), with the labels' standard errors, and the
+    """Predicted against evaluated log10(MSE + 10⁻⁶) per candidate (facets), with the labels' standard errors, and the
     quantity closest to the selection problem: the predicted against the evaluated risk difference between the
     predicted best and runner-up protocols."""
     import pandas as pd
     plt = _plt()
     pr = pd.read_csv(os.path.join(run_dir, "analysis", "prediction.csv"), encoding="utf-8")
     protos = [p for p in PROTOCOL_COLORS if p in set(pr.protocol)]
-    fig = plt.figure(figsize=(7.4, 3.9), layout="constrained")
-    gs = fig.add_gridspec(2, 6, width_ratios=[1, 1, 1, 1, 0.12, 1.55])
-    ax = np.array([[fig.add_subplot(gs[r, c]) for c in range(4)] for r in range(2)])
-    axR = fig.add_subplot(gs[:, 5])
+    # every candidate gets a facet (1.8.0: 17 candidates on a 6-column grid; 1.7.0's 8 on the original 4 × 2); the
+    # facets share their axes, labelled once for the block
+    ncol = 4 if len(protos) <= 8 else 6
+    nrow = max(2, int(math.ceil(len(protos) / ncol)))
+    fig = plt.figure(figsize=(7.4, 3.9 if ncol == 4 else 1.45 * nrow + 1.0), layout="constrained")
+    sfL, sfR = fig.subfigures(1, 2, width_ratios=[2.7, 1.25] if ncol == 4 else [3.3, 1.3], wspace=0.02)
+    ax = np.atleast_2d(sfL.subplots(nrow, ncol, sharex=True, sharey=True))
+    axR = sfR.subplots(1, 1)
     lo = float(np.nanmin(pr[["observed", "predicted"]].values))
     hi = 1.0
     stats = []
-    for k, p in enumerate(protos[:8]):
+    for k, p in enumerate(protos):
         a_ = ax.flat[k]
         d = pr[pr.protocol == p]
         inr = d[d.observed <= hi]
@@ -1641,20 +1719,17 @@ def supp_prediction_quality(run_dir: str, out_dir: str, cfg: dict | None = None)
         out = int((d.observed > hi).sum())
         stats.append(dict(protocol=p, rows=int(len(d)), rmse_log=rm, beyond_range=out,
                           median_label_se=float(np.nanmedian(d.observed_se))))
-        a_.set_title("%s  RMSE %.2f%s" % (p, rm, ("\n+%d beyond the axis" % out) if out else ""), fontsize=6.5,
+        a_.set_title("%s\nRMSE %.2f%s" % (p, rm, ("\n+%d off axis" % out) if out else ""), fontsize=6.2,
                      loc="left")
         a_.set_xlim(lo - 0.3, hi + 0.3)
         a_.set_ylim(lo - 0.3, hi + 0.3)
-        if k // 4 == 1:
-            a_.set_xlabel("evaluated log10 MSE", fontsize=6.5)
-        else:
-            plt.setp(a_.get_xticklabels(), visible=False)
-        if k % 4 == 0:
-            a_.set_ylabel("predicted (held out)", fontsize=6.5)
-        else:
-            plt.setp(a_.get_yticklabels(), visible=False)
-    for a_ in ax.flat[len(protos):]:
-        a_.set_axis_off()
+    for k in range(len(protos), ax.size):
+        ax.flat[k].set_axis_off()
+        up = k - ncol                          # the facet above an empty slot is the lowest of its column
+        if 0 <= up < len(protos):
+            ax.flat[up].xaxis.set_tick_params(labelbottom=True)
+    sfL.supxlabel("evaluated log10(MSE + 10⁻⁶) (evaluation half)", fontsize=6.8)
+    sfL.supylabel("predicted log10(MSE + 10⁻⁶) (held-out fold)", fontsize=6.8)
     ru = _runner_up_table(pr)
     if len(ru):
         res = ru[ru.resolved]
@@ -1664,9 +1739,9 @@ def supp_prediction_quality(run_dir: str, out_dir: str, cfg: dict | None = None)
         axR.errorbar(res.pred_diff, res.obs_diff, yerr=np.minimum(1.96 * res.obs_diff_se, 3), fmt="o", ms=1.8,
                      color="#0072B2", alpha=0.7, elinewidth=0.3, capsize=0, label="resolved (|Δ| > 1.96 SE)")
         axR.axhline(0, color="#333333", lw=0.7)
-        axR.set_xlabel("predicted Δ log10 risk (runner-up − best)")
-        axR.set_ylabel("evaluated Δ log10 MSE of the same two")
-        axR.legend(frameon=False, fontsize=6.5, loc="upper left")
+        axR.set_xlabel("predicted Δ log10(risk + 10⁻⁶)\n(runner-up − best)")
+        axR.set_ylabel("evaluated Δ log10(MSE + 10⁻⁶) of the same two")
+        axR.legend(frameon=True, framealpha=0.9, edgecolor="#FFFFFF", fontsize=6.5, loc="upper right")
         axR.set_title("best vs runner-up: order right %.0f %%\n(resolved rows: %.0f %% of %d)"
                       % (100 * ru.ordered.mean(), 100 * res.ordered.mean() if len(res) else float("nan"), len(res)),
                       fontsize=6.5, loc="left")
@@ -1674,8 +1749,8 @@ def supp_prediction_quality(run_dir: str, out_dir: str, cfg: dict | None = None)
     nb = pr.task_id.map(lambda t: t).nunique()
     cap = ("Prediction quality of the deployed recommender on held-out base circuits (group 5-fold; %d tasks). Left: "
            "predicted against evaluated log10(MSE + 10⁻⁶) per candidate, with ±1.96 standard errors of the label "
-           "(delta method on the SE matching the estimand — over training designs for CDR and NIL under fresh "
-           "designs; capped at 3 decades for display). Points beyond the axis (evaluated log10 MSE > 1: divergent "
+           "(delta method on the SE matching the estimand — over training designs for the learning candidates (CDR, NIL; FR in 1.8.0) under fresh "
+           "designs; capped at 3 decades for display). Points beyond the axis (evaluated log10(MSE + 10⁻⁶) > 1: divergent "
            "exponential-ZNE labels) are counted in the titles and kept in the source data; the RMSE includes them. "
            "Right: per row, the predicted log-risk difference between the predicted best and runner-up protocols "
            "against the evaluated difference of the same two protocols (evaluation half; ±1.96 SE, the two labels "
@@ -1713,7 +1788,7 @@ def supp_dataset_coverage(run_dir: str, out_dir: str, cfg: dict | None = None) -
             continue
         st = dict(part=label, tasks=0, failed_tasks=0, base_circuits=set(), designs_per_half=set(), r=set())
         for tid in LB.task_ids(tdir):
-            rec = json.load(open(os.path.join(tdir, "tasks", tid + ".json"), encoding="utf-8"))
+            rec = TX.read_json(os.path.join(tdir, "tasks", tid + ".json"))
             if rec.get("status") != "ok":
                 st["failed_tasks"] += 1
                 continue
@@ -1803,7 +1878,7 @@ def supp_dataset_coverage(run_dir: str, out_dir: str, cfg: dict | None = None) -
            "controlled settings of the noise-composition study (diamonds) for comparison — the development devices "
            "vary the components only jointly, so the controlled study reaches compositions the development set does "
            "not. Counts: tasks (failed label tasks listed separately), independent base circuits (the unit of every "
-           "bootstrap), fresh learning designs per label half for CDR and NIL, and trials per half. Support by "
+           "bootstrap), fresh learning designs per label half for the learning candidates (CDR, NIL; FR in 1.8.0), and trials per half. Support by "
            "family and width is in the source data. %s" % (100 * near0, LABEL_SIM))
     med = main.groupby("part")[["n", "two_qubit", "depth", "lam_lc", "obs_weight"]].median()
     txt = "; ".join("%s: median n %g, two-qubit gates %g, depth %g, λ_LC %.3f, weight %g" % (
@@ -1937,7 +2012,7 @@ def supp_representative(run_dir: str, out_dir: str, cfg: dict | None = None) -> 
     for a_, (kind, r_) in zip(np.atleast_1d(ax), pick):
         rec, arr = LB.load_task(os.path.join(run_dir, "dev"), r_.task_id)
         j = rec["budgets"].index(int(r_.B))
-        marks, rmse = [], {}
+        marks, rmse, errs = [], {}, {}
         for i, p in enumerate(rec["protocols"]):
             x = arr["est"][1, i, j]
             if not np.isfinite(x).any():
@@ -1945,6 +2020,7 @@ def supp_representative(run_dir: str, out_dir: str, cfg: dict | None = None) -> 
             e = np.where(np.isfinite(x), x, 0.0) - rec["ideal"]
             dz = arr["design"][1, i, j]
             rmse[p] = float(np.sqrt(np.mean(e ** 2)))
+            errs[i] = (p, e)
             if PR.PORTFOLIO[p].learning and (dz >= 0).any():
                 ks = np.unique(dz[dz >= 0])
                 xs = i - 0.35 + 0.7 * (np.searchsorted(ks, dz) + 0.5) / len(ks)
@@ -1964,10 +2040,29 @@ def supp_representative(run_dir: str, out_dir: str, cfg: dict | None = None) -> 
             rows += [dict(kind=kind, task_id=r_.task_id, protocol=p, design=int(dd), error=float(v))
                      for v, dd in zip(e, dz)]
         a_.axhline(0, color="#999999", lw=0.8)
+        # 1.8.0: one candidate with errors orders of magnitude larger than the rest (FR's divergent fits) would
+        # flatten every other box; the axis covers the candidates within 10× the median spread (and the choice),
+        # and the points beyond it are counted at the axis edge — nothing is dropped from the source data
+        if errs:
+            spread = {i: float(np.quantile(np.abs(e), 0.99)) for i, (p, e) in errs.items()}
+            ref = float(np.median(list(spread.values())))
+            keep = [i for i in errs if spread[i] <= 10 * max(ref, 1e-12) or errs[i][0] == r_.choice]
+            lo_ = min(float(np.quantile(errs[i][1], 0.002)) for i in keep)
+            hi_ = max(float(np.quantile(errs[i][1], 0.998)) for i in keep)
+            pad = 0.08 * (hi_ - lo_ if hi_ > lo_ else 1.0)
+            lo_, hi_ = min(lo_, 0.0) - pad, max(hi_, 0.0) + pad
+            a_.set_ylim(lo_, hi_)
+            for i, (p, e) in errs.items():
+                nup, ndn = int((e > hi_).sum()), int((e < lo_).sum())
+                if nup:
+                    a_.text(i, hi_, "↑%d" % nup, ha="center", va="top", fontsize=5.2, color="#555555")
+                if ndn:
+                    a_.text(i, lo_, "↓%d" % ndn, ha="center", va="bottom", fontsize=5.2, color="#555555")
         top = a_.get_ylim()[1]
         for i, fc in marks:                                  # above the data, at the top of the axis
             a_.plot(i, top, marker="v", mfc=fc, mec="#000000", ms=4, clip_on=False, ls="")
-        a_.set_xticks(range(len(rec["protocols"])), rec["protocols"], rotation=60, fontsize=6.5)
+        a_.set_xticks(range(len(rec["protocols"])), rec["protocols"], rotation=90,
+                      fontsize=6.5 if len(rec["protocols"]) <= 8 else 5.8)
         sp = rec["spec"]
         fb_txt = (" → deployed %s" % r_.fallback) if kind == "abstained" else ""
         a_.set_title("%s: %s-%d %s\nmodel chose %s%s\nlog10 regret %.2f, z = %.2f\nRMSE of the choice %.2g"
@@ -1983,7 +2078,9 @@ def supp_representative(run_dir: str, out_dir: str, cfg: dict | None = None) -> 
            "errors that dominate an MSE). CDR and NIL: every trial as a point, one column per fresh training design "
            "(alternating grey), the design's mean error as a coloured tick — separated clusters are designs, not "
            "shot noise. Filled triangle: the recommender's choice (its RMSE in the title); open triangle: the "
-           "fallback used on abstention. Illustrative cases selected by rule, not a random sample. %s"
+           "fallback used on abstention. The axis covers the candidates whose 99th-percentile error is within 10× "
+           "the panel's median (and the choice); arrows count trials beyond it. Illustrative cases selected by "
+           "rule, not a random sample. %s"
            % (_btext(b0), acc_src, LABEL_SIM))
     return _save(fig, out_dir, "supp_representative", dict(trials=pd.DataFrame(rows),
                                                            rows=pd.DataFrame([r for _, r in pick])), cap,
@@ -1998,17 +2095,26 @@ def supp_runtime(run_dir: str, out_dir: str, cfg: dict | None = None) -> dict:
     import pandas as pd
     plt = _plt()
     rt = pd.read_csv(os.path.join(run_dir, "analysis", "runtime.csv"), encoding="utf-8")
+    rej = rt[rt.kind == "rejection"].copy() if "kind" in rt.columns else rt.iloc[0:0]   # 1.8.0 early-rejection probes
+    if "kind" in rt.columns:
+        rt = rt[rt.kind == "width"].copy()
     comps = [("compile_s", "#999999", "s", "compilation"),
              ("deployable_s", "#0072B2", "^", "deployable features (no simulation)"),
              ("simulated_s", "#D55E00", "o", "simulator-only augmentation (exact simulation)"),
              ("inference_s", "#009E73", "D", "model inference"),
+             ("preflight_structural_s", "#E69F00", "v", "structural preflight, every candidate (1.8.0)"),
+             ("preflight_design_s", "#CC79A7", "P", "design preflight, learning candidates (1.8.0)"),
+             ("recommend_s", "#56B4E9", "*", "whole recommend() call, deployable bundle (1.8.0)"),
              ("label_s", "#000000", "x", "benchmark-label generation, one task (study cost)")]
     if "deployable_s" not in rt.columns:              # a 1.6.0 table: the old components, labelled as such
         raise ValueError("runtime.csv is from 1.6.0 (no separated components); re-run python -m qemx.selection "
                          "profile")
     cols = [c for c, *_ in comps if c in rt.columns]
     g = rt.groupby("n")[cols + ["peak_rss_mb"]].median().reset_index()
-    fig, ax = plt.subplots(1, 1, figsize=(3.9, 3.8), layout="constrained")
+    if len(rej):
+        fig, (ax, axr) = plt.subplots(1, 2, figsize=(7.4, 3.8), layout="constrained", width_ratios=[1.35, 1])
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(3.9, 3.8), layout="constrained")
     for col, c, mk, lab in comps:
         if col not in g.columns or not g[col].notna().any():
             continue
@@ -2019,6 +2125,21 @@ def supp_runtime(run_dir: str, out_dir: str, cfg: dict | None = None) -> dict:
     ax.set_ylabel("seconds (median of repeats)")
     ax.legend(frameon=False, fontsize=6.5, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1)
     ax.set_xticks(sorted(int(x) for x in g.n))
+    if len(rej):
+        ax.set_title("A  cost of one recommendation against width", loc="left", fontweight="bold")
+        rj = rej.reset_index(drop=True)
+        xs = np.arange(len(rj))
+        axr.bar(xs, rj.recommend_s, color="#56B4E9", width=0.6, edgecolor="#FFFFFF", linewidth=2)
+        for i, r_ in rj.iterrows():
+            st_ = str(r_.recommend_status).replace("out-of-distribution", "out of\ndistribution")
+            axr.text(i, float(r_.recommend_s) * 1.04, "%s\n%.0f MB peak" % (st_, r_.peak_rss_mb),
+                     ha="center", va="bottom", fontsize=6.5, color="#333333")
+        axr.set_xticks(xs)
+        axr.set_xticklabels(["%s-%d" % (r_.family, r_.n) for r_ in rj.itertuples()])
+        axr.set_ylabel("seconds, whole recommend() call")
+        axr.set_ylim(0, float(rj.recommend_s.max()) * 1.35)
+        axr.set_xlim(-0.75, len(xs) - 0.25)            # room for the first bar's label
+        axr.set_title("B  early rejection outside the training widths", loc="left", fontweight="bold")
     fig.suptitle("Measured on the build machine (2 cores shared with other jobs): magnitudes, not a benchmark.",
                  fontsize=6.5, color="#555555")
     fam = rt.family.iloc[0] if "family" in rt.columns and len(rt) else "ising"
@@ -2036,12 +2157,25 @@ def supp_runtime(run_dir: str, out_dir: str, cfg: dict | None = None) -> dict:
            "recommendation. Memory: %s, in the source data. Measured on one machine; not a benchmark of other "
            "hardware." % (fam, reps, "/".join(str(nl[k]) for k in sorted(nl)) or "n/a",
                           rt.rss_kind.iloc[0] if "rss_kind" in rt.columns and len(rt) else "peak resident memory"))
+    if "recommend_s" in rt.columns:
+        cap += (" 1.8.0 components: the structural preflight of every candidate of the portfolio, the design-level "
+                "preflight of the learning candidates (training design with its deployment seed, ideal training values "
+                "by state vector), and the whole recommend() call with the deployable bundle (guard, compilation, "
+                "features without cache, out-of-distribution checks, preflight in the model's order, margin rule, "
+                "fallback). No component uses quantum shots.")
+    if len(rej):
+        cap += (" (B) Wide GHZ chains (%s qubits; observable z_mid) outside every training width: the whole call "
+                "and the process's peak memory; status as returned (an out-of-distribution answer uses the fallback; "
+                "no dense state of the circuit is built)." % ", ".join(str(int(x)) for x in rej.n))
     shares = g.set_index("n")
     big = int(shares.index.max()) if len(shares) else 0
     dom = (shares.loc[big, [c for c in ("compile_s", "deployable_s", "simulated_s", "inference_s")
                             if c in shares.columns]].idxmax().replace("_s", "") if len(shares) else "n/a")
     grow = (float(shares.simulated_s.iloc[-1] / shares.simulated_s.iloc[0]) if len(shares) > 1 else float("nan"))
-    return _save(fig, out_dir, "supp_runtime", dict(runtime=rt, medians=g), cap,
+    data = dict(runtime=rt, medians=g)
+    if len(rej):
+        data["rejection"] = rej
+    return _save(fig, out_dir, "supp_runtime", data, cap,
                  "Observation: at n = %d the largest component of a recommendation is '%s'; the simulator-only "
                  "augmentation grows by a factor %.1f from n = %d to n = %d, while a recommendation from deployable "
                  "features needs no simulation. Label generation, the study's own cost, is orders of magnitude above "
@@ -2068,15 +2202,16 @@ def supp_design_variability(run_dir: str, out_dir: str, cfg: dict | None = None)
     med = e.groupby(["task_id", "protocol", "B"]).mean_loss.transform("median")
     e["rel"] = np.log10((e.mean_loss + EPS0) / (med + EPS0))
     budgets = sorted(e.B.unique())
-    protos = [p for p in ("CDR", "NIL") if p in set(e.protocol)]
+    protos = [p for p in ("CDR", "NIL", "FR") if p in set(e.protocol)]       # the learning candidates (FR: 1.8.0)
     rowsA = []
     for q, p in enumerate(protos):
         for k, B in enumerate(budgets):
             v = e[(e.protocol == p) & (e.B == B)].rel.dropna().to_numpy()
             if not len(v):
                 continue
-            x = k + (q - (len(protos) - 1) / 2) * 0.32
-            parts = axA.violinplot([v], positions=[x], widths=0.28, showextrema=False)
+            dx = 0.32 if len(protos) <= 2 else 0.25
+            x = k + (q - (len(protos) - 1) / 2) * dx
+            parts = axA.violinplot([v], positions=[x], widths=0.85 * dx, showextrema=False)
             for b_ in parts["bodies"]:
                 b_.set_facecolor(PROTOCOL_COLORS[p])
                 b_.set_alpha(0.45)
@@ -2090,6 +2225,9 @@ def supp_design_variability(run_dir: str, out_dir: str, cfg: dict | None = None)
     axA.axhline(0, color="#333333", lw=0.7)
     axA.axhline(1, color="#999999", lw=0.6, ls=":")
     axA.set_xticks(range(len(budgets)), [_blabel(b) for b in budgets])
+    for k in range(1, len(budgets)):                       # budget groups separated
+        axA.axvline(k - 0.5, color="#DDDDDD", lw=0.6)
+    axA.grid(axis="x", visible=False)
     axA.set_xlabel("total budget B")
     axA.set_ylabel("log10 design MSE / task's median design")
     axA.set_title("(a) design-level losses (dev)", loc="left", fontsize=7)
@@ -2152,8 +2290,8 @@ def supp_design_variability(run_dir: str, out_dir: str, cfg: dict | None = None)
         axC.set_axis_off()
     fig.suptitle(LABEL_SIM, fontsize=6.5, color="#555555")
     kk = sorted(set(int(x) for x in dv.designs)) if len(dv) else []
-    cap = ("Learning-design variability of CDR and NIL. (a) Development labels, evaluation half: for every task, "
-           "budget and fresh training design (%s designs per half), the design's mean loss relative to the median "
+    cap = ("Learning-design variability of the learning candidates (%s). (a) Development labels, evaluation half: "
+           "for every task, budget and fresh training design (%s designs per half), the design's mean loss relative to the median "
            "design of the same task and budget (log10 of the ratio, both + 10⁻⁶); violins over all designs, black: "
            "median, markers: the three largest; dotted line: a design ten times worse than the task's median design. "
            "(b) Median over tasks of the between-design share of the variance of the evaluation-half MSE, "
@@ -2165,7 +2303,7 @@ def supp_design_variability(run_dir: str, out_dir: str, cfg: dict | None = None)
            "(ticks; open circle: mean over designs) of CDR, NIL and alternative training allocations (more training "
            "circuits, another share of B, the bare circuit added) at the largest budget; dotted: MSE 10⁻² (RMSE "
            "0.1, the study's severe threshold). Exploratory; designs are the independent unit within a task, tasks "
-           "are few. %s" % ("/".join(map(str, kk)) or "K", LABEL_SIM))
+           "are few. %s" % (", ".join(protos), "/".join(map(str, kk)) or "K", LABEL_SIM))
     a_ = pd.DataFrame(rowsA)
     interp = ("Share of designs at least ten times worse than their task's median design: %s. Median between-design share of "
               "the label variance at the largest budget: %s."
@@ -2244,7 +2382,7 @@ def tables(run_dir: str, out_dir: str, cfg: dict | None = None, pilot_cfg: dict 
     from . import protocols as PR
     from .figures import markdown_table
     os.makedirs(out_dir, exist_ok=True)
-    man = json.load(open(os.path.join(run_dir, "manifest.json"), encoding="utf-8"))
+    man = TX.read_json(os.path.join(run_dir, "manifest.json"))
     cfgd = man["config"]
     feats = {}
     for part in ("dev", "final", "confirm"):
@@ -2252,7 +2390,7 @@ def tables(run_dir: str, out_dir: str, cfg: dict | None = None, pilot_cfg: dict 
         if os.path.isdir(tdir):
             for f in os.listdir(tdir):
                 if f.endswith(".json"):
-                    r = json.load(open(os.path.join(tdir, f), encoding="utf-8"))
+                    r = TX.read_json(os.path.join(tdir, f))
                     if r.get("status", "ok") != "ok":
                         continue
                     feats[r["task_id"]] = (r.get("features") or {}, r["spec"], part, r.get("base_id"))
@@ -2295,7 +2433,7 @@ def tables(run_dir: str, out_dir: str, cfg: dict | None = None, pilot_cfg: dict 
                         note=st.get("note", "")))
     t1b = pd.DataFrame(t1b)
     t2 = []
-    for p in PR.PORTFOLIO.values():
+    for p in (PR.PORTFOLIO[k] for k in cfgd.get("protocols", PR.PORTFOLIO_16)):     # this run's candidates
         info = PROTOCOL_INFO.get(p.key, ("", "", "", "", ""))
         t2.append(dict(protocol=p.key, estimator=p.estimator, readout=p.readout,
                        settings=", ".join("%s=%s" % kv for kv in p.params), noise_information=info[0],

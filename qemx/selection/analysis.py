@@ -592,7 +592,18 @@ def nested_selective(ds, family: str = "hgb", set_name: str = "deployable+simula
 
 
 # ------------------------------------------------------------------ design-level tables (1.7.0, R1)
-def design_diagnostics(labels_dir: str, budgets=(10000, 1000000, 30000000), task_ids=None) -> list:
+DIAGNOSTIC_BUDGETS = (10000, 1000000, 30000000)
+
+
+def _diagnostic_budgets(grid) -> set:
+    """The budgets of the design diagnostics: DIAGNOSTIC_BUDGETS where the grid has them; otherwise (1.9.0: another
+    grid, e.g. a smoke or pilot study) the grid's smallest, middle and largest budget."""
+    g = sorted(int(b) for b in grid)
+    inter = set(g) & set(DIAGNOSTIC_BUDGETS)
+    return inter if inter else {g[0], g[len(g) // 2], g[-1]}
+
+
+def design_diagnostics(labels_dir: str, budgets=None, task_ids=None) -> list:
     """One row per (task, learning protocol, label half, design, budget): the design's identity and diagnostics
     (training-label spread and range, rank resolved above shot noise, singular values and condition of the exact
     training features, coefficient ℓ1 norm and nonzeros, fallback, and the research-only oracle diagnostics: the
@@ -615,8 +626,9 @@ def design_diagnostics(labels_dir: str, budgets=(10000, 1000000, 30000000), task
             by_idx = {}
             for d in recs.get(k, []):
                 by_idx[(int(d["half"]), int(d["index"]))] = d
+            use = set(int(b) for b in budgets) if budgets is not None else _diagnostic_budgets(rec["budgets"])
             for j, B in enumerate(rec["budgets"]):
-                if int(B) not in budgets:
+                if int(B) not in use:
                     continue
                 a = rec["allocations"][i * len(rec["budgets"]) + j]
                 if not a.get("feasible"):
@@ -646,9 +658,12 @@ def design_variance(labels_table) -> list:
     """Per learning protocol and budget: how much of the evaluation-half label uncertainty is between designs —
     median ratio of the design-level to the trial-level standard error, median share of the between-design variance
     component, and the number of designs (from ``labels.csv``)."""
+    from . import protocols as PR
     lab = labels_table
     out = []
-    for (p, B), e in lab[lab.protocol.isin(["CDR", "NIL"])].groupby(["protocol", "B"]):
+    # every learning candidate of the portfolio (1.8.0 adds FR to CDR and NIL)
+    learn = [p for p in dict.fromkeys(lab.protocol) if p in PR.PORTFOLIO and PR.PORTFOLIO[p].learning]
+    for (p, B), e in lab[lab.protocol.isin(learn)].groupby(["protocol", "B"]):
         e = e[np.isfinite(e.se_mse_trial_eval) & (e.se_mse_trial_eval > 0)]
         if e.empty:
             continue

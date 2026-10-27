@@ -1,0 +1,177 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-24T20:08:43+00:00",
+ "identity": {
+  "stage": "noisecomp",
+  "labels_config": "370a4bd62189321a",
+  "tasks": "707841c0521b30b8",
+  "n_tasks": 18,
+  "split": {
+   "final_test_fraction": 0.0,
+   "salt": "qemx-1.6-final",
+   "development": "ec1d6a0132d42646",
+   "final": "4f53cda18c2baa0c"
+  },
+  "portfolio": "d97de6fc55ac3e22",
+  "devices": {
+   "fake_fez": "4eb21db4db0cca8f",
+   "fake_fez@eng=exact": "6916f73eab2f1fb1",
+   "fake_fez@g2=2.3": "aac8157a0252626b",
+   "fake_fez@g2=2.3,eng=exact": "eeb7712ca7a3b637",
+   "fake_fez@ro=3": "438ed547fcac8cf8",
+   "fake_fez@ro=3,eng=exact": "04baba7ea40295fe",
+   "fake_fez@s=2": "705698089f93dca8",
+   "fake_fez@s=2,chi=0.5": "94031510fce41274",
+   "fake_fez@s=2,chi=0.5,eng=exact": "94031510fce41274",
+   "fake_fez@s=2,eng=exact": "3b1abde0d12d9a81",
+   "fake_fez@t=5.5": "adec21bbe0f401c5",
+   "fake_fez@t=5.5,eng=exact": "3c9010007de119f6"
+  }
+ },
+ "identity_digest": "4f2ba4f46bb0638e",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "noisecomp18",
+  "status": "planned",
+  "master_seed": 20261026,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "base"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": {
+   "widths": [
+    4
+   ],
+   "families": {
+    "ising": [
+     {
+      "steps": 2
+     }
+    ],
+    "hea": [
+     {
+      "layers": 2,
+      "angle_seed": 2
+     }
+    ],
+    "qaoa": [
+     {
+      "p": 1,
+      "angle_seed": 3
+     }
+    ]
+   },
+   "inputs": [
+    "default"
+   ],
+   "observables": [
+    "default"
+   ],
+   "layouts": [
+    "best"
+   ],
+   "devices": [
+    "fake_fez",
+    "fake_fez@s=2",
+    "fake_fez@g2=2.3",
+    "fake_fez@t=5.5",
+    "fake_fez@s=2,chi=0.5",
+    "fake_fez@ro=3"
+   ],
+   "variants_per_base": "all"
+  },
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3
+  },
+  "regimes": {
+   "noise_axis": "component"
+  }
+ },
+ "manifest": [
+  "2b461bf83278cbead83f",
+  "314233206be33183fc59",
+  "35ceb6d45d7e2088eb5c",
+  "441e2e761d4fdfc23732",
+  "472b27e55d8e09b2b643",
+  "7b8a2492f7ed19c013ab",
+  "820db261dbedfd2c2b94",
+  "897ce4e0c94f6594e2cc",
+  "8fb2c4016f1f9f8ae689",
+  "948a80f5f1ec2d9555b9",
+  "a3baf677b76f4c1a9b00",
+  "a5966fe7408371b9b5fc",
+  "a629b562553524d788c6",
+  "cc175d850b65356edfc7",
+  "db59f5413a5ea1f94bea",
+  "e97ecbd5ff6d6c856d20",
+  "f73a623ce7b35b56e172",
+  "fa28de034495ddfce366"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-24T20:08:43+00:00",
+   "execution": {
+    "code": "c918c8937b3677cd",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  }
+ ],
+ "imports": []
+}

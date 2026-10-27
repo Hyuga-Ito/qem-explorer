@@ -1,4 +1,307 @@
-# Results — budget-aware QEM protocol selection, corrected pilot (QEM Explorer 1.7.0)
+# Results — budget-aware QEM protocol selection (QEM Explorer 1.8.0; the 1.7.0 corrected pilot in Part II)
+
+**Every number below is a simulated observation**: emulated trials on IBM fake devices (calibration snapshots
+executed by the exact density-matrix engine). No hardware data exist in this release and no hardware job was
+submitted; nothing here establishes hardware performance. Methods: `METHODS.md` (1.8.0: §16); plan, hypotheses and
+decisions (D1–D43): `RESEARCH_PLAN.md`; figures: `FIGURES.md`; data: `reports/selection_v180/` (Part I) and
+`reports/selection_v170/` (Part II). Every table and figure is regenerated from the saved tables without simulation
+(`python -m qemx.selection figures|report`, `python -m qemx.selection.thesis_tables`). What the numbers suggest, the
+physical explanations and the ranked next experiments are in `docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md`.
+
+**Kinds of statement** (the vocabulary of `qemx/selection/claims.py`). *Empirical*: measured on held-out base
+circuits of this study — a finite sample of one task distribution. *Confirmatory*: the one comparison declared before
+the confirmation set was evaluated (D41), evaluated once. *Exploratory*: controlled single-task comparisons, the
+portfolio comparison, the root audit, per-budget and per-family breakdowns, secondary comparators, anything decided
+after seeing results (marked *post hoc*) — descriptive, no multiplicity correction. *Model-conditional*: statements
+about a fitted model's predictions. Intervals are 95 % percentile bootstrap intervals over independent base circuits
+(1 000 resamples) unless stated otherwise; Δ is a paired difference of the mean over base circuits of
+log10(MSE + 10⁻⁶) (< 0 is better). A difference Δ changes the *geometric mean of (MSE + 10⁻⁶)* by the factor 10^Δ
+(−0.1 ≈ factor 0.79); it is not a percentage change of the MSE. "Not resolved" means the interval contains 0; it is not
+"equivalent".
+
+# Part I — QEM Explorer 1.8.0
+
+**In one paragraph.** 1.8.0 evaluates what the application actually does — the full deployed policy with its
+execution preflight, out-of-distribution checks, margin rule and fallback — instead of only the model's best
+label-feasible candidate, on a 17-candidate portfolio (nine new candidates) with independently namespaced preparation
+seeds. On 29 new logical circuits, evaluated once after the freeze, the full deployed policy of the frozen configuration
+(boosted trees on deployable and simulator-only features) improves on choosing the best protocol per budget (SBS-B) by
+**Δ = −0.144 [−0.231, −0.076]** (geometric-mean MSE × 0.72), with every row scored; its development out-of-fold
+difference is −0.088 [−0.145, −0.027]. The rule declared before the confirmation was evaluated (D41) is therefore
+met: the claim "the deployed recommender improves on SBS-B" is **established in the sense of that rule, for this
+simulated task distribution** — with three qualifications that matter: the optimism-corrected development difference (BBC-CV) is not resolved
+(−0.064 [−0.143, +0.013]); D41 was written after the development results were seen; and the established
+configuration needs exact simulation at recommendation time (about 0.65 s per new circuit at 3–6 qubits, exponential in
+width). The default bundle without simulation reaches −0.084 [−0.179, −0.002], an interval whose exclusion of zero is
+within bootstrap Monte-Carlo noise; its distance to its own model component comes from 47 rows on four GHZ circuits,
+about half from symmetry verification that its preflight cannot verify without a simulation and half from
+out-of-distribution fallbacks (post hoc). On identical development labels, adding candidates gives a resolved gain —
+SBS-B over 17 candidates beats SBS-B over the original 8 by −0.070 [−0.133, −0.012] — while learned policies on
+deployable features are not resolvedly better than SBS-B within either portfolio. The bounded estimator ZNE-E-B removes
+ZNE-E's divergent estimates (largest MSE 10⁹ → 0.04); feature regression (FR) is severe on 61 % of its rows
+(circuit-weighted), with a failure peak at five qubits, where its 17 regressors exceed its 16 training circuits (an
+interpolation-threshold hypothesis, untested); the crossed root audit finds the labels' standard errors about honest
+(median between-root variance ÷ SE² 0.44–1.08 per candidate) and the execution contract exact (288/288). An
+independent re-implementation reproduced the confirmation, full-policy, model-component and attainable-portfolio point
+estimates to 10⁻¹⁴.
+
+## I.1 What was executed
+
+| workflow | what | status | measured cost |
+|---|---|---|---|
+| smoke (`smoke18.yaml`) | the 17-candidate pipeline end to end (label, analyze, freeze, bundle, recommend, figures) | executed | minutes |
+| development (`dev18.yaml`) | 88 tasks on 44 **new** logical circuits (8 families: GHZ 20, Ising 16, HEA 16, QAOA 16, brickwork 8, BV 4, Grover 4, QFT 4 tasks; 3–6 qubits; `fake_fez` 52, `fake_torino` 20, `fake_kyiv` 16), 10 budgets 10³–3·10⁷, 17 candidates, r = 60 + 60 trials, K = 6 fresh designs per half for the learning candidates, seed scheme 2 | executed, 88/88 ok | 1.3 CPU-h labels |
+| development analysis | six splits, 30 model configurations (ridge, elastic net, boosted trees, MLP, structured b² + v/B × six feature sets incl. `deployable18`), BBC-CV, ablations, learning curve, budget generalization, nested selective evaluation, interval coverage, certificates, design variance, failure profile | executed | ≈ 2 h on 2 cores |
+| freeze | unchanged rule (lowest pooled out-of-fold mean log10 risk): `MODEL[hgb\|deployable18+simulated]`, nested-CV margin threshold τ = 3.8·10⁻⁵ | executed | — |
+| confirmation (`conf18.yaml`) | 58 tasks on 29 new logical circuits (registered before labeling, no ancestry overlap), labeled after the freeze, evaluated once | executed, 58/58 ok | 1.2 CPU-h labels |
+| full-policy replay (`scripts/replay_confirmation.py`) | `deploy.recommend` itself on every confirmation row, both shipped bundles, scored on the evaluation half | executed, 0 unscored rows | minutes |
+| portfolio comparison (`scripts/portfolio_comparison.py`) | the original 8 against the 17 candidates on identical development labels; every policy refitted per portfolio | executed (exploratory) | minutes |
+| crossed root audit (`scripts/root_audit.py`) | 8 circuits × 4 independent preparation roots × 3 budgets × 17 candidates | executed (exploratory) | 0.4 CPU-h |
+| regime study (`regimes18.yaml`) | the 1.7.0 regime slices with portfolio-1.8: three 4-qubit circuits on `fake_fez`, error scale s ∈ {0.5, 1, 1.5, 2, 3}, observable and layout blocks (21 tasks) | executed (exploratory) | 0.3 CPU-h |
+| noise composition (`noisecomp18.yaml`) | the three circuits under one noise component changed at a time at matched exposure (18 tasks) | executed (exploratory) | 0.3 CPU-h |
+| recommendation cost (`profile`) | widths 3–7 by component; early rejection at 12, 24, 40 qubits | executed | minutes |
+| hardware plan (`hardware plan`, dry run) | the shipped bundle's validation plan: 28 jobs, 524 s reserved of the 540 s window | **planned, not executed**; nothing submitted | — |
+| replay on the 1.7.0 confirmation (`scripts/replay_v170_confirmation.py`) | the 1.7.0 bundles under policy/2 on the inspected 1.7.0 confirmation | executed (exploratory, post-inspection; private evidence) | minutes |
+| independent reproduction | a separate agent recomputed, from the saved tables with its own code (without the project's code), seven confirmation comparisons, both full deployed policies, the default bundle's model component and the attainable portfolio contrast | executed | — |
+| mismatch study | not repeated (D43); the 1.7.0 result (Part II §10) stays the evidence; Figure 6 of the 1.8.0 report is pending | **not executed** | — |
+
+Labeling used about 3.5 CPU-hours on a 2-core machine shared with the analyses; one container restart interrupted the
+development labeling, which resumed from its records (`--accept-changes`, recorded in `dev/provenance.json`).
+
+## I.2 The confirmatory comparison (D41; Table 3 of the thesis tables, `supp_deployment_policy`)
+
+| policy on the 29 confirmation circuits (580 rows) | mean log10(MSE + 10⁻⁶) | Δ vs SBS-B [95 %] | arithmetic MSE | kind |
+|---|---|---|---|---|
+| **full deployed policy, frozen configuration** (`qemx-rec-1.8.0`; simulator-only features; allocation-level preflight) | −4.496 | **−0.144 [−0.231, −0.076]** | 5.4·10⁻⁴ | confirmatory (D41) |
+| model component of the same configuration (its best label-feasible candidate) | −4.511 | −0.159 [−0.253, −0.086] | 6.1·10⁻⁴ | reported beside (the 1.7.0 primary) |
+| full deployed policy, default bundle (`qemx-rec-1.8.0-deployable`; deployable features; design-level preflight) | −4.436 | −0.084 [−0.179, −0.002] | 5.7·10⁻⁴ | reported beside; interval fragile (below) |
+| model component of the default bundle (`MODEL[hgb\|deployable18]`, from its own predictions) | −4.459 | −0.107 [−0.224, −0.006] | 9.5·10⁻⁴ | reported beside |
+| ridge, 1.7.0 deployable features (D39 comparator) | −4.482 | −0.130 [−0.226, −0.037] | 6.6·10⁻⁴ | exploratory |
+| boosted trees, 1.7.0 deployable features | −4.444 | −0.092 [−0.204, +0.010] | 9.1·10⁻⁴ | exploratory |
+| structured b² + v/B, 1.7.0 deployable features | −4.367 | −0.014 [−0.125, +0.085] | 1.0·10⁻³ | exploratory |
+| SIZE-B | −4.366 | −0.013 [−0.130, +0.103] | 7.8·10⁻⁴ | baseline |
+| SBS-B | −4.352 | 0 | 8.6·10⁻⁴ | reference |
+| SBS (single best protocol) | −4.144 | +0.208 [+0.067, +0.380] | 1.4·10⁻³ | baseline |
+| RAW | −3.178 | +1.175 [+0.968, +1.411] | 8.0·10⁻³ | baseline |
+| empirical reference (selection-half best) | −4.653 | −0.301 [−0.406, −0.210] | 3.1·10⁻⁴ | attainable bound |
+
+**What the application did** (`replay/`, panel A of `supp_deployment_policy`). Frozen bundle: 520 rows accepted, 60
+out-of-distribution rows (6 tasks) fell back to SBS-B's first verified candidate, 233 rows accepted a candidate after
+the preflight skipped higher-ranked ones (mostly SV and ZNE-L∘SV, infeasible outside tasks with a declared symmetry;
+277 rows list skipped candidates, 44 of them out-of-distribution fallbacks), 0 unscored rows, no margin fallback
+(τ accepts ≈ 99 % of development rows). Default bundle: 530 accepted, 50 out-of-distribution (5 tasks), 282 accepted
+after skipping (326 rows list skipped candidates), 0 unscored. No full-policy row exceeded ten times RAW's risk; the
+95 % quantile of the chosen risk is 2.6·10⁻³ for both bundles against 4.6·10⁻³ for SBS-B. Classical cost of a call that
+computes a task's features: median 0.65 s (frozen bundle, exact simulation) and 0.05 s (default bundle); later budgets of
+the same task reuse the cached features.
+
+**Statement (confirmatory in the sense of D41).** The full deployed policy of the frozen configuration is resolvedly
+better than SBS-B on the confirmation (−0.144 [−0.231, −0.076]) and the frozen configuration's out-of-fold development
+difference is resolved (−0.088 [−0.145, −0.027]): the declared rule is met and the claim is **established in its
+sense** — in simulation, for this task
+distribution (3–6 qubits, eight circuit families, three fake devices, budgets 10³–3·10⁷). Qualifications, all reported
+with the result:
+
+1. *Selection optimism.* The development difference is that of the configuration chosen as the best of 30; corrected by
+   bootstrap bias-corrected CV it is −0.064 [−0.143, +0.013] (probability of a negative difference 0.94, optimism
+   0.020). The 1.7.0 rule uses the uncorrected out-of-fold difference; under a BBC-corrected rule the development
+   criterion would not be met.
+2. *Timing of D41.* D41 (the full deployed policy as primary) was written after the development analysis and the freeze,
+   while the confirmation tasks were being labeled and before any confirmation result was computed. The freeze rule,
+   the configuration and the confirmation set were fixed earlier (D40); the choice of primary *estimand* was not
+   pre-registered before development results existed.
+3. *What is established.* The established recommender computes simulator-only features by exact simulation of the
+   supplied noise model at recommendation time (cost exponential in width; allocation-level preflight limited to 11
+   qubits). The deployable default bundle is a separate, secondary result.
+4. *Simulated observations only.* Hardware transfer is not addressed (§I.11).
+
+**The default bundle's interval is fragile.** Its upper bound (−0.002) sits on zero within bootstrap Monte-Carlo noise:
+over 200 bootstrap seeds of 1 000 resamples the upper bound is below 0 in 59 % (range −0.009 to +0.006), and with
+200 000 resamples it is −0.0007 (independent reproduction, private evidence). Its model component behaves the same way
+(77 %; −0.0023). These are *not resolved robustly* and are not claimed. The frozen bundle's interval excludes 0 in
+every seed.
+
+**Independent reproduction.** A separate agent re-implemented the metric and the bootstrap from the saved tables
+(`confirm/labels.csv`, `choices_confirm.csv`, `replay/*.csv`, development labels) without the project's code. Every
+point estimate of the table above except the structured comparator, both full-policy differences, the default bundle's
+model component and the portfolio "attainable" contrast agree to ≤ 1.8·10⁻¹⁴; each replayed risk equals the label of
+the returned candidate on all 580 rows of both bundles (0 mismatches, 0 infeasible choices); intervals agree within
+Monte-Carlo spread. Not independently recomputed: the development out-of-fold and BBC-CV numbers, the fixed-policy
+portfolio contrast, the tails, the audit, the controlled studies and the costs.
+
+## I.3 Why the default bundle trails its own model component (post hoc, exploratory)
+
+On 47 confirmation rows (4 GHZ circuits, 8 tasks) the default bundle's model component chose SV or ZNE-L∘SV, which the
+labels show feasible there (the component's choice is the labelled best on 25 of the 47 rows). On 33 of these rows the
+design-level preflight of the default bundle (no simulation) returned *unverified* for them — SV's minimum target
+shots ⌈5/P_accept⌉ need the noisy acceptance probability, which only a simulation of the supplied model provides — and
+policy/2, which never accepts an unverified candidate, chose another one; the other 14 rows were out of distribution
+and fell back to SBS-B. On the 47 rows the full policy is 0.30 decades worse than its model component and only 0.03
+better than SBS-B. Replacing all 47 rows by the component's choice would move the default bundle from −0.084 to
+−0.109 (its component: −0.107); the 33 preflight rows alone account for −0.096 and the 14 out-of-distribution rows
+alone for −0.097, i.e. about half each. The frozen bundle, which verifies at the allocation level, chose SV on 30 rows
+and ZNE-L∘SV on 11. The preflight half is the measured price of the conservative contract; a cheap acceptance bound
+for declared symmetries is ranked as a next step (`RESEARCH_FINDINGS_AND_NEXT_STEPS.md`).
+
+## I.4 More candidates or better selection? (`supp_portfolio_expansion`, thesis Table 8; exploratory)
+
+Development data, out of fold (5 folds grouped by base circuit), every policy refitted per portfolio, feature set
+`deployable18`, identical tasks and labels:
+
+| contrast | Δ [95 %] | factor 10^Δ |
+|---|---|---|
+| more candidates, fixed policy (SBS-B over 17 − SBS-B over 8) | **−0.070 [−0.133, −0.012]** | 0.85 |
+| more candidates, attainable (reference over 17 − reference over 8) | −0.092 [−0.165, −0.037] | 0.81 |
+| learning within portfolio-1.6 (ridge − SBS-B; HGB − SBS-B) | +0.015 [−0.033, +0.066]; +0.002 [−0.057, +0.063] | 1.04; 1.01 |
+| learning within portfolio-1.8 (ridge − SBS-B; HGB − SBS-B) | −0.017 [−0.064, +0.030]; −0.011 [−0.094, +0.068] | 0.96; 0.98 |
+| total (ridge 1.8 − SBS-B 1.6; HGB 1.8 − SBS-B 1.6) | −0.087 [−0.175, −0.009]; −0.081 [−0.197, +0.019] | 0.82; 0.83 |
+
+On development data the expansion of the portfolio gives the resolved gain; learning with the `deployable18`
+features adds nothing resolved in either portfolio (the two contrasts were not compared formally). SBS-B over 17 candidates chooses ZNE-E-B (48 % of rows) and PEC-TW (46 %); the empirical
+reference over 17 uses PEC-TW and PEC (18 % each), ZNE-E-B (9 %), RO-TREX and CDR (8 %), SV (7 %). Seven learned
+configurations are resolved against SBS-B on development data (`analysis/pooled_same-distribution.csv`): three with
+the simulator-only features (HGB −0.088, ridge −0.066, elastic net −0.062 with `deployable18+simulated`, against HGB
+−0.011, ridge −0.017, elastic net −0.036 with `deployable18` alone) and four linear models on deployable subsets
+(ridge −0.077 and elastic net −0.068 on the light-cone features, ridge −0.056 and elastic net −0.061 on budget and size
+alone). Simulator-only features give the largest development gains; the full `deployable18` set does not help the
+learners it was meant for. On the confirmation, models on the 1.7.0 deployable features did better than on development data (ridge
+−0.130 resolved, HGB −0.092 not resolved) — one confirmation set, 29 circuits; SBS-B is also weaker there (its gap to
+the reference is 0.30 against 0.28 on development data).
+
+## I.5 Which candidate wins where (Figure 2, `supp_target_precision`, thesis Table 5)
+
+Measured best on the evaluation half (an oracle on the scored data; the reference policy of I.4 chooses on the
+selection half), development tasks (88 per budget): at B = 10³ RAW (21), RO-TREX (17), PEC (13) and PEC-TW (10); from 10⁴ to 10⁶ PEC and PEC-TW together win 31–43 tasks per budget; at B ≥ 3·10⁶ CDR rises to 13–21,
+and at 3·10⁷ ZNE-L-TW, ZNE-R and ZNE-L take 6–8 each. SV, feasible on the 16 GHZ tasks only, is best on 8–10 of them up to
+B = 10⁵ and on 2 at 3·10⁷. FR is best once in 880 rows. Median evaluation-half MSE at B = 10⁵ (feasible tasks): SV
+1.3·10⁻⁵, PEC-TW 1.7·10⁻⁵, PEC 1.7·10⁻⁵, ZNE-L∘SV 2.0·10⁻⁵, ZNE-E-B 4.1·10⁻⁵, ZNE-L 4.4·10⁻⁵, CDR 5.4·10⁻⁵, RO-TREX
+1.6·10⁻⁴, RAW 4.6·10⁻⁴, NIL 3.2·10⁻³, FR 1.0·10⁻². Descriptive: candidates have different feasible subsets.
+
+## I.6 Severe tails (finding F7; `supp_tails`, thesis Table 6)
+
+Declared before the 1.8.0 results (D40): severe = risk > 10 × RAW's on the same row; also risk > 0.1, the 95 % quantile
+and the share of loss carried by the worst 5 % of base circuits. Development rows, each candidate on its feasible set:
+
+| candidate | severe (> 10 × RAW; circuit-weighted share of feasible rows) | largest MSE | remark |
+|---|---|---|---|
+| ZNE-E | 2.4 % | 1.0·10⁹ (B = 10³) | 5 rows above MSE 1, all at B ≤ 3 000 |
+| ZNE-E-B | 2.4 % | 0.043 | projection onto the observable's range; the same evaluation-half MSE as ZNE-E on 788 of 880 (task, B) cells, never larger on the other 92 |
+| ZNE-R | 11.4 % | 0.021 | 41 % of rows at B = 10³, 2.3 % at 10⁶, ≤ 1.1 % from 3·10⁶ on |
+| NIL | 47.9 % (47.3 % of rows) | 0.31 | ≈ 45–49 % at every budget; infeasible below 3·10⁴ |
+| FR | 61.0 % (62.0 % of rows) | 2.0·10⁴ | 102 rows above MSE 1; by width 36 / 58 / 85 / 70 % severe at n = 3 / 4 / 5 / 6, median MSE 0.001 / 0.010 / **1.87** / 0.009 |
+| CDR | 2.6 % | 0.034 | infeasible at 10³ |
+| PEC, PEC-TW, RO family, ZNE-L, ZNE-L-TW, SV, ZNE-L∘SV | 0–2.5 % | ≤ 0.027 | RAW's own largest MSE is 0.032 |
+
+The bounded estimator removes the catastrophic magnitudes without changing how often ZNE-E is worse than RAW by a
+factor 10: the projection caps an estimate at the observable's range, which bounds the error by 2 but not by a factor
+of RAW's small error. At the policy level the declared tails are small: on the confirmation no policy except the
+structured comparator (1.7 %) has a row above 10 × RAW; on development data the frozen configuration has 0.45 % of rows
+against SBS-B's 0.34 %, but concentrates its losses more (worst-5 % share 0.37 against 0.23) — its improvements are
+broad, its failures concentrated.
+
+## I.7 Development analysis (Figures 1, 3, 4, 5; thesis Table 4)
+
+* **Frozen configuration**, out of fold: −0.088 [−0.145, −0.027] vs SBS-B; ridge with the light-cone features −0.077
+  [−0.134, −0.022]; ridge on budget and size alone −0.056 [−0.117, −0.003]; HGB `deployable18` −0.011 [−0.094, +0.068].
+  The MLP fails catastrophically on two feature sets (arithmetic MSE 2.5·10⁵ from single divergent predictions; its
+  log metric is merely worse). By family the frozen configuration is resolvedly better than SBS-B on brickwork (4
+  circuits), GHZ (10) and Ising (8) — exploratory; for the two-circuit families (BV, Grover, QFT) a bootstrap over
+  circuits only spans the two circuits' values and resolves nothing.
+* **Generalization splits** (all budgets): no learned configuration is resolvedly better than SBS-B when whole families,
+  widths or (except boosted trees on budget and size, −0.122 [−0.204, −0.047]) devices are held out. Budget
+  interpolation: only ridge on budget and size is resolved (−0.076 [−0.146, −0.019]); boosted trees and the structured
+  model on `deployable18` are resolvedly worse (+0.18, +0.20). Budget extrapolation: trained on B ≤ 10⁴, the mean log10
+  regret beyond the training range is ridge 0.40, SBS-B 0.48, HGB 0.58, structured 1.06; trained on B ≤ 3·10⁵ it is
+  HGB 0.38, ridge 0.38, SBS-B 0.46, structured 0.60; no learned model is resolved against SBS-B in the pooled
+  extrapolation split.
+* **Ablation** (frozen configuration, every variant retrained): removing budget costs +0.116 [+0.032, +0.209] decades of
+  regret, the light cone +0.032 [+0.002, +0.077], the observable +0.035 [+0.006, +0.070]; the device-snapshot features
+  (+0.039 [−0.012, +0.092]), protocol overheads and basic structure are not resolved.
+* **Learning curve** (mean over folds and repeats): mean log10 regret 0.39 with 9 training base circuits, 0.31 with
+  18, 0.30 with 26 and 0.29 with 35, while SBS stays at 0.42–0.46 — the gain over 9 circuits is clear, the curve is
+  nearly flat from 18 circuits on.
+* **Reliability**: nested selective evaluation accepts 99.1 % of rows and is indistinguishable from random rejection at
+  the same coverage (+0.0001 [−0.0035, +0.0045]); cv-residual intervals cover 0.911 and split-conformal 0.913 at nominal
+  0.90, but the simultaneous versions are infinite; finite-sample certificates are uninformative (Hoeffding radius
+  0.92, Bernstein 1.12, far above the risks); the 2ε post-hoc bound holds on 880/880 rows.
+* **Learning designs** (`supp_design_variability`): the between-design share of the label variance at the largest
+  budget is 0.90 for CDR, 0.82 for NIL and 0.47 for FR; a trial-level SE would understate the design-level SE by a
+  median factor up to 2.4 (CDR at 3·10⁷), 2.0 (NIL) and 1.4 (FR). Labels use the design-level SE.
+
+## I.8 Are the labels honest across preparation roots? (finding N1; `supp_root_audit`; exploratory)
+
+Eight circuits (the circuits of the ten 1.7.0 deployment regression cases, earlier failure types and controls),
+labeled under four independently namespaced roots at B = 10⁴, 3·10⁵, 10⁷:
+
+* **Standard errors.** For 338 (task, candidate, budget) cells feasible under ≥ 2 roots, the between-root variance of
+  the evaluation-half MSE divided by the mean squared design-level SE has medians 0.44 (PEC-TW) to 1.08 (RO-TW) per
+  candidate (above 1 for RO-TW, FR, SV and CDR) — about honest, not understated on average; 4 cells exceed 4, and
+  NIL's 90 % quantile is 6.1 (its rare large failures depend on the root).
+* **Rankings.** The winner is the same under all four roots in 10 of 24 (task, budget) cells with 17 candidates and in
+  11 of 24 with the original 8; using another root's winner costs on average −0.006 decades (17) and −0.001 (8) — the
+  disagreements are between near-equal candidates (largest cross-root regret 0.33). No root's winner was infeasible
+  under another root.
+* **Execution contract.** The design-level preflight agrees with each root's actual allocation on 288/288 learning-
+  candidate rows (CDR, FR, NIL; feasible and infeasible).
+* **Deployed policy per root**: mean log10 risk −4.77, −4.78, −4.76, −4.80 — a spread of 0.04 decades.
+
+## I.9 Controlled regimes and noise composition (finding F10; Figure 3 B–D; exploratory)
+
+* **Error scale** (`regimes18`, four-qubit HEA, Ising and QAOA on `fake_fez`, all budgets): the frozen recommender's
+  mean log10 regret is −0.04 to 0.09 for s ≤ 1.5 but rises at s = 2 (Ising 0.31, HEA 0.13) and s = 3 (HEA 0.60, Ising 0.49);
+  QAOA stays ≤ 0.08, and its top candidates are unresolved in every cell. The training data contain only the
+  devices' native error rates (s = 1). The selective rule abstained in none of these cells.
+* **Noise composition** (`noisecomp18`, one component changed at a time at matched exposure): with half of the gate
+  error coherent (χ = 0.5, s = 2) the recommender's regret is 1.04 (HEA), 0.44 (Ising) and 1.15 (QAOA) decades over all
+  budgets — the largest of the noise-composition settings for HEA and QAOA. At B = 10⁵ the measured best is ZNE-E
+  (HEA), RO-DD (Ising) and ZNE-L (QAOA), the first two unresolved against their runner-up; the recommender, which sees
+  calibration error rates and the light-cone fault weight, chooses PEC-TW, ZNE-E and ZNE-L. QAOA's large regret comes
+  from B ≥ 3·10⁵, where the recommender picks CDR or ZNE-E-B instead of ZNE-L. A longer idle time (t = 5.5) costs 0.64
+  (HEA), 0.19 (Ising) and 0.41 (QAOA). The unchanged setting itself has a regret of 0.15 for HEA here against 0.06 in
+  the regime study, so differences of about 0.1 between cells are within their noise; most cells' top two are
+  unresolved. The direction of the coherent-error result agrees with 1.7.0's (Part II §5), with the larger
+  portfolio.
+
+## I.10 Cost of a recommendation and early rejection (finding F2; `supp_runtime`, thesis Table 7)
+
+Median of repeats on the build machine (2 shared cores): the whole `recommend()` call of the default bundle takes
+0.039–0.059 s at n = 3–7 (the n = 7 probe is out of distribution); separately timed components: features
+0.014–0.036 s, inference ≈ 0.027 s, structural preflight of all 17 candidates < 0.001 s, and the design-level preflight
+of *all* learning candidates 0.07–0.32 s — more than a whole call, because the call verifies lazily, only down the
+model's order until the first verified candidate. The simulator-only features of the frozen bundle cost 0.23–0.90 s and
+grow exponentially; generating one development task's benchmark labels takes 35–59 s. Wide requests are rejected
+before any dense engine: GHZ chains of 12, 24 and 40 qubits return *out of distribution* in 2.0, 4.6 and 16.5 s (the
+process's peak resident memory stays at 330–354 MB).
+
+## I.11 What was not executed
+
+* **Hardware.** The validation plan of the shipped bundle (`hardware_plan/`) was produced as a dry run — 28 jobs, 524 s
+  of the 540 s window, plan digest `6015610c…` — and nothing was submitted (owner authorization required).
+* **Mismatch study** under the 1.8.0 policy (D43): not repeated; Figure 6 is pending in `reports/selection_v180`.
+* **Larger study** (more circuits, wider circuits, more devices): not run; the learning curve is nearly flat from 18
+  to 35 circuits, so whether learning on deployable features is limited by data or by information is open.
+* **Exploratory replay on the 1.7.0 confirmation** (post-inspection, not confirmatory; rerun with the reviewed replay
+  code, private `runs/replay_v170b`): the 1.7.0 deployable bundle under policy/2 −0.041 [−0.069, −0.009] vs SBS-B, the
+  1.7.0 simulator bundle −0.026 [−0.048, −0.004] (222 of 460 in-distribution rows accepted by its margin rule; the
+  first run, before the review fixes, gave −0.025 and 220); 0 of 500 rows unscored in each.
+
+## I.12 Limitations and threats to validity (1.8.0)
+
+Simulated fake devices only, with Pauli-twirled or Markovian noise models except where the noise-composition study adds
+coherent errors; 3–6 qubits; 73 new logical circuits in total (44 + 29), eight families; one confirmation set; D41
+written after development results; selection optimism (BBC) not resolved; the established configuration needs exact
+simulation; the default bundle's advantage is not robust; the 10⁻⁶ floor compresses differences between very small
+risks (sensitivity in `analysis/floor_sensitivity.csv`); tails are declared but not part of the primary rule; the
+mismatch question was not re-examined with 17 candidates.
+
+---
+
+# Part II — the corrected pilot of QEM Explorer 1.7.0 (historical)
+
+The text below is the 1.7.0 results document, unchanged except for this heading and its title line. Its section numbers (§1–§17) refer to
+Part II.
+
+*Original title: Results — budget-aware QEM protocol selection, corrected pilot (QEM Explorer 1.7.0).*
 
 **Every number below is a simulated observation**: emulated trials on IBM fake devices (calibration snapshots
 executed by the exact density-matrix engine). No hardware data exist in this release and no hardware job was

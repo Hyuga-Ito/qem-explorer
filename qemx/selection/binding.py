@@ -104,7 +104,7 @@ def code_digest() -> str:
 
 def identity(cfg: dict, stage_specs: list, dev: list, fin: list, stage: str) -> dict:
     budgets = [int(b) for b in cfg.get("budgets", PR.BUDGETS)]
-    protocols = list(cfg.get("protocols", list(PR.PORTFOLIO)))
+    protocols = list(cfg.get("protocols", list(PR.PORTFOLIO_16)))
     R, seed = int(cfg.get("R", 200)), int(cfg.get("master_seed", 20261019))
     designs = cfg.get("learning_designs", 1)
     tasks = sorted((s.task_id, s.to_json()) for s in stage_specs)
@@ -191,6 +191,24 @@ def bind(target: str, cfg: dict, stage_specs: list, dev: list, fin: list, stage:
     return rec
 
 
+def identity_differences(target: str, cfg: dict, stage: str) -> list | None:
+    """The identity fields in which ``target``/run.json differs from what ``cfg`` would bind for ``stage`` (dev,
+    final, or a separate study's subdirectory); None when there is no run.json. Device digests are compared as
+    ``bind`` compares them (an equivalent earlier convention is the same device). Reads only."""
+    rec = load(target)
+    if rec is None:
+        return None
+    specs = DS.expand(cfg)
+    dev, fin = DS.final_test(specs, float(cfg.get("final_test_fraction", 0.0)))
+    todo = fin if stage == "final" else dev
+    ident = identity(cfg, todo, dev, fin, stage)
+    d = _diff(rec["identity"], ident)
+    return [x for x in d if not (x.startswith("devices.") and x[len("devices."):] in ident.get("devices", {})
+                                 and x[len("devices."):] in rec["identity"].get("devices", {})
+                                 and devices_equivalent(x[len("devices."):],
+                                                        rec["identity"]["devices"][x[len("devices."):]]))]
+
+
 def load(target: str) -> dict | None:
     p = os.path.join(target, "run.json")
     return TX.read_json(p) if os.path.exists(p) else None
@@ -211,12 +229,68 @@ def collect(target: str, *, require_complete: bool = False):
         man = set(rec["manifest"])
         report = dict(legacy=False, manifest=len(man), missing=sorted(man - files),
                       unexpected=sorted(files - man), imports=len(rec.get("imports", [])))
+        chk = check_records(target, rec, sorted(man & files))
+        report.update(rejected=chk["rejected"], legacy_unbound=chk["legacy_unbound"], imported=chk["imported"])
+        if chk["rejected"]:
+            raise IncompatibleRun("%s: %d record(s) do not belong to this run: %s" % (
+                target, len(chk["rejected"]), "; ".join("%s (%s)" % (r["task_id"], r["why"])
+                                                        for r in chk["rejected"][:5])))
         ds = DT.build(target, task_ids=sorted(man & files))
         report["failures"] = list(ds.failures)
     if require_complete and (report["missing"] or report["failures"]):
         raise IncompatibleRun("%s is incomplete: %d tasks missing, %d without labels" % (
             target, len(report["missing"]), len(report["failures"])))
     return ds, report
+
+
+def check_records(target: str, rec: dict, task_ids) -> dict:
+    """Per-record compatibility with the bound run (1.8.0; review finding F3). Each record must name its own task id,
+    the run's label configuration digest, and the run's identity — or be an explicit import listed in run.json with
+    the same JSON and NPZ digests (``import_tasks``: an auditable origin-to-run rule; the record keeps its original
+    run id). Its NPZ must match the record's array digest. Exception, documented rather than rewritten: records
+    written by ≤ 1.7.0 (no ``seed_scheme`` field) with an *empty* run id (1.7.0's mismatch labeling did not propagate
+    it) are accepted as ``legacy_unbound`` when everything else matches, and reported. A 1.8.0 record without its
+    run id is rejected. Returns lists of rejected
+    (task_id, why), legacy_unbound and imported ids."""
+    want_cfg = rec["identity"]["labels_config"]
+    run_id = rec["identity_digest"]
+    imports = {}
+    for imp in rec.get("imports", []) or []:
+        for t in imp.get("tasks", []):
+            imports[t["task_id"]] = t
+    rejected, legacy, imported = [], [], []
+    for tid in task_ids:
+        jp = os.path.join(target, "tasks", tid + ".json")
+        try:
+            r = LB.load_record(target, tid)
+        except Exception as e:                       # noqa: BLE001 - unreadable record
+            rejected.append(dict(task_id=tid, why="unreadable: %s" % str(e)[:120]))
+            continue
+        if r.get("task_id") != tid:
+            rejected.append(dict(task_id=tid, why="the record names task %s" % r.get("task_id")))
+            continue
+        if r.get("config_digest") != want_cfg:
+            rejected.append(dict(task_id=tid, why="label configuration %s, the run's is %s"
+                                 % (r.get("config_digest"), want_cfg)))
+            continue
+        rid = r.get("run_id", "")
+        if tid in imports:
+            if LB.file_digest(jp) != imports[tid]["json_sha256"]:
+                rejected.append(dict(task_id=tid, why="imported record changed after its import"))
+                continue
+            imported.append(tid)
+        elif rid != run_id:
+            if rid == "" and "seed_scheme" not in r:     # written by ≤ 1.7.0 (1.8.0 records always carry it)
+                legacy.append(tid)
+            else:
+                rejected.append(dict(task_id=tid, why="run %s, not this run %s" % (rid or "(none)", run_id)))
+                continue
+        if r.get("status") == "ok":
+            npz = os.path.join(target, "tasks", tid + ".npz")
+            want = (r.get("arrays") or {}).get("sha256")
+            if os.path.exists(npz) and want and LB.file_digest(npz) != want:
+                rejected.append(dict(task_id=tid, why="arrays do not match the record's digest"))
+    return dict(rejected=rejected, legacy_unbound=legacy, imported=imported)
 
 
 def import_tasks(src: str, target: str, task_ids, reason: str) -> list:
@@ -258,7 +332,12 @@ def check_freeze(run_dir: str, cfg: dict) -> dict:
     if not os.path.exists(p):
         raise IncompatibleRun("freeze the development choices first (python -m qemx.selection freeze …)")
     frz = TX.read_json(p)
-    if frz.get("config_digest") != DS.freeze_digest(cfg):
+    if frz.get("scientific_config_digest"):              # 1.9.0: operational limits may change after a freeze
+        if frz["scientific_config_digest"] != DS.scientific_digest(cfg):
+            raise IncompatibleRun("freeze.json was made for another configuration (scientific digest %s…, this "
+                                  "configuration %s…; only limits and status may differ)"
+                                  % (frz["scientific_config_digest"][:12], DS.scientific_digest(cfg)[:12]))
+    elif frz.get("config_digest") != DS.freeze_digest(cfg):
         raise IncompatibleRun("freeze.json was made for another configuration (digest %s…, this configuration %s…)"
                               % (str(frz.get("config_digest"))[:12], DS.freeze_digest(cfg)[:12]))
     dev = load(os.path.join(run_dir, "dev"))
@@ -266,3 +345,36 @@ def check_freeze(run_dir: str, cfg: dict) -> dict:
         raise IncompatibleRun("freeze.json was made on other development labels (%s ≠ %s)"
                               % (frz["dev_identity"], dev["identity_digest"]))
     return frz
+
+
+def verify_freeze(run_dir: str, cfg: dict) -> list:
+    """Problems that make an existing freeze of ``run_dir`` inconsistent with ``cfg`` and the current files (1.9.0;
+    second review N3): an empty list means the freeze can be reused as it is. Checked: the configuration (scientific
+    digest, else the full digest), the development run identity, the development data content (when recorded), the
+    analysis table the configuration was chosen on, and — once completed — the nested evaluation it was completed
+    with. Nothing is changed."""
+    from . import integrity as IN
+    probs = []
+    try:
+        frz = check_freeze(run_dir, cfg)
+    except IncompatibleRun as e:
+        return [str(e)]
+    if frz.get("dev_data_digest"):
+        c = IN.completion(os.path.join(run_dir, "dev"))
+        if c["data_digest"] != frz["dev_data_digest"]:
+            probs.append("the development labels changed since the freeze (data digest %s…, frozen %s…)"
+                         % (str(c["data_digest"])[:12], frz["dev_data_digest"][:12]))
+    src = os.path.join(run_dir, "analysis", frz.get("chosen_on") or "pooled_same-distribution.csv")
+    if frz.get("analysis_digest"):
+        if not os.path.exists(src):
+            probs.append("the table the configuration was chosen on (%s) is missing" % os.path.basename(src))
+        elif DS.freeze_digest(TX.read_text(src)) != frz["analysis_digest"]:
+            probs.append("the table the configuration was chosen on (%s) changed after the freeze"
+                         % os.path.basename(src))
+    if frz.get("deploy_tau") is not None and frz.get("nested_digest"):
+        sm = os.path.join(run_dir, "analysis", "nested_summary.csv")
+        if not os.path.exists(sm):
+            probs.append("the nested evaluation the freeze was completed with (nested_summary.csv) is missing")
+        elif DS.freeze_digest(TX.read_text(sm)) != frz["nested_digest"]:
+            probs.append("the nested evaluation (nested_summary.csv) changed after the freeze was completed")
+    return probs
