@@ -1,0 +1,354 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-22T01:14:17+00:00",
+ "identity": {
+  "stage": "final",
+  "labels_config": "67a949d1fe3d7d5f",
+  "tasks": "01720f7648e4ba78",
+  "n_tasks": 36,
+  "split": {
+   "final_test_fraction": 0.3,
+   "salt": "qemx-1.6-final",
+   "development": "87bc06cfb891972d",
+   "final": "6c2c0c3b27e5cc1e"
+  },
+  "portfolio": "48b17f41a5d67bd4",
+  "devices": {
+   "fake_fez": "eff1cfbd20def87b",
+   "fake_fez@eng=exact": "df4fed4e179a23b0",
+   "fake_kyiv": "03d0767f5e18f3a4",
+   "fake_kyiv@eng=exact": "0352b077e23ec178",
+   "fake_torino": "1b7ea71a1c12a392",
+   "fake_torino@eng=exact": "5f453e2046e625ae"
+  }
+ },
+ "identity_digest": "119d0163bcf13113",
+ "config": {
+  "status": "executed",
+  "schema": "qemx.selection.config/1",
+  "name": "pilot17",
+  "master_seed": 20261019,
+  "R": 100,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 10
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL"
+  ],
+  "final_test_fraction": 0.3,
+  "tasks": {
+   "widths": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "widths_by_family": {
+    "qft": [
+     3,
+     4,
+     5
+    ],
+    "grover": [
+     3,
+     4
+    ]
+   },
+   "families": {
+    "qft": [
+     {},
+     {
+      "m": 1
+     }
+    ],
+    "ghz": [
+     {
+      "theta": 1.0472
+     },
+     {
+      "theta": 0.6
+     }
+    ],
+    "ising": [
+     {
+      "steps": 1
+     },
+     {
+      "steps": 3
+     }
+    ],
+    "brickwork": [
+     {
+      "layers": 2,
+      "seed": 0
+     },
+     {
+      "layers": 4,
+      "seed": 1
+     }
+    ],
+    "grover": [
+     {
+      "k": 1
+     }
+    ],
+    "bv": [
+     {}
+    ],
+    "hea": [
+     {
+      "layers": 1,
+      "seed": 0
+     },
+     {
+      "layers": 3,
+      "seed": 1
+     }
+    ],
+    "qaoa": [
+     {
+      "p": 1,
+      "seed": 0
+     },
+     {
+      "p": 2,
+      "seed": 1
+     }
+    ]
+   },
+   "inputs": [
+    "default",
+    "plus",
+    "product"
+   ],
+   "observables": [
+    "default",
+    "z_mid",
+    "zz_mid",
+    "z_all"
+   ],
+   "layouts": [
+    "best",
+    "alt"
+   ],
+   "devices": [
+    "fake_fez",
+    "fake_torino",
+    "fake_kyiv"
+   ],
+   "variants_per_base": 2
+  },
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3
+  },
+  "analysis": {
+   "splits": [
+    "same-distribution",
+    "family",
+    "device",
+    "width",
+    "budget-extrap",
+    "budget-interp"
+   ],
+   "split_options": {
+    "same-distribution": {
+     "k": 5
+    },
+    "width": {
+     "min_test_n": 6
+    },
+    "budget-extrap": {
+     "max_train_B": 300000
+    },
+    "device": {
+     "test_device": "fake_kyiv"
+    }
+   },
+   "feature_sets": [
+    "size_budget",
+    "structure",
+    "lightcone",
+    "deployable",
+    "deployable+simulated"
+   ],
+   "model_families": [
+    "ridge",
+    "enet",
+    "hgb",
+    "mlp"
+   ],
+   "abstain_family": "hgb",
+   "abstain_set": "deployable",
+   "ablation_set": "deployable+simulated",
+   "bootstrap": 1000,
+   "lc_repeats": 3,
+   "other_split_sets": [
+    "size_budget",
+    "deployable"
+   ],
+   "other_split_families": [
+    "ridge",
+    "hgb"
+   ],
+   "extras": [
+    "ablation",
+    "learning_curve",
+    "deployed",
+    "budget_generalization",
+    "abstention",
+    "interval_coverage",
+    "certificates",
+    "floor_sensitivity"
+   ]
+  }
+ },
+ "manifest": [
+  "014e111489af1a27c628",
+  "066878249e27cfbe039b",
+  "08dbdee573608be16e33",
+  "0a0042e641bbe6bce618",
+  "37aebfde191cf42fb668",
+  "474d0b83dcef0dcac32a",
+  "576689b57ec834834ffb",
+  "57f80aa2de12ae2b328f",
+  "6bbba8a11437ba40e79b",
+  "7055224331d1c03e39e5",
+  "7274476209a00f426231",
+  "7dadf6f08dc6e6e17bfd",
+  "8691722d3a3cf54377aa",
+  "89bc9696ed3e65c54d42",
+  "8f2ecce66afb33e4c522",
+  "9b5ed28ee30fd006de37",
+  "afadc87faa8edb383283",
+  "b0e3e93a64ffdc3e235a",
+  "b5bce58516e5ccc717d6",
+  "ba147417eaa2d18ca4a2",
+  "bf3e0f55112a78571acf",
+  "c1f573ad0e523c62c923",
+  "d10bdb38c1b15139298c",
+  "d1ff93e9554202598e70",
+  "d280d9938cdb8c205aa0",
+  "dc2364d5ddd12dca4397",
+  "dda6047fadf29d5bda74",
+  "ddeef7e754ad9ed7ab28",
+  "dfbc7796cf159547e3c1",
+  "e10999f01e52ee51b87d",
+  "e11aa43b761c7c1aa44c",
+  "f0d9b4d32ffabb1b428f",
+  "f20a91e99ffe2879f8f4",
+  "f811e33eb69331544395",
+  "fc88777aa7e23c9fbbd5",
+  "ff365f099a02a2dce508"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-22T01:14:17+00:00",
+   "execution": {
+    "code": "d0577ce836c7f72a",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  },
+  {
+   "started": "2026-10-22T02:15:04+00:00",
+   "execution": {
+    "code": "d0577ce836c7f72a",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  },
+  {
+   "started": "2026-10-22T05:04:39+00:00",
+   "execution": {
+    "code": "f1938f3b12bf8d73",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   },
+   "accepted_changes": [
+    "code"
+   ]
+  }
+ ],
+ "imports": []
+}

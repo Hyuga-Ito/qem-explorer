@@ -1,0 +1,49 @@
+# QEM Explorer v1.4.2 · Direction A · divergence v2, trimmed to one 10-minute IBM Open-plan window.
+# Same design and diagnostics as direction_A_divergence_v2.yaml, with three cuts (research plan §6, in this order):
+#   * fractional ZNE (ZNE-Lq) dropped — the fingerprint needs only ZNE-G and ZNE-L;
+#   * spectator probes at core depths L = 4 and 16 only (both seeds kept: the probes are the designed experiment);
+#   * 4 500 shots per benchmark and method (1 500 per layout variant): 720 000 shots, ≈ 410 s at the 0.57 ms per
+#     shot measured on ibm_fez, ≈ 530 s with a 1.3× margin for per-circuit overhead.
+# Validate on the emulated ground truths first (the commands of direction_A_divergence_v2.yaml with this file), then
+# plan with --backend ibm_fez on the day of the run; `plan` prints the exact totals.
+manifest_version: 1
+kind: divergence
+study: direction-A-divergence-v2-qpu10
+description: >
+  Application circuits (GHZ, BV, QFT, Grover, random brickwork, Ising Trotter; 2–8 qubits) and spectator-context
+  probes, each in three layout variants on disjoint chains of an IBM heavy-hex device, run raw, readout-mitigated and
+  with global and local ZNE at the same total budget, and predicted from the device's own
+  calibration of the day by a per-gate depolarizing model (primary), Chen et al.'s median model and the full
+  fake-device model.
+
+device: ibm_fez
+fake: fake_fez
+opt_level: 1
+seed_transpiler: 11
+layout: chain                    # layout variants need chains: every variant on its own disjoint chain
+budget: 4500                     # per benchmark and method, shared by its 3 variants (1500 shots each)
+cal_shots: 200                   # per readout-calibration circuit and variant
+variants: {count: 3, mode: layouts}
+replicates: 300
+bootstrap: 200
+exact_max_qubits: 4
+aer_dm_max_qubits: 10
+mc_shots: 100000
+predictors: [depolarizing, chen, device]
+
+methods:
+  RAW:    {kind: raw}
+  RO:     {kind: ro}
+  ZNE-G:  {kind: zne, folding: global, scales: [1, 3, 5], rule: richardson}
+  ZNE-L:  {kind: zne, folding: local, scales: [1, 3, 5], rule: richardson}
+
+circuits:
+  # spectator-context probes: the same random core on (c0, c1), spectators s0, s1 idle, superposed or driven
+  - {family: context, n: 6, layers: [4, 16], spectators: [zero, plus, driven], seed: [0, 1]}
+  # application circuits
+  - {family: ghz, n: [2, 3, 4, 6, 8], theta: 1.5707963267948966, basis: Z}
+  - {family: qft, n: [2, 3, 4, 5, 6], m: null, s: 1}
+  - {family: bv, n: [3, 4, 6, 8]}
+  - {family: brickwork, n: [4, 6], layers: [4, 8, 16], seed: 0}
+  - {family: ising, n: [4, 6, 8], steps: [2, 4], T: 1.0, J: 1.0, h: 1.0}
+  - {family: grover, n: 3, k: [1, 2]}

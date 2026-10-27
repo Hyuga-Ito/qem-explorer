@@ -1,0 +1,55 @@
+# Controlled regime study, relabeled with fresh learning designs (1.7.0; review R1): the 1.6.0 regime tasks (D23),
+# seeds and budgets unchanged; CDR and NIL draw 10 independent designs per label half.
+#
+# 1.6.0 text: controlled regime study (Figure 2 and Figure 3, panels B and C).
+#
+# Preregistered (decision D23, before any of these tasks was labeled). Three new base circuits (none is in the pilot)
+# form the controlled slices; within a slice only the calibration error scale s changes: every reported gate error
+# and every relaxation rate of the fake_fez snapshot × s (readout unchanged), applied to the snapshot the protocols
+# see AND to the execution law (no mismatch). Circuit, input, observable, layout (calibration-best chain) and noise
+# composition stay fixed. A second block varies only the observable of the Ising slice (Figure 3B); a third only the
+# layout of each slice at s = 1 (supplementary).
+schema: qemx.selection.config/1
+status: executed
+name: regimes17
+master_seed: 20261023
+R: 100
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 10}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL]
+final_test_fraction: 0.0
+tasks:
+  - widths: [4]
+    families:
+      ising: [{steps: 2}]
+      hea: [{layers: 2, angle_seed: 2}]
+      qaoa: [{p: 1, angle_seed: 3}]
+    inputs: [default]
+    observables: [default]
+    layouts: [best]
+    devices: [fake_fez, "fake_fez@s=0.5", "fake_fez@s=1.5", "fake_fez@s=2", "fake_fez@s=3"]
+    variants_per_base: all
+  - widths: [4]
+    families:
+      ising: [{steps: 2}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best]
+    devices: [fake_fez]
+    variants_per_base: all
+  - widths: [4]
+    families:
+      ising: [{steps: 2}]
+      hea: [{layers: 2, angle_seed: 2}]
+      qaoa: [{p: 1, angle_seed: 3}]
+    inputs: [default]
+    observables: [default]
+    layouts: [best, alt]
+    devices: [fake_fez]
+    variants_per_base: all
+limits: {task_seconds: 3600, memory_gb: 3}
+regimes:
+  noise_axis: s                      # calibration error scale (dimensionless multiplier of the fake_fez snapshot)
+  model_policy: frozen               # the recommender frozen for the pilot's final test (reports/selection_pilot/freeze.json)
+  observable_budget: 100000          # Figure 3B: budget of the observable comparison (declared before labeling)
+  noise_budget: 100000               # Figure 3C: budget of the noise comparison (declared before labeling)

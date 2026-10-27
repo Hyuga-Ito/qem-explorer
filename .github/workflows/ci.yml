@@ -1,0 +1,125 @@
+name: tests
+on: [push, pull_request]
+env:
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  # scikit-learn >= 1.8 and qiskit-aer ship two different builds of libgomp (OpenMP). Both use static (initial-exec)
+  # TLS and are loaded into one Python process with dlopen; glibc's default reserve for that (512 bytes) holds only
+  # one, so the second import fails with "cannot allocate memory in static TLS block". Reserve more (glibc only;
+  # ignored on Windows and macOS). No package or code change is involved.
+  GLIBC_TUNABLES: glibc.rtld.optional_static_tls=2048
+jobs:
+  # The release lock (requirements-lock.txt): the exact environment the release was tested with, full suite.
+  locked:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-lock.txt
+      - name: Engine and method tests (locked)
+        run: pytest -q -m "not slow" -rfEs
+      - name: End-to-end, pages and interactions (locked)
+        run: pytest -q -m slow -rfEs
+      - name: Shipped figures parse and match their tables
+        run: |
+          sudo apt-get install -y poppler-utils
+          python scripts/validate_figures.py reports/selection_v170
+
+  # The newest releases inside the supported ranges (requirements.txt) on the oldest and newest supported Pythons and
+  # on 3.12: catches upstream changes early.
+  latest:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install --upgrade -r requirements-dev.txt
+      - name: Engine and method tests (latest)
+        run: pytest -q -m "not slow" -rfEs
+      - name: End-to-end, pages and interactions (latest)
+        run: pytest -q -m slow -rfEs
+
+  # The oldest supported Streamlit (requirements.txt, ui.nav.MIN_STREAMLIT) over the lock: pages and interactions.
+  oldest-streamlit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          pip install -r requirements-lock.txt
+          pip install streamlit==1.64.0
+      - name: Pages and interactions (Streamlit 1.64.0)
+        run: pytest -q -rfEs tests/test_research_pages.py tests/test_research_interactions.py tests/test_ui.py
+
+  # A legacy (non-UTF-8) default encoding on Linux: the situation of a Windows machine without UTF-8 mode. Every
+  # project text file must still be read and written as UTF-8 (tests/test_text_io.py), and the selection and
+  # experiment command lines must run with EncodingWarning (PEP 597) turned into an error for project code.
+  text-encoding:
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONUTF8: "0"
+      QEMX_LEGACY_LOCALE: en_US.ISO-8859-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-lock.txt
+      - name: Static check (every project text open/read/write names its encoding)
+        run: python scripts/check_text_io.py
+      - name: Install a legacy locale
+        run: sudo localedef -i en_US -f ISO-8859-1 en_US.ISO-8859-1
+      - name: Text I/O tests under ISO-8859-1
+        run: LC_ALL=en_US.ISO-8859-1 pytest -q -rfEs tests/test_text_io.py
+      - name: Selection and experiment workflows under ISO-8859-1, EncodingWarning as error
+        run: |
+          export LC_ALL=en_US.ISO-8859-1
+          python -X warn_default_encoding -W "error::EncodingWarning" -m qemx.selection plan configs/selection/smoke.yaml
+          python -X warn_default_encoding -W "error::EncodingWarning" -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
+          python -X warn_default_encoding -W "error::EncodingWarning" -m pytest -q -rfEs -m "not slow" tests/test_selection_core.py tests/test_experiment.py
+
+  # The intended local workflow on Windows (default code page cp1252, UTF-8 mode off): install the lock, validate
+  # and plan an experiment, label a few selection tasks through the supervised child processes (time limit enforced
+  # by the parent; no SIGALRM on Windows), analyze them, and run a smoke subset including the text-I/O tests.
+  windows-smoke:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-lock.txt
+      - name: Experiment CLI (validate and plan, no simulation)
+        run: |
+          python -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
+          python -m qemx.experiment plan examples/experiments/qft_known_answer.yaml
+      - name: Selection workflow (supervised labeling, analysis)
+        run: |
+          python -m qemx.selection plan configs/selection/smoke.yaml
+          python -m qemx.selection label configs/selection/smoke.yaml --out runs/smoke --limit 4 --workers 2
+          python -m qemx.selection label configs/selection/smoke.yaml --out runs/smoke --limit 4
+          python -m qemx.selection analyze configs/selection/smoke.yaml --out runs/smoke --splits same-distribution --extras ""
+      - name: Recommender (shipped bundle, deployable features, no simulation) and a Unicode path
+        run: |
+          python -m qemx.selection recommend --experiment examples/experiments/qft_known_answer.yaml --budget 100000 --device fake_fez
+          python scripts/check_text_io.py
+          python -c "import pathlib, shutil; d = pathlib.Path('runs') / 'ユニコード Ωμ ∑'; d.mkdir(parents=True, exist_ok=True); shutil.copy('examples/experiments/qft_known_answer.yaml', d / '実験.yaml')"
+          python -m qemx.experiment validate "runs/ユニコード Ωμ ∑/実験.yaml"
+      - name: Smoke tests
+        run: pytest -q -m "not slow" tests/test_text_io.py tests/test_selection_core.py tests/test_methods.py tests/test_experiment.py tests/test_campaign.py tests/test_spending.py tests/test_research_interactions.py tests/test_pilot_reproduction.py

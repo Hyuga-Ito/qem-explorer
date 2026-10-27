@@ -1,0 +1,29 @@
+# Smoke workflow: minutes on one core. Exercises every stage (labels, analysis, certificates, figures) on a tiny
+# grid; its numbers are not results.
+schema: qemx.selection.config/1
+name: smoke
+master_seed: 20261019
+R: 24
+budgets: [1000, 30000, 1000000]
+learning_designs: {mode: fresh, per_half: 3}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL]
+final_test_fraction: 0.0
+tasks:
+  widths: [3, 4]
+  families:
+    ghz: [{theta: 1.0472}]
+    ising: [{steps: 1}, {steps: 2}]
+    brickwork: [{layers: 2, angle_seed: 0}]
+    qft: [{}]
+  inputs: [default, product]
+  observables: [default, z_all]
+  layouts: [best]
+  devices: [fake_fez]
+  variants_per_base: 1
+limits: {task_seconds: 900, memory_gb: 4}
+analysis:
+  splits: [same-distribution]
+  split_options: {same-distribution: {k: 3}}
+  feature_sets: [size_budget, deployable]
+  model_families: [ridge, hgb]
+  bootstrap: 200

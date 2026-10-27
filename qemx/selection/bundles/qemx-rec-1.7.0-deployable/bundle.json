@@ -1,0 +1,1021 @@
+{
+ "arrays_sha256": "561335e0a25bf2c7a30b08bac38b6b78441bcc6ba4f0db983f51543536d0af93",
+ "capabilities": {
+  "cheap_path": true,
+  "task_class": "fake-device calibration snapshots (exact engine); diagonal observables with |O| ≤ 1; product-state inputs; circuits the study's compiler maps"
+ },
+ "chosen": {
+  "CDR": {
+   "learning_rate": 0.05,
+   "max_depth": 3
+  },
+  "NIL": {
+   "learning_rate": 0.05,
+   "max_depth": 2
+  },
+  "PEC": {
+   "learning_rate": 0.05,
+   "max_depth": 5
+  },
+  "RAW": {
+   "learning_rate": 0.05,
+   "max_depth": 2
+  },
+  "RO": {
+   "learning_rate": 0.05,
+   "max_depth": 2
+  },
+  "ZNE-E": {
+   "learning_rate": 0.05,
+   "max_depth": 2
+  },
+  "ZNE-L": {
+   "learning_rate": 0.05,
+   "max_depth": 3
+  },
+  "ZNE-R": {
+   "learning_rate": 0.05,
+   "max_depth": 2
+  }
+ },
+ "configuration": "MODEL[hgb|deployable]",
+ "created": "2026-10-22",
+ "cv_rmse": {
+  "CDR": 0.3901159428886853,
+  "NIL": 1.0854965286658698,
+  "PEC": 0.6028680467820371,
+  "RAW": 0.8967923269263671,
+  "RO": 0.8774922835277661,
+  "ZNE-E": 1.2847133119214955,
+  "ZNE-L": 0.5717258611571905,
+  "ZNE-R": 0.41580767436367994
+ },
+ "eps0": 1e-06,
+ "fallback": {
+  "global_rank": [
+   "PEC",
+   "ZNE-L",
+   "ZNE-E",
+   "CDR",
+   "ZNE-R",
+   "RO",
+   "RAW",
+   "NIL"
+  ],
+  "policy": "SBS-B",
+  "ranks": {
+   "1000": [
+    "PEC",
+    "RO",
+    "RAW",
+    "ZNE-L",
+    "ZNE-R",
+    "ZNE-E",
+    "CDR",
+    "NIL"
+   ],
+   "10000": [
+    "PEC",
+    "ZNE-L",
+    "RO",
+    "ZNE-E",
+    "CDR",
+    "RAW",
+    "ZNE-R",
+    "NIL"
+   ],
+   "100000": [
+    "PEC",
+    "ZNE-E",
+    "ZNE-L",
+    "CDR",
+    "ZNE-R",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "1000000": [
+    "ZNE-E",
+    "ZNE-L",
+    "PEC",
+    "ZNE-R",
+    "CDR",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "10000000": [
+    "ZNE-E",
+    "ZNE-R",
+    "ZNE-L",
+    "CDR",
+    "PEC",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "3000": [
+    "PEC",
+    "RO",
+    "ZNE-L",
+    "RAW",
+    "ZNE-E",
+    "CDR",
+    "ZNE-R",
+    "NIL"
+   ],
+   "30000": [
+    "PEC",
+    "ZNE-L",
+    "ZNE-E",
+    "CDR",
+    "ZNE-R",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "300000": [
+    "PEC",
+    "ZNE-E",
+    "ZNE-L",
+    "CDR",
+    "ZNE-R",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "3000000": [
+    "ZNE-E",
+    "ZNE-L",
+    "ZNE-R",
+    "CDR",
+    "PEC",
+    "RO",
+    "RAW",
+    "NIL"
+   ],
+   "30000000": [
+    "ZNE-E",
+    "ZNE-R",
+    "ZNE-L",
+    "CDR",
+    "PEC",
+    "RO",
+    "RAW",
+    "NIL"
+   ]
+  },
+  "rule": "first feasible protocol in the training ranking of the nearest budget (log scale)"
+ },
+ "family": "hgb",
+ "feature_classes": {
+  "depth": "available",
+  "duration_us": "available",
+  "idle_fraction": "available",
+  "lam_lc": "available",
+  "lam_lc_exact": "available",
+  "lam_lc_gate": "available",
+  "lam_lc_idle": "available",
+  "lam_ro": "available",
+  "lam_total": "available",
+  "lc_2q": "available",
+  "lc_gates": "available",
+  "lc_locations": "available",
+  "lc_qubits": "available",
+  "lc_share": "available",
+  "log10_budget": "available",
+  "n": "available",
+  "non_clifford": "available",
+  "non_clifford_slots": "available",
+  "obs_support": "available",
+  "obs_terms": "available",
+  "obs_weight": "available",
+  "pec_log_gamma": "available",
+  "pulses_1q": "available",
+  "two_qubit": "available",
+  "two_qubit_logical": "available",
+  "zne_eta_l1_linear": "available",
+  "zne_eta_l1_richardson": "available"
+ },
+ "feature_set": "deployable",
+ "features": [
+  "n",
+  "two_qubit_logical",
+  "non_clifford",
+  "two_qubit",
+  "depth",
+  "pulses_1q",
+  "non_clifford_slots",
+  "idle_fraction",
+  "duration_us",
+  "obs_weight",
+  "obs_terms",
+  "obs_support",
+  "lc_qubits",
+  "lc_gates",
+  "lc_2q",
+  "lc_locations",
+  "lam_lc",
+  "lam_lc_exact",
+  "lam_lc_gate",
+  "lam_lc_idle",
+  "lam_total",
+  "lc_share",
+  "lam_ro",
+  "log10_budget",
+  "pec_log_gamma",
+  "zne_eta_l1_linear",
+  "zne_eta_l1_richardson"
+ ],
+ "guarantees": {
+  "margin and selective rule": "model-conditional",
+  "nested-CV performance": "empirical",
+  "predicted log risks": "model-conditional",
+  "training-support check": "ood-warning"
+ },
+ "impute": [
+  4.0,
+  4.5,
+  13.0,
+  8.0,
+  29.0,
+  27.0,
+  15.0,
+  0.44545454545454544,
+  1.3131111111111105,
+  2.0,
+  1.0,
+  2.0,
+  4.0,
+  53.5,
+  6.5,
+  31.0,
+  0.04854308967778982,
+  0.04860593028555416,
+  0.04088158885091375,
+  0.004921021082845256,
+  0.06135302292899843,
+  0.8991947545356366,
+  0.011474609375,
+  5.238560627359831,
+  0.1868138074972739,
+  1.999999999999999,
+  3.500000000000007
+ ],
+ "models": {
+  "CDR": {
+   "baseline": -4.277471209474414,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "NIL": {
+   "baseline": -2.7804279648862127,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "PEC": {
+   "baseline": -4.174391565708096,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "RAW": {
+   "baseline": -3.1642483669254755,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "RO": {
+   "baseline": -3.469617496721617,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "ZNE-E": {
+   "baseline": -4.015624227048372,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "ZNE-L": {
+   "baseline": -4.114735122040262,
+   "kind": "hgb",
+   "trees": 200
+  },
+  "ZNE-R": {
+   "baseline": -3.9338544681543213,
+   "kind": "hgb",
+   "trees": 200
+  }
+ },
+ "portfolio_digest": "48b17f41a5d67bd4",
+ "protocol_definitions": {
+  "CDR": {
+   "description": "Clifford data regression: 16 near-Clifford training circuits with classically computed ideal values, OLS fit, 25 % of B on training (equal per circuit); fallback decided from each trial's own training data; tensored readout correction.",
+   "estimator": "learning",
+   "key": "CDR",
+   "params": [
+    [
+     "features",
+     "cdr"
+    ],
+    [
+     "keep",
+     0
+    ],
+    [
+     "model",
+     "ols"
+    ],
+    [
+     "n_train",
+     16
+    ],
+    [
+     "strategy",
+     "adaptive"
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.25
+  },
+  "NIL": {
+   "description": "Neighbor-informed learning (Chen et al.): weight-1 Pauli neighbors at every position, 2-design training ensemble, ℓ1-bounded (≤ 2) regression without intercept, equal target split; 50 % of B on training; tensored readout correction.",
+   "estimator": "nil",
+   "key": "NIL",
+   "params": [
+    [
+     "ensemble",
+     "design4"
+    ],
+    [
+     "include_bare",
+     false
+    ],
+    [
+     "intercept",
+     false
+    ],
+    [
+     "l1_bound",
+     2.0
+    ],
+    [
+     "model",
+     "l1"
+    ],
+    [
+     "n_train",
+     16
+    ],
+    [
+     "neighbors",
+     "pauli"
+    ],
+    [
+     "positions",
+     "all"
+    ],
+    [
+     "target_split",
+     "equal"
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.5
+  },
+  "PEC": {
+   "description": "Probabilistic error cancellation of the device's median-rate depolarizing model (from the calibration record), one shot per sampled circuit (exact signed law), tensored readout correction.",
+   "estimator": "pec",
+   "key": "PEC",
+   "params": [
+    [
+     "construction",
+     "inverse"
+    ],
+    [
+     "model",
+     "depolarizing"
+    ],
+    [
+     "scope",
+     "all"
+    ],
+    [
+     "shots_per_circuit",
+     1
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  },
+  "RAW": {
+   "description": "Unmitigated: all B shots on the target circuit; sample mean of the observable.",
+   "estimator": "raw",
+   "key": "RAW",
+   "params": [],
+   "readout": "none",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  },
+  "RO": {
+   "description": "Readout correction only: tensored inverse of per-qubit assignment matrices estimated from two calibration circuits (|0…0⟩, |1…1⟩); calibration/target split by the supplied model.",
+   "estimator": "raw",
+   "key": "RO",
+   "params": [],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  },
+  "ZNE-E": {
+   "description": "ZNE, global folding at λ = 1, 3, 5, exponential fit with a declared linear fallback when the fit fails (counted per trial); tensored readout correction; supplied-model allocation.",
+   "estimator": "zne",
+   "key": "ZNE-E",
+   "params": [
+    [
+     "folding",
+     "global"
+    ],
+    [
+     "lam_est",
+     "gates"
+    ],
+    [
+     "on_fail",
+     "linear"
+    ],
+    [
+     "rule",
+     "exponential"
+    ],
+    [
+     "scales",
+     [
+      1.0,
+      3.0,
+      5.0
+     ]
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  },
+  "ZNE-L": {
+   "description": "Zero-noise extrapolation, global folding at λ = 1, 3, linear fit, tensored readout correction; shots per scale ∝ |η_j|σ_j of the supplied model (integer optimal split).",
+   "estimator": "zne",
+   "key": "ZNE-L",
+   "params": [
+    [
+     "folding",
+     "global"
+    ],
+    [
+     "lam_est",
+     "gates"
+    ],
+    [
+     "rule",
+     "linear"
+    ],
+    [
+     "scales",
+     [
+      1.0,
+      3.0
+     ]
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  },
+  "ZNE-R": {
+   "description": "ZNE, global folding at λ = 1, 3, 5, Richardson (quadratic) extrapolation, tensored readout correction; supplied-model allocation.",
+   "estimator": "zne",
+   "key": "ZNE-R",
+   "params": [
+    [
+     "folding",
+     "global"
+    ],
+    [
+     "lam_est",
+     "gates"
+    ],
+    [
+     "rule",
+     "richardson"
+    ],
+    [
+     "scales",
+     [
+      1.0,
+      3.0,
+      5.0
+     ]
+    ]
+   ],
+   "readout": "tensored",
+   "schema": "qemx.protocol/1",
+   "train_fraction": 0.0
+  }
+ },
+ "protocols": [
+  "RAW",
+  "RO",
+  "ZNE-L",
+  "ZNE-R",
+  "ZNE-E",
+  "PEC",
+  "CDR",
+  "NIL"
+ ],
+ "schema": "qemx.selection.bundle/1",
+ "selective": {
+  "rule": "accept the model's choice when its margin z = (P2 − P1)/sqrt(s1² + s2²) ≥ τ, else SBS-B",
+  "tau": null
+ },
+ "statement_kinds": {
+  "empirical": "Measured on the held-out base circuits of this study (a finite sample of one task distribution). No guarantee for other circuits, devices, budgets or distributions.",
+  "model-conditional": "A statement about the fitted model's predictions (a predicted risk, a margin between predicted risks): it holds only to the extent that the model is right for the task.",
+  "ood-warning": "The task lies outside the training support of the model (a feature outside the training range, an unseen family, device or width, a budget beyond the training range). No statement is made."
+ },
+ "support": {
+  "base_circuits": 52,
+  "budgets": [
+   1000,
+   30000000
+  ],
+  "devices": [
+   "fake_fez",
+   "fake_kyiv",
+   "fake_torino"
+  ],
+  "families": [
+   "brickwork",
+   "bv",
+   "ghz",
+   "grover",
+   "hea",
+   "ising",
+   "qaoa",
+   "qft"
+  ],
+  "features": {
+   "depth": {
+    "max": 222.0,
+    "min": 7.0,
+    "q01": 7.0,
+    "q99": 216.0
+   },
+   "duration_us": {
+    "max": 37.22666666666662,
+    "min": 0.13199999999999998,
+    "q01": 0.15200000000000002,
+    "q99": 23.736888888888856
+   },
+   "idle_fraction": {
+    "max": 0.6941896024464832,
+    "min": 0.07142857142857142,
+    "q01": 0.09523809523809523,
+    "q99": 0.6846307385229541
+   },
+   "lam_lc": {
+    "max": 1.2798848190675216,
+    "min": 0.0052504851211762765,
+    "q01": 0.0062655189015988,
+    "q99": 1.1528845572140929
+   },
+   "lam_lc_exact": {
+    "max": 1.3086284083974482,
+    "min": 0.005259312008440039,
+    "q01": 0.0062774558992490246,
+    "q99": 1.200331644666694
+   },
+   "lam_lc_gate": {
+    "max": 0.5883417821545495,
+    "min": 0.00511589195701638,
+    "q01": 0.005978404414895257,
+    "q99": 0.5764913094977617
+   },
+   "lam_lc_idle": {
+    "max": 0.7033935095697601,
+    "min": 0.0,
+    "q01": 0.0,
+    "q99": 0.5645427750595414
+   },
+   "lam_ro": {
+    "max": 0.11083984375,
+    "min": 0.001953125,
+    "q01": 0.001953125,
+    "q99": 0.08544921875
+   },
+   "lam_total": {
+    "max": 1.3211120791249584,
+    "min": 0.0052504851211762765,
+    "q01": 0.0062655189015988,
+    "q99": 1.3176954252050086
+   },
+   "lc_2q": {
+    "max": 61.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 61.0
+   },
+   "lc_gates": {
+    "max": 359.0,
+    "min": 8.0,
+    "q01": 8.0,
+    "q99": 301.0
+   },
+   "lc_locations": {
+    "max": 234.0,
+    "min": 5.0,
+    "q01": 5.0,
+    "q99": 229.0
+   },
+   "lc_qubits": {
+    "max": 6.0,
+    "min": 2.0,
+    "q01": 3.0,
+    "q99": 6.0
+   },
+   "lc_share": {
+    "max": 1.0,
+    "min": 0.1635253122204163,
+    "q01": 0.24186697253653874,
+    "q99": 1.0
+   },
+   "log10_budget": {
+    "max": 7.477121254719663,
+    "min": 3.0,
+    "q01": 3.0,
+    "q99": 7.477121254719663
+   },
+   "n": {
+    "max": 6.0,
+    "min": 3.0,
+    "q01": 3.0,
+    "q99": 6.0
+   },
+   "non_clifford": {
+    "max": 60.0,
+    "min": 0.0,
+    "q01": 0.0,
+    "q99": 60.0
+   },
+   "non_clifford_slots": {
+    "max": 66.0,
+    "min": 0.0,
+    "q01": 0.0,
+    "q99": 64.0
+   },
+   "obs_support": {
+    "max": 6.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 6.0
+   },
+   "obs_terms": {
+    "max": 63.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 31.0
+   },
+   "obs_weight": {
+    "max": 6.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 6.0
+   },
+   "pec_log_gamma": {
+    "max": 1.073856354801413,
+    "min": 0.05103536827111709,
+    "q01": 0.05358047413209567,
+    "q99": 1.0700804319235655
+   },
+   "pulses_1q": {
+    "max": 138.0,
+    "min": 3.0,
+    "q01": 3.0,
+    "q99": 129.0
+   },
+   "two_qubit": {
+    "max": 61.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 61.0
+   },
+   "two_qubit_logical": {
+    "max": 28.0,
+    "min": 1.0,
+    "q01": 1.0,
+    "q99": 28.0
+   },
+   "zne_eta_l1_linear": {
+    "max": 1.999999999999999,
+    "min": 1.999999999999999,
+    "q01": 1.999999999999999,
+    "q99": 1.999999999999999
+   },
+   "zne_eta_l1_richardson": {
+    "max": 3.500000000000007,
+    "min": 3.500000000000007,
+    "q01": 3.500000000000007,
+    "q99": 3.500000000000007
+   }
+  },
+  "rows": 1560,
+  "widths": [
+   3,
+   4,
+   5,
+   6
+  ]
+ },
+ "training": {
+  "freeze": {
+   "analysis_digest": "f6fd1b44b31fd0250ef4c50875fc9a77f6a558b7cba7a6372320c508c73a91a0",
+   "chosen_on": "pooled_same-distribution.csv",
+   "config_digest": "fb3924c776a777f818eae248b511b912c6614802c0c7e99c3fc7e29f76206626",
+   "deploy_tau": 0.1310578082690077,
+   "dev_identity": "6cd6dbe9c4558bef",
+   "nested_digest": "ea254be9509c0052e2108892ddd34a93c8af39b9a437d2db8acad5eb5b52d465",
+   "policy": "MODEL[hgb|deployable+simulated]",
+   "schema": "qemx.selection.freeze/2",
+   "selective_rule": "accept the model's choice when its margin z ≥ τ, else SBS-B",
+   "source": {
+    "files": 171,
+    "sha256": "cfaf2bd38b74c4d86429703c724c14dee27cc57d0df05e77511339f1a6343cc1"
+   }
+  },
+  "parts": "dev,final",
+  "run": "pilot17",
+  "run_identities": {
+   "dev": "6cd6dbe9c4558bef",
+   "final": "119d0163bcf13113"
+  }
+ },
+ "validation": {
+  "configuration": "MODEL[hgb|deployable]",
+  "confirmation": [
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 25,
+    "ci_hi": -4.033101048692412,
+    "ci_lo": -4.54746769511796,
+    "coverage": 1.0,
+    "diff_hi": -0.0455436406350632,
+    "diff_lo": -0.2037431723570009,
+    "diff_vs_sbs": -0.1195701367367798,
+    "diff_vs_sbsb": 0.0,
+    "diff_vs_sbsb_hi": 0.0,
+    "diff_vs_sbsb_lo": 0.0,
+    "diff_vs_sizeb": 0.0057693692285212,
+    "diff_vs_sizeb_hi": 0.0978892674595919,
+    "diff_vs_sizeb_lo": -0.0653754650455591,
+    "fail_share": 0.0166,
+    "gap_closed": 0.3521353093383159,
+    "gap_hi": 0.5269572659914437,
+    "gap_lo": 0.1503251396712663,
+    "log_regret_hi": 0.3166297198111277,
+    "log_regret_lo": 0.1408247679145419,
+    "mean_log10_risk": -4.335664187238861,
+    "mean_log_regret": 0.2199872253507119,
+    "mean_regret": 0.0013434303398077,
+    "median_log_ratio": 0.0399477169490241,
+    "median_regret": 3.862301360171829e-07,
+    "p90_log_regret": 0.7552556072616369,
+    "p90_regret": 0.0003290851576052,
+    "p_negative_regret": 0.074,
+    "p_regret_gt_10pct": 0.5000000000000001,
+    "p_regret_gt_2x": 0.216,
+    "policy": "SBS-B",
+    "policy_mse": 0.0020608113844205,
+    "policy_mse_rows": 0.0020608113844205,
+    "raw_degradation": 0.182,
+    "rows": 500,
+    "tol_success_10pct": 0.5000000000000001,
+    "tol_success_2x": 0.784,
+    "weighting": "base circuits"
+   },
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 25,
+    "ci_hi": -4.168685016918741,
+    "ci_lo": -4.600665872244053,
+    "coverage": 1.0,
+    "diff_hi": -0.1146650279789382,
+    "diff_lo": -0.2992404187361324,
+    "diff_vs_sbs": -0.2010169084524786,
+    "diff_vs_sbsb": -0.0814467717156988,
+    "diff_vs_sbsb_hi": -0.0262846996627807,
+    "diff_vs_sbsb_lo": -0.1495706353005748,
+    "diff_vs_sizeb": -0.0756774024871775,
+    "diff_vs_sizeb_hi": -0.0128208489187431,
+    "diff_vs_sizeb_lo": -0.1454132535627051,
+    "fail_share": 0.00588,
+    "gap_closed": 0.5919969080237016,
+    "gap_hi": 0.7099042750712087,
+    "gap_lo": 0.4380815379476691,
+    "log_regret_hi": 0.1959366952510551,
+    "log_regret_lo": 0.0900385465398758,
+    "mean_log10_risk": -4.417110958954559,
+    "mean_log_regret": 0.1385404536350129,
+    "mean_regret": 0.0009527468944818,
+    "median_log_ratio": 0.0,
+    "median_regret": 0.0,
+    "p90_log_regret": 0.4423768291814334,
+    "p90_regret": 0.0001264604365314,
+    "p_negative_regret": 0.08,
+    "p_regret_gt_10pct": 0.408,
+    "p_regret_gt_2x": 0.162,
+    "policy": "MODEL[hgb|deployable]",
+    "policy_mse": 0.0016701279390946,
+    "policy_mse_rows": 0.0016701279390946,
+    "raw_degradation": 0.136,
+    "rows": 500,
+    "tol_success_10pct": 0.5920000000000001,
+    "tol_success_2x": 0.838,
+    "weighting": "base circuits"
+   },
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 25,
+    "ci_hi": -4.331556416563903,
+    "ci_lo": -4.709589618978172,
+    "coverage": 1.0,
+    "diff_hi": -0.2373013407917449,
+    "diff_lo": -0.4623702700586992,
+    "diff_vs_sbs": -0.3395573620874916,
+    "diff_vs_sbsb": -0.2199872253507117,
+    "diff_vs_sbsb_hi": -0.1408247679145416,
+    "diff_vs_sbsb_lo": -0.3166297198111273,
+    "diff_vs_sizeb": -0.2142178561221904,
+    "diff_vs_sizeb_hi": -0.1263869381943436,
+    "diff_vs_sizeb_lo": -0.3231677677265847,
+    "fail_share": 0.00078,
+    "gap_closed": 1.0,
+    "gap_hi": 1.0,
+    "gap_lo": 1.0,
+    "log_regret_hi": 0.0,
+    "log_regret_lo": 0.0,
+    "mean_log10_risk": -4.555651412589572,
+    "mean_log_regret": 0.0,
+    "mean_regret": 0.0,
+    "median_log_ratio": 0.0,
+    "median_regret": 0.0,
+    "p90_log_regret": 0.0,
+    "p90_regret": 0.0,
+    "p_negative_regret": 0.0,
+    "p_regret_gt_10pct": 0.0,
+    "p_regret_gt_2x": 0.0,
+    "policy": "ALL-CANDIDATE",
+    "policy_mse": 0.0007173810446127,
+    "policy_mse_rows": 0.0007173810446127,
+    "raw_degradation": 0.02,
+    "rows": 500,
+    "tol_success_10pct": 1.0,
+    "tol_success_2x": 1.0,
+    "weighting": "base circuits"
+   }
+  ],
+  "nested_cv_note": "the nested selective evaluation was run for the frozen configuration MODEL[hgb|deployable+simulated], not for this one; this bundle has no validated selective threshold, so its recommendation is the model's choice",
+  "out_of_fold": [
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 40,
+    "ci_hi": -4.23617377030596,
+    "ci_lo": -4.491738688900925,
+    "coverage": 1.0,
+    "diff_hi": -0.0732885520860384,
+    "diff_lo": -0.2053669796072535,
+    "diff_vs_sbs": -0.1410649371385564,
+    "diff_vs_sbsb": 0.0,
+    "diff_vs_sbsb_hi": 0.0,
+    "diff_vs_sbsb_lo": 0.0,
+    "diff_vs_sizeb": -0.0073658648739054,
+    "diff_vs_sizeb_hi": 0.0341047899715803,
+    "diff_vs_sizeb_lo": -0.0520482186942308,
+    "fail_share": 0.0196249999999999,
+    "gap_closed": 0.4105241126571172,
+    "gap_hi": 0.5107606824474851,
+    "gap_lo": 0.2775624957894221,
+    "log_regret_hi": 0.2585449685855319,
+    "log_regret_lo": 0.1474161359888848,
+    "mean_log10_risk": -4.374005382052471,
+    "mean_log_regret": 0.2025566256132978,
+    "mean_regret": 0.0004264032788917,
+    "median_log_ratio": 0.0484649622951287,
+    "median_regret": 2.623932047634612e-07,
+    "p90_log_regret": 0.6214242683932913,
+    "p90_regret": 0.0002613344642849,
+    "p_negative_regret": 0.0649999999999999,
+    "p_regret_gt_10pct": 0.5125,
+    "p_regret_gt_2x": 0.1983333333333333,
+    "policy": "SBS-B",
+    "policy_mse": 0.0006965331073406,
+    "policy_mse_rows": 0.0006965331073406,
+    "raw_degradation": 0.1491666666666666,
+    "rows": 1200,
+    "split": "same-distribution",
+    "tol_success_10pct": 0.4875,
+    "tol_success_2x": 0.8016666666666665,
+    "weighting": "base circuits"
+   },
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 40,
+    "ci_hi": -4.253365032510661,
+    "ci_lo": -4.509974918209164,
+    "coverage": 1.0,
+    "diff_hi": -0.0520427371307635,
+    "diff_lo": -0.2518528642391703,
+    "diff_vs_sbs": -0.1478089059383359,
+    "diff_vs_sbsb": -0.0067439687997794,
+    "diff_vs_sbsb_hi": 0.0421010783524425,
+    "diff_vs_sbsb_lo": -0.0625396649495147,
+    "diff_vs_sizeb": -0.0141098336736849,
+    "diff_vs_sizeb_hi": 0.0320373714648257,
+    "diff_vs_sizeb_lo": -0.0613074380930605,
+    "fail_share": 0.0167333333333333,
+    "gap_closed": 0.4301502640131932,
+    "gap_hi": 0.6077464919541029,
+    "gap_lo": 0.2036355508032575,
+    "log_regret_hi": 0.249135738820062,
+    "log_regret_lo": 0.1436251174760031,
+    "mean_log10_risk": -4.38074935085225,
+    "mean_log_regret": 0.1958126568135184,
+    "mean_regret": 0.0005779824669566,
+    "median_log_ratio": 0.043147759824473,
+    "median_regret": 2.703755859546414e-07,
+    "p90_log_regret": 0.6523280114090036,
+    "p90_regret": 0.0002277044434716,
+    "p_negative_regret": 0.0883333333333333,
+    "p_regret_gt_10pct": 0.5016666666666667,
+    "p_regret_gt_2x": 0.2291666666666666,
+    "policy": "MODEL[hgb|deployable]",
+    "policy_mse": 0.0008481122954055,
+    "policy_mse_rows": 0.0008481122954055,
+    "raw_degradation": 0.1058333333333333,
+    "rows": 1200,
+    "split": "same-distribution",
+    "tol_success_10pct": 0.4983333333333332,
+    "tol_success_2x": 0.7708333333333334,
+    "weighting": "base circuits"
+   },
+   {
+    "B": "all",
+    "accepted_log10_risk": NaN,
+    "base_circuits": 40,
+    "ci_hi": -4.474361168493109,
+    "ci_lo": -4.667776109400855,
+    "coverage": 1.0,
+    "diff_hi": -0.2482527593613193,
+    "diff_lo": -0.4460980373531507,
+    "diff_vs_sbs": -0.3436215627518544,
+    "diff_vs_sbsb": -0.202556625613298,
+    "diff_vs_sbsb_hi": -0.147416135988885,
+    "diff_vs_sbsb_lo": -0.2585449685855318,
+    "diff_vs_sizeb": -0.2099224904872034,
+    "diff_vs_sizeb_hi": -0.1455999521051945,
+    "diff_vs_sizeb_lo": -0.2737947241418127,
+    "fail_share": 0.0056083333333333,
+    "gap_closed": 1.0,
+    "gap_hi": 1.0,
+    "gap_lo": 1.0,
+    "log_regret_hi": 0.0,
+    "log_regret_lo": 0.0,
+    "mean_log10_risk": -4.5765620076657685,
+    "mean_log_regret": 0.0,
+    "mean_regret": 0.0,
+    "median_log_ratio": 0.0,
+    "median_regret": 0.0,
+    "p90_log_regret": 0.0,
+    "p90_regret": 0.0,
+    "p_negative_regret": 0.0,
+    "p_regret_gt_10pct": 0.0,
+    "p_regret_gt_2x": 0.0,
+    "policy": "ALL-CANDIDATE",
+    "policy_mse": 0.0002701298284489,
+    "policy_mse_rows": 0.0002701298284489,
+    "raw_degradation": 0.0316666666666666,
+    "rows": 1200,
+    "split": "same-distribution",
+    "tol_success_10pct": 1.0,
+    "tol_success_2x": 1.0,
+    "weighting": "base circuits"
+   }
+  ]
+ },
+ "verification": {
+  "max_abs_difference_vs_sklearn": 0.0,
+  "rows": 1560
+ },
+ "version": "qemx-rec-1.7.0-deployable"
+}

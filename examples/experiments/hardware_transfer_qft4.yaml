@@ -1,0 +1,25 @@
+# QEM Explorer · A simulation example of a hardware-transfer comparison (not part of the 1.5.1 hardware plan; the planned test is scripts/hardware_transfer.py, docs/hardware_preflight.md).
+# Offline first: `run` simulates it on the fake_fez device model and gives the PREDICTED estimates and spreads that the
+# hardware run is compared with (same circuit, compilation, methods and total budget):
+#   python -m qemx.experiment plan examples/experiments/hardware_transfer_qft4.yaml
+#   python -m qemx.experiment run  examples/experiments/hardware_transfer_qft4.yaml --out results/transfer_qft4_sim
+# On hardware only after approval: load this file in the Playground (Export → Load), choose the IBM backend on
+# "Run on IBM Quantum", with QEMX_CAMPAIGN_LEDGER pointing at the campaign ledger (every job is admitted against the
+# 600 s ceiling first). This command never submits anything.
+schema: qemx.experiment/1
+name: transfer-qft4
+description: >
+  Known-answer QFT (ideal P(s) = 1) on 4 qubits of fake_fez: does the simulated ranking of raw, Richardson ZNE, CDR
+  and the budget-scaled NIL at 12 000 total shots per method hold on the device?
+circuit:
+  template: qft
+  params: {n: 4, s: 5, mode: swap, prep: fourier}
+backend: fake_fez
+compile: {mode: isa, opt_level: 1, seed: 11, layout: sabre}
+methods:
+  - {preset: Unmitigated}
+  - {preset: "ZNE · Richardson"}
+  - {estimator: learning, params: {features: cdr, model: ols, alpha: 0.0, n_train: 8, train_shots: 512}}
+  - {preset: "NIL · small budget"}
+budget: {shots: 12000, t_shot_us: 570}
+run: {seed: 0, repeats: 200, check_budget: true}

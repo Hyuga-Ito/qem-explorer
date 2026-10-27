@@ -1,0 +1,32 @@
+[theme]
+base = "light"
+primaryColor = "#156082"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6F8"
+textColor = "#0B1A22"
+font = "sans serif"
+headingFont = "serif"
+
+[client]
+showSidebarNavigation = false
+toolbarMode = "minimal"
+# Public deployments should not show stack traces to visitors. The app turns its own errors into readable messages;
+# anything unexpected is logged on the server. For local development run with --client.showErrorDetails=full
+# (the VS Code launch configuration does this).
+showErrorDetails = "none"
+
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 20              # MB; state files are small JSON
+enableXsrfProtection = true
+enableCORS = true
+
+[runner]
+# Finish (or stop) the current run before starting the next one. With fast reruns Streamlit would start the new run
+# in a second thread while the interrupted one is still inside a simulation, so two runs of one session could compete
+# for the CPU and for Qiskit's native code. Heavy work here happens behind Run buttons, so waiting costs nothing.
+fastReruns = false
+
+[browser]
+gatherUsageStats = false

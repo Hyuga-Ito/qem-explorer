@@ -1,0 +1,52 @@
+# QEM Explorer v1.4.1 · Direction A · hardware against fake-device divergence (unmodeled noise)
+# Plan (offline, on the fake twin; or --backend ibm_fez to lay out on today's calibration, which needs the token):
+#   python scripts/dirA_divergence.py plan manifests/direction_A_divergence_v1.yaml --out data/dirA_div_v1
+# Hardware (token: $QISKIT_IBM_TOKEN, a saved account, or --ask-token for a hidden prompt; never a CLI argument):
+#   python scripts/dirA_divergence.py run-ibm     data/dirA_div_v1 --tag ibm
+#   python scripts/dirA_divergence.py collect-ibm data/dirA_div_v1 --tag ibm --wait
+#   python scripts/dirA_divergence.py analyze     data/dirA_div_v1 --tag ibm --out figs_div_ibm
+# Dry runs without hardware (the same circuits, the same analysis):
+#   python scripts/dirA_divergence.py run-local data/dirA_div_v1 --tag local      # Qiskit local mode on fake_fez
+#   python scripts/dirA_divergence.py emulate   data/dirA_div_v1 --tag xtalk --truth device --inject crosstalk=0.05
+#   python scripts/dirA_divergence.py analyze   data/dirA_div_v1 --tag xtalk --out figs_div_xtalk
+#
+# Cost on hardware: 59 circuits × 4 methods × 6000 shots = 1.42 M shots in 826 circuits (RAW 1, RO 3, ZNE 5 per
+# circuit); at IBM's default repetition delay that is of the order of 10–20 QPU minutes (plan prints the exact totals).
+manifest_version: 1
+kind: divergence
+study: direction-A-divergence
+description: >
+  The same application circuits (GHZ, Bernstein–Vazirani, QFT, Grover, random brickwork, Ising Trotter; 2–12 qubits,
+  up to a few hundred two-qubit gates after compilation) on an IBM device and predicted from the device's own
+  component-level calibration of the day: a per-gate depolarizing model with readout (primary), Chen et al.'s
+  median depolarizing model, and the full fake-device model (relaxation and idle windows). Each circuit runs raw,
+  with tensored readout mitigation, and with ZNE (global and local folding) at the same total budget. Δ = predicted
+  − observed Fc at the same shots, with its replicate standard deviation, on the width × depth volumetric plane.
+
+device: ibm_fez                  # the real device (a Heron r2, CZ)
+fake: fake_fez                   # its fake twin: offline planning, local dry runs, emulation
+opt_level: 1
+seed_transpiler: 11
+layout: chain                    # per width, the best chain of the calibration the plan is compiled on
+budget: 6000                     # total shots per circuit and method (calibration included)
+cal_shots: 250                   # per readout-calibration circuit (|0…0⟩ and |1…1⟩), for RO and ZNE
+replicates: 400                  # Monte-Carlo replicates of every prediction at the same shots
+bootstrap: 200                   # bootstrap replicates of every observation
+exact_max_qubits: 4              # predictions: exact (NumPy superoperators) up to 4 qubits,
+aer_dm_max_qubits: 12            #   Aer density matrix up to 12,
+mc_shots: 100000                 #   Aer trajectories above (100 000 samples per circuit)
+predictors: [depolarizing, chen, device]
+
+methods:
+  RAW:   {kind: raw}
+  RO:    {kind: ro}
+  ZNE-G: {kind: zne, folding: global, scales: [1, 3, 5], rule: richardson}
+  ZNE-L: {kind: zne, folding: local, scales: [1, 3, 5], rule: richardson}
+
+circuits:
+  - {family: ghz, n: [2, 3, 4, 5, 6, 8, 10, 12], theta: 1.5707963267948966, basis: Z}
+  - {family: bv, n: [3, 4, 5, 6, 8, 10]}            # n counts every qubit (n − 1 data qubits and the ancilla)
+  - {family: qft, n: [2, 3, 4, 5, 6, 7, 8], m: null, s: 1}
+  - {family: grover, n: [2, 3, 4], k: [1, 2]}
+  - {family: brickwork, n: [4, 6, 8, 10], layers: [2, 4, 8, 16], seed: 0}
+  - {family: ising, n: [4, 6, 8, 10], steps: [1, 2, 4, 8], T: 1.0, J: 1.0, h: 1.0}
