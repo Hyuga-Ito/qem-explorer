@@ -1,0 +1,176 @@
+# QEM Explorer v1.4 · Direction A · neighbor-informed learning (Chen et al.) against every other method
+# Execute:   python -m qemx.phase.run plan    manifests/direction_A_nil_v1.yaml
+#            python -m qemx.phase.run run     manifests/direction_A_nil_v1.yaml --out data/dirA_nil_v1 --workers 8
+#            python -m qemx.phase.run collect data/dirA_nil_v1
+#            python scripts/dirA_nil.py data/dirA_nil_v1 --out figs_nil
+# Every value below is part of the pre-registration: change it only by writing a new manifest version.
+#
+# The cells of stages A1, A2 and B are those of direction_A_v1 (same circuits, layouts, scales, readout arms,
+# coherent fractions, training levels and method seeds), and the reference methods have the same definitions; their
+# keys follow the thesis naming (FR-L / FR-R are run 2's NIL-L / NIL-R: feature regression, this project's
+# heuristic — not Strikis et al.'s method, whose Pauli-inserted variants are what NIL scales up). The reference
+# methods reproduce run 2 statistically, not bit for bit: their exact (infinite-shot) values b and v are the same,
+# but v1.4 measures the training-shot variance u and the calibration coefficient w by Monte-Carlo refits at every
+# training level (v1.3: u at the levels, w to first order), applies the learning methods' fallback per training
+# level, and keys the random streams differently. Cell ids differ from run 2 (the method list is part of a cell's
+# definition), and so does the hashed subset of cells chosen for Monte-Carlo validation (same fraction per family
+# and size, other cells).
+manifest_version: 1
+study: direction-A-neighbor-informed-learning
+description: >
+  Equal-budget phase diagrams with neighbor-informed learning (NIL; Chen et al., arXiv:2512.12578) added to the
+  eight methods of direction_A_v1. NIL's features are the noisy values of neighbor circuits (one Pauli inserted after
+  one two-qubit gate; 12 drawn at random, plus the unmodified circuit), learned on 16 training circuits with angles
+  in {0, π/2, π, 3π/2}, with six regression rules (Chen et al.'s ℓ1-constrained least squares, Lasso, Ridge, OLS,
+  elastic net, NNLS) and with ZNE neighbors (λ = 1, 3, 5). Every NIL variant of a cell shares its neighbor circuits
+  and training set (common random numbers), so differences between rules are the rules'.
+
+defaults:
+  device: fake_fez
+  layout:
+    4: [136, 143, 142, 141]
+    6: [124, 123, 136, 143, 142, 141]
+  opt_level: 1
+  seed_transpiler: 11
+  readout_mit: tensored
+  s_min: 32
+  s_tr_min: 32
+  train_levels: [64, 256, 1024, 4096, 16384]
+  train_reps: 2000
+  train_reps_other: 500
+
+budgets:
+  grid: {log10_min: 3, log10_max: 8, points: 51}
+  epsilons: [0.005, 0.01, 0.02, 0.05]
+
+methods:
+  # ---- references: the definitions of direction_A_v1, unchanged
+  RAW:   {estimator: raw}
+  ZNE-R: {estimator: zne, scales: [1.0, 3.0, 5.0], folding: global, rule: richardson}
+  ZNE-E: {estimator: zne, scales: [1.0, 3.0, 5.0], folding: global, rule: exponential}
+  PEC:   {estimator: pec, construction: inverse, model: depolarizing, scope: all, shots_per_circuit: 1}
+  CDR:   {estimator: learning, features: cdr, model: ols, alpha: 0.0, n_train: 16, train_shots: 1024,
+          strategy: adaptive, min_spread: 0.05, keep: 0}
+  VD:    {estimator: vd, M: 2}
+  FR-L:  {estimator: learning, features: nil, model: lasso, alpha: 1.0e-4, n_train: 16, train_shots: 1024,
+          strategy: adaptive, min_spread: 0.05, keep: 0}
+  FR-R:  {estimator: learning, features: nil, model: ridge, alpha: 1.0e-3, n_train: 16, train_shots: 1024,
+          strategy: adaptive, min_spread: 0.05, keep: 0}
+  # ---- neighbor-informed learning: one neighbor set and training set per cell, six regression rules
+  NIL-G2:    {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+              l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+              train_shots: 1024}
+  NIL-LASSO: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: lasso,
+              alpha: 1.0e-4, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+              train_shots: 1024}
+  NIL-RIDGE: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: ridge,
+              alpha: 1.0e-3, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+              train_shots: 1024}
+  NIL-OLS:   {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: ols,
+              intercept: false, n_train: 16, ensemble: design4, target_split: optimal, train_shots: 1024}
+  NIL-EN:    {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true,
+              model: elasticnet, alpha: 1.0e-3, l1_ratio: 0.5, intercept: false, n_train: 16, ensemble: design4,
+              target_split: optimal, train_shots: 1024}
+  NIL-NNLS:  {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: nnls,
+              intercept: false, n_train: 16, ensemble: design4, target_split: optimal, train_shots: 1024}
+  NIL-ZNE:   {estimator: nil, neighbors: fold, scales: [1.0, 3.0, 5.0], model: l1, l1_bound: 5.0, intercept: false,
+              n_train: 16, ensemble: design4, target_split: optimal, train_shots: 1024}
+  # ---- sensitivity variants (stage E-nil only); each changes one setting of NIL-G2 (or of the rule named)
+  NIL-G1:       {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 1.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G3:       {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 3.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G5:       {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 5.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-LASSO-a3: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: lasso,
+                 alpha: 1.0e-03, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-LASSO-a2: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: lasso,
+                 alpha: 0.01, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-RIDGE-a2: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: ridge,
+                 alpha: 0.01, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-RIDGE-a4: {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: ridge,
+                 alpha: 1.0e-04, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-T32:   {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 32, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-S6:    {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 6, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-S24:   {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 24, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-NB:    {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: false, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-INT:   {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: true, n_train: 16, ensemble: design4, target_split: optimal,
+                 train_shots: 1024}
+  NIL-G2-EQ:    {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 16, ensemble: design4, target_split: equal,
+                 train_shots: 1024}
+  NIL-G2-UNI:   {estimator: nil, neighbors: pauli, positions: 2q, n_neighbors: 12, include_bare: true, model: l1,
+                 l1_bound: 2.0, intercept: false, n_train: 16, ensemble: uniform, target_split: optimal,
+                 train_shots: 1024}
+
+method_sets:
+  core_nil: [RAW, ZNE-R, ZNE-E, PEC, CDR, VD, FR-L, FR-R, NIL-G2, NIL-LASSO, NIL-RIDGE, NIL-OLS, NIL-EN, NIL-NNLS,
+             NIL-ZNE]
+  sensitivity_nil: [RAW, ZNE-R, FR-L, FR-R, NIL-G2, NIL-G1, NIL-G3, NIL-G5, NIL-LASSO, NIL-LASSO-a3, NIL-LASSO-a2,
+                    NIL-RIDGE, NIL-RIDGE-a2, NIL-RIDGE-a4, NIL-G2-T32, NIL-G2-S6, NIL-G2-S24, NIL-G2-NB,
+                    NIL-G2-INT, NIL-G2-EQ, NIL-G2-UNI, NIL-ZNE]
+
+circuits:
+  all:
+    - {family: qft, n: 4, m: [null, 1, 2], s: 1}
+    - {family: qft, n: 6, m: [null, 1, 2, 3], s: 1}
+    - {family: ghz, n: [4, 6], theta: 1.0471975511965976}
+    - {family: ising, n: [4, 6], steps: [1, 2, 3, 4, 6, 8], T: 1.0, J: 1.0, h: 1.0}
+    - {family: brickwork, n: [4, 6], layers: [2, 4, 6, 8], seed: [0, 1, 2]}
+  subset:
+    - {family: qft, n: 4, m: null, s: 1}
+    - {family: qft, n: 6, m: 2, s: 1}
+    - {family: ghz, n: 6, theta: 1.0471975511965976}
+    - {family: ising, n: 6, steps: 4, T: 1.0, J: 1.0, h: 1.0}
+    - {family: brickwork, n: 6, layers: 6, seed: 0}
+
+stages:
+  - name: A1-primary
+    description: "fake_fez × s, readout on, tensored mitigation (VD: ideal readout, flagged optimistic)"
+    engine: E2
+    circuits: all
+    methods: core_nil
+    scales: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+    readout: "on"
+    validate: {fraction: 0.15, budgets: [1.0e+3, 1.0e+4, 1.0e+5, 1.0e+6, 1.0e+7, 1.0e+8], reps: 2000,
+               policies: [fixed, opt]}
+  - name: A2-gate-only
+    description: "the same cells without readout error (no calibration, w = 0): isolates gate and idle noise"
+    engine: E2
+    circuits: all
+    methods: core_nil
+    scales: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+    readout: "off"
+    validate: {fraction: 0.05, budgets: [1.0e+4, 1.0e+6], reps: 2000, policies: [fixed]}
+  - name: B-coherent
+    description: "fake_fez homogenized to the chain's medians (same schedule), coherent fraction χ of each gate's non-relaxation error at fixed infidelity, hence fixed λ_LC"
+    engine: E1
+    circuits: all
+    methods: core_nil
+    scales: [0.5, 1.0, 2.0, 4.0]
+    readout: "on"
+    coherent_fraction: [0.0, 0.25, 0.5]
+    validate: {fraction: 0.05, budgets: [1.0e+4, 1.0e+6], reps: 2000, policies: [fixed]}
+  - name: E-nil-sensitivity
+    description: "pre-registered NIL variants on the subset: γ, penalties, training circuits, neighbors drawn, bare circuit, intercept, target split, training angles"
+    engine: E2
+    circuits: subset
+    methods: sensitivity_nil
+    scales: [0.5, 1.0, 2.0, 4.0]
+    readout: "on"

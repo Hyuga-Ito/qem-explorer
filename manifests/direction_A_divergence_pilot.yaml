@@ -1,0 +1,43 @@
+# QEM Explorer v1.4.1 · Direction A · divergence pilot: a small suite that exercises every analysis of the
+# divergence study (variants, plurality vote, context probes, divergence budget, folding fingerprint, heavy-hex map,
+# fractional ZNE) in minutes. Use it for emulated ground-truth checks before spending hardware time:
+#   python scripts/dirA_divergence.py plan manifests/direction_A_divergence_pilot.yaml --out data/dirA_div_pilot
+#   python scripts/dirA_divergence.py emulate data/dirA_div_pilot --tag xtalk --truth depolarizing --inject crosstalk=0.05 --workers 4
+#   python scripts/dirA_divergence.py analyze data/dirA_div_pilot --tag xtalk --out figs_pilot_xtalk --workers 4
+manifest_version: 1
+kind: divergence
+study: direction-A-divergence-pilot
+description: >
+  29 benchmarks of 2–6 qubits, each in three layout variants (disjoint chains of the heavy-hex chip), with the
+  spectator-context probes, raw / readout-mitigated / global, local and fractional ZNE at equal budget.
+
+device: ibm_fez
+fake: fake_fez
+opt_level: 1
+seed_transpiler: 11
+layout: chain
+budget: 6000                     # per benchmark and method, shared by its 3 variants (2000 shots each)
+cal_shots: 150
+variants: {count: 3, mode: layouts}
+replicates: 300
+bootstrap: 150
+exact_max_qubits: 3
+aer_dm_max_qubits: 8
+mc_shots: 100000
+predictors: [depolarizing, device]
+
+methods:
+  RAW:    {kind: raw}
+  RO:     {kind: ro}
+  ZNE-G:  {kind: zne, folding: global, scales: [1, 3, 5], rule: richardson}
+  ZNE-L:  {kind: zne, folding: local, scales: [1, 3, 5], rule: richardson}
+  ZNE-Lq: {kind: zne, folding: local, subset: stratified, scales: [1, 1.333, 1.667, 2], rule: poly2}
+
+circuits:
+  - {family: context, n: 6, layers: [2, 4, 8], spectators: [zero, plus, driven], seed: 0}
+  - {family: ghz, n: [2, 3, 4, 6], theta: 1.5707963267948966, basis: Z}
+  - {family: qft, n: [2, 3, 4, 5], m: null, s: 1}
+  - {family: bv, n: [3, 4, 6]}
+  - {family: brickwork, n: [4, 6], layers: [4, 8], seed: 0}
+  - {family: ising, n: [4, 6], steps: [2, 4], T: 1.0, J: 1.0, h: 1.0}
+  - {family: grover, n: 3, k: 1}

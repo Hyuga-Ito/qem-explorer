@@ -1,0 +1,26 @@
+# QEM Explorer 1.5 · one experiment (offline): the known-answer QFT under a mild noise model.
+#   python -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
+#   python -m qemx.experiment plan     examples/experiments/qft_known_answer.yaml
+#   python -m qemx.experiment run      examples/experiments/qft_known_answer.yaml --out results/qft_known_answer
+# The same file loads in the Playground (Export → Load a state or experiment).
+schema: qemx.experiment/1
+name: qft-known-answer
+description: >
+  Fourier-state input F†|s⟩, so the ideal output is |s⟩ (P(s) = 1). Equal total budget for every method
+  (training and calibration shots included). Cited preset: qft-known-answer (adapted from Lubinski et al.,
+  arXiv:2110.03137v3, App. A.2, Fig. 26).
+circuit:
+  template: qft
+  params: {n: 4, s: 5, mode: swap, prep: fourier}
+noise: {p1: 0.001, p2: 0.01, ro01: 0.02, ro10: 0.03}
+backend: numpy
+methods:
+  - {preset: Unmitigated}
+  - {preset: "ZNE · Richardson"}
+  - {preset: "Readout · TREX"}
+  - {preset: "PEC · inverse"}
+  - {preset: "CDR · OLS"}
+  - {preset: "NIL · small budget"}
+  - {estimator: learning, params: {features: fr, model: ridge, alpha: 0.001, n_train: 8, train_shots: 256}}
+budget: {shots: 100000, t_shot_us: 250}
+run: {seed: 0, repeats: 120, check_budget: true}
