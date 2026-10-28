@@ -1,4 +1,9 @@
-# Budget-aware selection of QEM protocols — methods (QEM Explorer 1.7.0)
+# Budget-aware selection of QEM protocols — methods (QEM Explorer 1.8.0)
+
+**1.8.0.** Sections 1–15 describe the method as established in 1.7.0 and still in force; §16 lists every change made
+in 1.8.0 (the deployed policy and its preflight contract, bounded-cost deployment, provenance and seeds, variance,
+tails, the expanded candidate portfolio, independent shot-level references) with the review finding it answers. Where
+§16 supersedes a statement of §1–15 it says so.
 
 This document states what the 1.7.0 study computes, under which assumptions, and where the implementation departs
 from the theory companion (`Automated_QEM_Protocol_Recommendation.pdf`, cited as "the companion" with its equation
@@ -236,7 +241,7 @@ synthetic risks). Graph neural networks were not built (decision D10): in the co
 structure group changes the held-out regret by −0.006 [−0.054, 0.026] decades and the light-cone group (or everything
 derived from the light cone) by −0.011 to −0.014 with intervals containing 0, ridge on structure features is within
 the boosted trees' interval, and the learned policies leave no resolved gap to SBS-B on held-out development circuits
-that circuit structure could explain (`RESULTS.md` §§4–5). A graph model would have to earn its complexity against that.
+that circuit structure could explain (`RESULTS.md` Part II §§4–5). A graph model would have to earn its complexity against that.
 
 ## 8. Policies and evaluation (`policies.py`, `evaluate.py`)
 
@@ -428,7 +433,7 @@ Corrections and practical limits, with what the implementation does:
 2. **Hoeffding certificates are uninformative at QEM risk scales.** With K = 8, α = 0.05, H = 4 the half-width is
    0.68, 0.22, 0.068, 0.022 for r = 10², 10³, 10⁴, 10⁵ trials — above every risk of interest (10⁻⁶–10⁻²);
    reaching 10⁻⁴ needs r ≈ 4.6·10⁹. Empirical Bernstein is limited by its range term ≈ 60/r. The implementation
-   computes both and reports how often they certify anything (`RESULTS.md` §8: never, in the pilot);
+   computes both and reports how often they certify anything (`RESULTS.md` Part II §8: never, in the pilot; Part I §I.7: never, in 1.8.0);
    fine-grained statements use the independent-half estimates and bootstrap intervals, labeled as such.
 3. **Multinomial emulation assumes fixed circuits with i.i.d. shots.** True for RAW, RO, ZNE and the training and
    calibration circuits; PEC and any per-shot randomization need the two-stage law (implemented); drift within a run
@@ -452,7 +457,8 @@ measurement bases and bit order, observable, device snapshot, budget; `from_stat
 their class and cost reported per feature: deployable features need no simulation of the circuit (structure,
 observable, light cone, calibration-derived sums and closed-form protocol overheads, e.g. PEC's γ from the snapshot's
 calibration); simulated features run only when allowed. Feasibility is structural (minimum shots of each protocol at
-B, no simulation). A **model bundle** (`qemx/selection/bundles/<version>/`, JSON + NPZ, no pickle; sha256 of the
+B, no simulation) — **superseded in 1.8.0** by the shared preflight contract (§16.1), under which a structural check
+alone never makes a learning protocol verified-feasible. A **model bundle** (`qemx/selection/bundles/<version>/`, JSON + NPZ, no pickle; sha256 of the
 arrays checked on load) holds the preprocessing and model as arrays, the feature definitions and order, the
 candidate protocols with their versions, the training support (devices, budgets, widths, feature ranges), the
 validation summary of its own configuration (out-of-fold development result, confirmation; the nested selective
@@ -504,3 +510,128 @@ enforced (`limits.memory_gb`). The development set has 52 logical circuits; the 
 not executed. Ensemble-spread intervals (across refits) were not implemented; like the
 residual-Gaussian interval they would carry no coverage guarantee. The results are in `RESULTS.md`, their threats to
 validity in its §17.
+
+## 16. Changes in 1.8.0
+
+Each change answers a finding of the 1.7.0 review (`QEM_Explorer_1.7.0_Independent_Review.md` and its follow-up;
+finding codes F1–F10, N1). The issue-to-evidence matrix is `docs/ISSUE_EVIDENCE_MATRIX.md`; results are in
+`docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md` and `docs/selection/RESULTS.md`.
+
+### 16.1 One execution/preflight contract (F1; `preflight.py`)
+
+The ten 1.7.0 deployment regression cases (two circuits: GHZ in the X basis with observable Z on the middle qubit)
+were accepted CDR/NIL choices whose training design was degenerate: every training circuit has ⟨X_mid⟩ = 0, the labels
+have no spread, the method has no training circuits, and the study's allocation marks the protocol infeasible — but
+the deployment API used a structural check that called it feasible. 1.8.0 replaces both checks by one contract used by
+study labeling (as a check), `deploy.recommend` (UI, CLI, batch), the replay and the hardware plan:
+
+| status | meaning |
+|---|---|
+| `verified-feasible` | the protocol can be executed as defined at this budget (at the stated level) |
+| `infeasible` | it cannot (with the reason) |
+| `unverified` | the cheaper level cannot decide; it is never accepted |
+
+Levels, cheapest first: **structural** (minimum shots of every role at B; decides every non-learning candidate and
+rejects learning candidates whose minima cannot be met), **design** (a learning protocol's training design is built
+with its deployment seed and its ideal training values computed by state vector — information genuinely available
+before execution, never the target's ideal value; up to 20 qubits), **allocation** (the study's own rule on the
+supplied model; needs simulation, `--allow-simulation`). The recommender walks the candidates in the model's
+predicted order, resolves an unverified candidate at the requested level, skips infeasible and unresolved ones (each
+recorded with its status) and returns the first verified candidate; the margin is taken to the next candidate not
+known to be infeasible; the frozen τ and the fallback (SBS-B's first **verified** candidate; RAW if none) follow.
+Preflight uses no quantum shots; its classical seconds are reported. Agreement of the design level with the 1.7.0
+labels' allocations: 27 760 rows of 334 tasks, 0 disagreements (`evidence/preflight/agree_v170_sv.json`, private
+archive). Every selection, OOD, threshold, feasibility, execution-failure and fallback rule is part of the evaluated
+policy (`replay.py`, §16.9), and the policy has a version (`qemx.selection.policy/2`).
+
+### 16.2 Bounded-cost deployment (F2; `deploy.guard`, `device_exact.product_calibration`)
+
+The budget, the device (a fake-device snapshot), the width against the device, and the observable (a dense vector only
+up to 20 qubits, otherwise valid compact Z-string terms with Σ|c| ≤ 1) are checked before compilation (`deploy.guard`);
+inputs beyond them raise `Unsupported` with the reason. Calibration marginals are computed by a factorized local-channel
+calculation when the device model's readout and preparation channels are products over qubits (all fake-device
+snapshots: X-gate preparation error, relaxation, readout asymmetry, layout and measurement maps, relabeling; maximum
+|dense − factorized| 1.8 × 10⁻¹⁵ on five configurations); a correlated or context-dependent model raises
+`NotFactorizable` and uses the dense path only up to 11 qubits, otherwise the feature is reported missing (imputed, and
+flagged as OOD). Observables of up to 20 qubits may be dense vectors; wider tasks pass compact Pauli terms
+(`obs_terms`). A sentinel test replaces every dense engine by a tripwire and recommends a 24-qubit task. Features are
+cached by content (the experiment without its budget, the feature names and definitions, the simulation switch, the
+policy version); timings in `supp_runtime` and thesis table 6 are measured
+without the cache. The studied allocation of a learning protocol (and PEC's γ) still needs supplied-model information
+whose cost grows with width; the fast inference does not make the complete protocol scalable.
+
+### 16.3 Provenance and compatibility (F3, F4, F9; `binding.py`, `deploy.compatibility`, `textio.py`)
+
+Mismatch labels carry their run id. Collection checks each record's task id, label configuration, run id (or an
+auditable import with its JSON digest) and NPZ digest; a wrong JSON digest is rejected even when the arrays match.
+Records of 1.6/1.7 without a run id and without a seed scheme are `legacy_unbound` evidence, never mixed into a
+scheme-2 run. Bundles record a feature fingerprint (definitions, order, normalization), the protocol definitions, the
+policy version and the device-snapshot fingerprints: a changed definition is `BundleIncompatible` (refused); a changed
+calibration of a known device is a transfer, reported as out-of-distribution. Current JSON is strict (`null` plus a
+`"$nonfinite"` map of JSON pointers); older `NaN` tokens remain readable.
+
+### 16.4 Preparation seeds (N1; `emulate.stream_seed`)
+
+Seed scheme 2 derives every preparation and trial stream from stable identifiers — (root, CRN key, protocol, half,
+index, role) — instead of one per-study seed pool reused across tasks. Common random numbers are explicit groups
+(`crn: task` or `crn: base`); a design has a seed token and a unique `instance_id`. The scheme is part of the run and
+record identity; a resume cannot mix schemes. Scheme 1 reproduces the 1.7.0 labels bitwise
+(`evidence/seeds/v1_reproduces_v170.json`); scheme-2 labels are unchanged by task order, resume and worker count
+(`tests/test_provenance_v180.py`). The 1.7.0 trials are not altered; every 1.8.0 study uses scheme 2.
+
+### 16.5 Variance of one deployment (F5; `labels.deployment_variance`)
+
+For fresh designs the pooled trial variance s² has expectation σ²_W + m(K − 1)/(Km − 1) σ²_D (balanced groups), not
+σ²_W + σ²_D. Labels now also report `var_deploy` = σ̂²_W + σ̂²_D from the one-way random-effects ANOVA (method of
+moments; unbalanced groups through m₀ = (n − Σn_k²/n)/(K − 1); σ̂²_D truncated at 0, flagged). Mean squared losses and
+the MSE labels are unchanged; `var` keeps its pooled meaning.
+
+### 16.6 Primary metric wording and declared tails (F6, F7; `evaluate.tail_metrics`)
+
+The primary objective stays the mean over base circuits of log10(MSE + 10⁻⁶). A difference Δ is a factor 10^Δ in the
+geometric mean of (MSE + 10⁻⁶), not a percentage of the MSE; reports and figures say so. Declared before any 1.8.0
+result: severe degradation p_severe_vs_raw (risk > 10 × RAW's on the same row), p_severe_abs (risk > 0.1), the 95 %
+quantile of the risk and the worst-5 % loss share — reported beside, never instead of, the primary metric. Severe ZNE
+and learning failures stay in every risk. A bounded estimator is a **separately named candidate**: ZNE-E-B projects
+ZNE-E's estimate onto the observable's eigenvalue range (deterministic, never increases a trial's error; paired with
+ZNE-E by common random numbers); ZNE-E is unchanged and historical estimates are never clipped.
+
+### 16.7 Independent shot-level references (F8; `reference.py`)
+
+An independently written reference draws counts from the exact output laws and re-implements the estimators of
+ZNE-E and ZNE-E-B, CDR, FR, NIL (with its own ℓ1 solver), symmetry verification and ZNE∘SV, TREX and RO, including
+training designs and labels, calibration, target shots, degeneracy, fit/solver failure, per-replicate fallback flags,
+zero acceptance and the budget ledger. Emulated and reference trials are compared in distribution (mean z score,
+variance-ratio F test); the linear and transform candidates are compared with direct shot-by-shot execution
+(`tests/test_emulator_independent.py`). The registry's `validation` field states which evidence each candidate has.
+
+### 16.8 Candidate portfolio-1.8 (`protocols.py`, `registry.py`, `docs/selection/CANDIDATES.md`)
+
+The eight 1.6/1.7 candidates (portfolio-1.6, immutable identities) plus RO-TREX (twirled-readout correction), RO-TW
+(Pauli-twirled two-qubit gates), RO-DD (XY4 dynamical decoupling), ZNE-L-TW, ZNE-E-B, PEC-TW, FR (feature regression,
+this project's CDR extension), SV (symmetry verification of declared Z parities) and ZNE-L∘SV (every fold
+post-selected). Each has a capability record: applicability, prerequisites, resources, ledger, failure handling,
+allocation information and validation. Not candidates: virtual distillation (the implementation has no finite-shot
+multi-copy protocol; blocked with the reason) and M3 (the emulator applies the tensored inverse; a separate identity
+would duplicate RO). SV applies only when the task's construction declares its symmetry (never inferred from the
+ideal output); an observable that is a function of the checks is trivially exact after post-selection, which is why
+the GHZ-Z tasks use Z on the middle qubit.
+
+### 16.9 Full-policy evaluation (F1; `replay.py`, `scripts/replay_confirmation.py`)
+
+The confirmation is evaluated twice, and both are reported: the **model component** (the model's best label-feasible
+candidate, as in 1.7.0) and the **full policy** (`deploy.recommend` itself on every confirmation task and budget,
+scored with the evaluation half). Every row is kept; a returned candidate without feasible labels is unscored and makes
+the primary difference undefined rather than imputed. The default bundle uses deployable features only; the
+simulator-feature bundle is evaluated at the allocation level.
+
+### 16.10 Features and models
+
+Four calibration-derived descriptors join the deployable set (`deployable18`): λ_LC of two-qubit gate errors only
+(`lam_lc_2q`), readout asymmetry (`ro_asym`), the spread of the used two-qubit gates' reported errors
+(`err2q_spread`) and the scheduled duration over the median T2 (`duration_t2`). The 1.7.0 sets keep their names and
+fingerprints. Model families: Ridge, elastic net, histogram gradient boosting, a small MLP and the structured risk
+model, each per feature set; the frozen configuration is chosen as before (lowest pooled out-of-fold mean log10 risk)
+and validated by nested cross-validation. A scalar Pauli-twirled light-cone exposure cannot distinguish coherent errors
+that reinforce from ones that cancel (`tests/test_lightcone_v180.py`, F10); features are descriptors, not
+mechanisms.

@@ -1,9 +1,12 @@
-"""The 1.7 selection recommender for the Playground's circuit (QEM Performance page, "Recommend for my circuit").
+"""The selection recommender for the Playground's circuit (QEM Performance page, "Recommend for my circuit"; 1.7.0,
+preflight contract and capability records 1.8.0).
 
 The Playground state becomes a ``qemx.selection.deploy.DeploymentTask`` — the same representation the command line
 uses (``python -m qemx.selection recommend --state …``), so the UI and the CLI resolve identical experiments,
 features and recommendations. The recommendation is cached under the task's key and the bundle's digest: any change
-of circuit, input, bases, bit order, observable, device or budget marks it out of date."""
+of circuit, input, bases, bit order, observable, declared symmetry, device, budget, bundle or simulation permission
+marks it out of date (1.9.0: ``deploy.recommendation_signature``). The selected "Device snapshot" is the effective
+device (the same rule as ``recommend --device``); the result shows it with the physical layout and the symmetry used."""
 from __future__ import annotations
 
 import math
@@ -28,16 +31,24 @@ def current_task(budget: int, device: str):
     return DP.from_state(S.to_json(), int(budget), device)
 
 
+def signature_now(budget: int, device: str, bundle, allow_simulation: bool) -> str:
+    """The signature a recommendation made now would have (``deploy.recommendation_signature``)."""
+    from qemx.selection import deploy as DP
+    return DP.recommendation_signature(current_task(budget, device), bundle, allow_simulation=allow_simulation)
+
+
 def render():
     from qemx import device as DV
     from qemx.selection import deploy as DP
     ss = st.session_state
     names = DP.bundles()
-    st.markdown("**Selection recommender (1.7)** — a versioned model bundle trained in the protocol-selection study "
+    st.markdown("**Selection recommender** — a versioned model bundle trained in the protocol-selection study "
                 "(fake-device emulation): for this circuit, input, measurement, observable, device and total budget B "
                 "it predicts each complete protocol's log risk from features computed *without simulating the "
-                "circuit*, recommends the lowest only when the frozen selective rule accepts it, and otherwise "
-                "falls back to the study's budget-only policy SBS-B.")
+                "circuit*, checks that the candidate can actually run as defined (preflight: *verified*, "
+                "*infeasible* or *unverified* — never accepted while unverified), recommends the lowest verified one "
+                "only when the frozen selective rule accepts it, and otherwise falls back to the study's budget-only "
+                "policy SBS-B.")
     if not names:
         st.info("No model bundle is installed (qemx/selection/bundles). Build one with `python -m qemx.selection "
                 "bundle CONFIG --out RUN`.", icon=":material/inventory_2:")
@@ -57,8 +68,9 @@ def render():
     if ss.w_sr_dev not in opts:
         ss.w_sr_dev = opts[0]
     dev = c2.selectbox("Device snapshot", opts, key="w_sr_dev", persist_state=P,
-                       help="The calibration snapshot the protocols would use. The Playground's backend is used when "
-                            "it is a fake device; the training devices are listed.")
+                       help="The calibration snapshot the protocols would use (it replaces the Playground's backend "
+                            "for the recommendation; the Playground's backend is preselected when it is a fake "
+                            "device). The physical layout of the state is checked on the chosen device.")
     S.wdefault("w_sr_B", 100000)
     B = c3.number_input("Total shot budget B", min_value=100, max_value=10 ** 9, step=1000, key="w_sr_B",
                         persist_state=P)
@@ -74,12 +86,15 @@ def render():
 
     def go():
         ss.sr_rec, ss.sr_err = None, ""
+        task = None
         try:
             task = current_task(int(B), dev)
             rec = DP.recommend(task, b, allow_simulation=bool(ss.get("w_sr_sim")))
             ss.sr_rec = dict(rec, key=task.key(), bundle_digest=b.meta.get("arrays_sha256"))
-        except DP.Unsupported as e:
-            ss.sr_rec = dict(status="unsupported", reason=str(e), key=None, bundle_digest=b.meta.get("arrays_sha256"))
+        except DP.Unsupported as e:                  # 1.9.0: keep the signature when the task itself was built
+            sig = DP.recommendation_signature(task, b, allow_simulation=bool(ss.get("w_sr_sim"))) if task else None
+            ss.sr_rec = dict(status="unsupported", reason=str(e), key=None, bundle_digest=b.meta.get("arrays_sha256"),
+                             signature=sig)
         except MemoryError:
             ss.sr_err = "Not enough memory to compute the requested features for this circuit."
         except Exception as e:                       # noqa: BLE001 - never crash the page from a callback
@@ -90,13 +105,14 @@ def render():
     rec = ss.get("sr_rec")
     if not rec:
         return
-    try:
-        key_now = current_task(int(B), dev).key()
-    except Exception:                                # noqa: BLE001 - an unsupported state has no key
-        key_now = None
-    if rec.get("key") != key_now or rec.get("bundle_digest") != b.meta.get("arrays_sha256"):
-        st.warning("The circuit, input, measurement, observable, device, budget or bundle changed since this "
-                   "recommendation; press Recommend again.", icon=":material/update:")
+    try:                                             # 1.9.0: the signature includes the simulation permission
+        sig_now = signature_now(int(B), dev, b, bool(ss.get("w_sr_sim")))
+    except Exception:                                # noqa: BLE001 - an unsupported state has no signature
+        sig_now = None
+    if rec.get("signature") != sig_now or rec.get("bundle_digest") != b.meta.get("arrays_sha256"):
+        st.warning("The circuit, input, measurement, observable, declared symmetry, device, budget, bundle or the "
+                   "simulation permission changed since this recommendation; press Recommend again.",
+                   icon=":material/update:")
     if rec["status"] == "unsupported":
         st.warning("**Unsupported** — " + W.md_escape(rec["reason"]), icon=":material/block:")
         return
@@ -110,9 +126,34 @@ def render():
                 icon=":material/do_not_disturb_on:")
     for w in rec.get("warnings", []):
         st.caption(":material/warning: " + W.md_escape(w))
+    sym = rec.get("symmetry") or {}
+    st.caption(":material/memory: Effective device **%s** · requested layout %s · physical qubits used %s · declared "
+               "symmetry: %s" % (W.md_escape(str(rec.get("effective_device"))), rec.get("requested_layout") or "none",
+                                 rec.get("physical_layout") or "—",
+                                 W.md_escape(sym.get("declared") or "none") + (" (%s)" % sym["source"]
+                                                                               if sym.get("source") else "")))
+    for x in rec.get("conversion_notes") or []:
+        st.caption(":material/info: " + W.md_escape(x))
     pd_ = rec.get("protocol_definition") or {}
     if pd_:
         st.caption("Protocol, exactly as the study defines it: %s" % W.md_escape(pd_.get("description", "")))
+    ex = rec.get("execution") or {}
+    if ex.get("note"):
+        st.caption(":material/fact_check: " + W.md_escape(ex["note"]) + " (the design whose training labels the "
+                   "preflight verified).")
+    for x in rec.get("skipped_candidates") or []:
+        st.caption(":material/skip_next: The model ranked **%s** higher, but its preflight is *%s*: %s" % (
+            x["protocol"], x["status"], W.md_escape(x["reason"])))
+    try:
+        from qemx.selection import registry as RG
+        cap = RG.describe(rec["choice"])
+        with st.expander("Capability record of %s (what it needs, costs and does on failure)" % rec["choice"],
+                         icon=":material/list_alt:"):
+            st.dataframe(pd.DataFrame([dict(item=k, value=", ".join(v) if isinstance(v, list) else str(v))
+                                       for k, v in cap.items() if k not in ("definition",)]),
+                         hide_index=True, width="stretch")
+    except KeyError:
+        pass
     st.caption("Model %s · bundle %s · the model's choice: %s (margin %s, threshold τ = %s). Predicted risks are "
                "model-conditional (they hold only as far as the model is right); the nested cross-validation "
                "numbers in the bundle are empirical, for the study's task distribution." % (
@@ -120,9 +161,9 @@ def render():
                    "%.2f" % rec["margin"] if isinstance(rec.get("margin"), float) and math.isfinite(rec["margin"])
                    else rec.get("margin"), rec.get("tau")))
     if rec.get("predicted_log10_risk"):
-        rows = [dict(protocol=p, predicted_log10_risk=v, feasible=rec["feasibility"][p]["feasible"],
-                     note=rec["feasibility"][p]["note"]) for p, v in sorted(rec["predicted_log10_risk"].items(),
-                                                                          key=lambda kv: kv[1])]
+        rows = [dict(protocol=p, predicted_log10_risk=v, preflight=rec["feasibility"][p].get("status"),
+                     level=rec["feasibility"][p].get("level"), note=rec["feasibility"][p]["note"])
+                for p, v in sorted(rec["predicted_log10_risk"].items(), key=lambda kv: kv[1])]
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     with st.expander("Features, their information class and cost", icon=":material/tune:"):
         fr = pd.DataFrame(rec["feature_report"]["rows"])

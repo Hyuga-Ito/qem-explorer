@@ -1,0 +1,576 @@
+{
+ "schema": "qemx.selection.manifest/2",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "status": "planned",
+  "name": "regimes18",
+  "master_seed": 20261027,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "base"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ],
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 2
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 3
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_fez@s=0.5",
+     "fake_fez@s=1.5",
+     "fake_fez@s=2",
+     "fake_fez@s=3"
+    ],
+    "variants_per_base": "all"
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez"
+    ],
+    "variants_per_base": "all"
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ising": [
+      {
+       "steps": 2
+      }
+     ],
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 2
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 3
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez"
+    ],
+    "variants_per_base": "all"
+   }
+  ],
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3
+  },
+  "regimes": {
+   "noise_axis": "s",
+   "model_policy": "frozen",
+   "observable_budget": 100000,
+   "noise_budget": 100000
+  }
+ },
+ "development": [
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=1.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=3",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=1.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=3",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=1.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@s=3",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_all",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     2
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     3
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "alt",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  }
+ ],
+ "final": [],
+ "run_identity": "1650cdf2763a2b62"
+}

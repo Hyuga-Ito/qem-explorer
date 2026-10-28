@@ -1,0 +1,83 @@
+# Development study (1.8.0) — the expanded portfolio (portfolio-1.8, 17 candidates; qemx/selection/registry.py) on new
+# logical circuits. Declared before labeling. Every base circuit is new (new angle seeds, fields and parameters;
+# configs/selection/ancestry_registry.json, role "development"); none appears in the 1.6/1.7 studies, the 1.7
+# confirmation or this release's confirmation (conf18.yaml). Seed scheme 2 (namespaced preparation streams, one
+# independent design pool per task and label half; finding N1), 6 fresh designs per half, 60 trials per half.
+# The 1.6/1.7 eight candidates are a subset (portfolio-1.6), so the benefit of the larger portfolio and of learned
+# selection can be separated on the same tasks. GHZ in the Z basis declares its parity checks (symmetry verification
+# applicable) and uses the informative observable z_mid (P0P1, ZZ and an even Z string are fixed by the checks).
+schema: qemx.selection.config/1
+name: dev18
+status: planned
+master_seed: 20261024
+R: 60
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 6, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4, 5, 6]
+    families:
+      hea: [{layers: 2, angle_seed: 1801}, {layers: 3, angle_seed: 1802}]
+      qaoa: [{p: 1, angle_seed: 1811}, {p: 2, angle_seed: 1812}]
+      brickwork: [{layers: 2, angle_seed: 1821}]
+      ising: [{steps: 1, h: 0.9}, {steps: 3, h: 0.55}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [3, 4, 5, 6]
+    families:
+      ghz: [{theta: 0.5, basis: Z}, {theta: 1.2, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 2
+    include_default: false
+  - widths: [3, 5]
+    families:
+      ghz: [{theta: 0.95}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [4, 5]
+    families:
+      qft: [{s: 5}]
+      bv: [{secret: 6}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+  - widths: [3, 4]
+    families:
+      grover: [{k: 1, marked: 6}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv]
+    variants_per_base: 1
+limits: {task_seconds: 5400, memory_gb: 3}
+analysis:
+  splits: [same-distribution, family, device, width, budget-extrap, budget-interp]
+  split_options:
+    same-distribution: {k: 5}
+    width: {min_test_n: 6}
+    budget-extrap: {max_train_B: 300000}
+    device: {test_device: fake_kyiv}
+  feature_sets: [size_budget, structure, lightcone, deployable, deployable18, deployable18+simulated]
+  model_families: [ridge, enet, hgb, mlp, struct]
+  abstain_family: hgb
+  abstain_set: deployable18
+  ablation_set: deployable18
+  bootstrap: 1000
+  lc_repeats: 3
+  other_split_sets: [size_budget, deployable18]
+  other_split_families: [ridge, hgb, struct]
+  extras: [ablation, learning_curve, deployed, budget_generalization, abstention, nested_selective, interval_coverage,
+           certificates, floor_sensitivity, design_diagnostics]

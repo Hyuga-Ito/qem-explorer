@@ -1,0 +1,55 @@
+{
+ "schema": "qemx.trial-attachments/1",
+ "note": "Which study each release attachment of per-trial arrays belongs to (1.9.0). The arrays are not in the repository (reports/*/tasks/*.npz are ignored); every study verifies against its own TRIALS_SHA256SUMS (scripts/verify_trials.py). Historical studies keep the attachments of the release that produced them.",
+ "studies": {
+  "reports/selection_v180": {
+   "release": "1.8.0",
+   "manifest": "reports/selection_v180/TRIALS_SHA256SUMS",
+   "files": 217,
+   "tests": [
+    "tests/test_trial_data_v180.py",
+    "tests/test_selection_ui.py"
+   ]
+  },
+  "reports/selection_v170": {
+   "release": "1.7.0",
+   "manifest": "reports/selection_v170/TRIALS_SHA256SUMS",
+   "files": 347,
+   "tests": [
+    "tests/test_selection_v170.py"
+   ]
+  },
+  "reports/pilot_v190": {
+   "release": "1.9.0",
+   "manifest": "reports/pilot_v190/TRIALS_SHA256SUMS",
+   "files": 54,
+   "tests": [
+    "tests/test_trial_data_pilot19.py",
+    "tests/test_tables19.py"
+   ]
+  }
+ },
+ "attachments": {
+  "qem-explorer-1.9.0-trials-1.zip": {
+   "study": "reports/selection_v180"
+  },
+  "qem-explorer-1.9.0-trials-2.zip": {
+   "study": "reports/selection_v180"
+  },
+  "qem-explorer-1.9.0-trials-pilot.zip": {
+   "study": "reports/pilot_v190"
+  },
+  "qem-explorer-1.8.0-trials-1.zip": {
+   "study": "reports/selection_v180"
+  },
+  "qem-explorer-1.8.0-trials-2.zip": {
+   "study": "reports/selection_v180"
+  },
+  "qem-explorer-1.7.0-trials-1.zip": {
+   "study": "reports/selection_v170"
+  },
+  "qem-explorer-1.7.0-trials-2.zip": {
+   "study": "reports/selection_v170"
+  }
+ }
+}

@@ -1,8 +1,225 @@
-# Migrating to 1.7.0
+# Migrating to 1.9.1
 
 Existing data are never rewritten: old run directories, records, ledgers, manifests and state files stay as they are
 and still load; every migration is reported. A run directory refuses to be finished by a version that writes
 records of another statistical meaning.
+
+# Part 00000 — from 1.9.0 to 1.9.1
+
+No statistical meaning changes: labels, task identities, estimators, policies, the metric, the 1.8.0 confirmation and
+the 1.9.0 pilot are the same. Every item is in `docs/ISSUE_EVIDENCE_MATRIX.md` (part 1.9.1).
+
+**Full development order (F1).** `analyze` no longer computes the analyses that evaluate the frozen configuration
+(`deployed`, `selective`, `nested_selective`) before `freeze`: when they come from the configuration's extras (or the
+default extras of a configuration without an `extras` key) they are recorded as *deferred* in `results.json`; when
+they are named explicitly (`analyze --extras deployed` before a freeze) the command refuses (exit 2) instead of
+evaluating a configuration that may never be frozen. After the freeze the pipeline's `nested` stage computes them (by
+hand: `analyze CONFIG --out RUN --splits= --extras deployed,nested_selective`). A direct `analyze` of a configuration
+that declares both `analysis.deployed_family` and `analysis.deployed_set` still evaluates that declared configuration
+at once (one of the two alone counts as undeclared, and the note says so); the pipeline always computes these tables
+in its `nested` stage (also when the pipeline file's `analyze.extras` names them). Each such table now records a binding (configuration, data, evaluation settings `k`,
+`nested_inner_k`, `bootstrap`, code). The `nested` stage refuses before a freeze and moves nothing when the
+re-analysis would be refused (another analysis section, labels or data; other code without `--accept-changes`); it
+keeps tables whose binding matches the freeze, and tables made before 1.9.1 (no binding) that evaluate the frozen
+configuration; other tables are moved to `analysis/stale_nested_<time>/` (with a README; `results.json` keeps a
+`stale_nested` record) and recomputed. `freeze --complete` needs the `nested_selective` tables (as before) and checks
+the binding of every frozen-configuration table present; tables made before 1.9.1 are accepted only when they evaluate
+the frozen configuration, and the freeze records that only the configuration was checked. *Quick runs:* `run
+configs/selection/smoke.yaml` (label, analyze, figures; no freeze) now leaves the figures that need these tables
+(fig05 and two supplementary figures) pending, as reported by `figures`; `freeze`, then `analyze … --splits= --extras
+deployed,nested_selective`, then `figures` draws them for the frozen configuration.
+
+*A `fulldev19` run started with 1.9.0* (stopped with exit 2 at `freeze-complete`, "the nested evaluation is of
+MODEL[hgb|deployable+simulated] …"): run the same pipeline again with 1.9.1 and `--accept-changes`:
+
+```
+python -m qemx.selection pipeline configs/pipelines/fulldev19.yaml --out runs/fulldev19 --workers auto --accept-changes
+```
+
+The labels and the analysis tables are kept and verified, **the frozen configuration stays as it is** (the first
+freeze is never redone), the premature nested tables are set aside in `analysis/stale_nested_<time>/` and recomputed
+for the frozen configuration, and `freeze --complete` then records τ. `--accept-changes` is needed because the
+analysis tables were made by 1.9.0 code; it is recorded in `results.json` (`code_changes`). Without it the nested stage
+stops with exit 2 and says so. Tested on a copy: the shipped stage order run with 1.9.0 to its exit 2, then 1.9.1
+without (exit 2) and with `--accept-changes` (exit 0), and an unchanged rerun (exit 0; `[nested] kept`). An
+extras-only analysis (the nested stage) no longer re-pools the split tables, so the table the freeze was chosen on is
+never rewritten.
+
+**First freeze (F2).** Before the first `freeze`, the analysis must match the configuration and labels given now
+(analysis section, label-determining configuration, data digest) and have been made by this code; every declared split
+must be present (incomplete comparisons are refused), and the same-distribution comparison must cover every
+configuration of the declared grid; the choice is made only within the declared grid. Exit 2 with the list of
+problems otherwise. An analysis made by other code (for example by 1.9.0) needs a fresh `analyze` or `freeze
+--accept-changes`, which is recorded in `freeze.json` (`accepted`); an analysis from before 1.9.0 (no identity) needs
+`--accept-changes` too. An existing freeze is verified as in 1.9.0 (exit 1, or 0 with `--reuse`; 2 when inconsistent).
+
+**CPU accounting (F3).** `limits.cpu_hours` is checked against the labels directory's *consumed* seconds: every attempt
+of every invocation in `attempts.jsonl` (failed, replaced by `--retry-failed`, quarantined, and — new —
+`interrupted` entries for tasks stopped by Ctrl+C or SIGTERM), plus the recorded seconds of records that have no attempt
+entry (labeled before 1.9.0 or imported; matched oldest first; a `failed_attempts/` copy identical to its record is
+the same attempt, so it is never counted twice, and repeated `--retry-failed` runs that relabel nothing no longer add
+copies). In 1.9.0 the ceiling restarted
+from the current records only, so a retry hid the failed attempts' time. Admission uses consumed + estimated remaining.
+`integrity.completion` reports it as `consumed`; `status` and `plan` show it. The unit is still summed worker
+wall-clock seconds (≈ CPU seconds with one numerical thread per worker), and a task already running when the cap is
+reached still finishes (checkpoint-safe overshoot). Quantum shot ledgers are unchanged.
+
+**Planning output (F4).** `plan` prints a structural *analysis workload* (split parts, model fits including inner
+tuning, fits × training rows) — counts, not a time. `reports/tables_v190/s6_costs` states the wall time for a declared
+hypothetical computer (8 cores, 7 workers): 9.3 CPU-h / 7 = 1.3 h (1.9.0 printed 4.7 h = 9.3 / 2 from the generating
+computer under a "7 workers" caption); the row is renamed `fulldev19_wall_hours_scenario`, and a row
+`fulldev19_analysis_fits` is added.
+
+**Summaries.** Per-split summary rows have a new column `inference`: strata over one base circuit are "descriptive"
+(their bootstrap over circuits is degenerate), fewer than five "few base circuits … descriptive".
+
+**Process supervision (F5).** Workers end when their parent ends through the multiprocessing parent handle instead
+of comparing process IDs with psutil (which can look at another PID namespace in containers); psutil-based memory
+sampling and process-tree stopping are used only when psutil's PID view is this process's own (Linux: `/proc/self`
+names this PID; macOS: the parent PIDs agree; Windows: always); lock liveness uses the process's own PID view. The
+regime study and `profile` keep 1.9.0's model before a freeze (`hgb|deployable+simulated` unless declared). No user
+action.
+
+# Part 0000 — from 1.8.0 to 1.9.0
+
+No statistical meaning changes: labels, task identities (all 1989 of the 19 shipped configurations, pinned in
+`tests/data/expansion_ids_v180.json`), estimators, policies, the metric and the 1.8.0 results are the same. What
+changes is what commands **accept, report and return**, so scripts written around 1.8.0 can see different exit codes.
+Every item below is in `docs/ISSUE_EVIDENCE_MATRIX.md` with its reason.
+
+**Exit codes and completion**
+
+- `label`, `run`, `confirm`, `final`, `regimes`, `mismatch`, `scripts/root_audit.py label`: 0 = the run is complete
+  (or deliberately partial with `--limit` and nothing failed), 1 = incomplete, 2 = refused (configuration, binding,
+  admission, corrupted or stale inputs, an inconsistent once-only step). In 1.8.0 an unchanged rerun of a run with a
+  timed-out task printed `tasks=0, errors=0` and exited 0; it now reports the failed task and exits 1 on every rerun.
+- Failed tasks are kept and not retried automatically (as in 1.8.0, which however counted them as done and could only
+  retry them after the record was deleted by hand). Use `--retry-failed`; the earlier record is kept in
+  `failed_attempts/` and every attempt in `attempts.jsonl` (new files in the labels directory).
+- A record whose arrays are missing or changed stops labeling (exit 2) instead of being skipped;
+  `--quarantine-corrupted` moves it to `quarantine/` and relabels it.
+- `run` returns the labeling result and does not analyze an incomplete run (1.8.0 returned the figures' code).
+- `analyze` refuses incomplete labels (exit 2) unless `--allow-partial`; such results are marked `partial` and
+  `freeze` refuses them. Zero completed tasks are always refused.
+- `freeze` and `freeze --complete` on an already frozen run now **verify** the existing freeze against the
+  configuration, the analysis and the development data instead of only refusing: consistent → exit 1 as before
+  ("already done", unchanged), or 0 with the new `--reuse`; inconsistent → 2. `final` and `confirm` accept `--reuse`
+  with the same meaning for their once-only evaluation. The pipeline runner always passes `--reuse`, so a resumed
+  pipeline continues past these steps.
+- `plan` exits 3 when a configured cap would refuse the run; `recommend` exits 3 for an unreadable or unsupported input.
+- New: `status --out DIR` (any run), `pipeline FILE --out DIR` (stage-aware runner), `check-config` for every YAML
+  format, `plan --tasks-csv`, `plan --json`.
+
+**Resources**
+
+- `limits.cpu_hours`, `disk_gb` and the new `limits.min_free_disk_gb` are enforced: a known estimate above a cap is
+  refused before labeling unless `--override-limits "reason"` (recorded in `run.json`); while labeling, monitored
+  ceilings stop at the cap even with an override (checkpoint-safe). Without measured rates the CPU estimate is
+  reported as unknown rather than guessed. `task_seconds` and `memory_gb` are unchanged (per task).
+- `--workers auto` = CPUs − 1, bounded so that workers × `memory_gb` stays within 70 % of RAM.
+- Each labels directory and analysis holds a lock (`.qemx-run.lock`) while a command writes it; a second writer is
+  refused; a lock of a process that no longer runs is replaced.
+
+**Analyses, freezes and replays**
+
+- An analysis records its identity (digests of the `analysis` section, the label set, the data and the code). Tables
+  made with another configuration or data are refused (`--reset-analysis` archives them first; a frozen run's analysis
+  is never archived); tables made by other code need `--accept-changes`, recorded in `results.json` (`code_changes`).
+- A freeze records the development data digest and the scientific configuration digest (`limits` and `status` are
+  operational and excluded); operational changes keep a freeze valid.
+- `confirm` checks the confirmation's logical circuits against the **training labels actually used**, not only the
+  ancestry registry. `EVALUATED` records the configuration digest, training parts and output digests.
+- `replay.replay` scores the manifest's population and refuses an incomplete one (`require_complete`); an exploratory
+  subset needs `subset` and `subset_reason` and is recorded. A cached `labels.csv` that differs from the arrays raises
+  `StaleTable`. `scripts/replay_confirmation.py` checks the SBS-B column against the rule and returns 2 on errors
+  (1.8.0 printed a traceback).
+- `bundle` writes into `RUN/bundles/<version>` by default (1.8.0: into `qemx/selection/bundles/`, the shipped folder)
+  and never overwrites an existing bundle. Use `--bundle-out` for another place.
+
+**Recommendations**
+
+- A state converted for the recommender keeps a declared symmetry when it holds on the ideal measured distribution
+  (≤ 20 qubits); otherwise it is dropped with a note. A state that declared a valid symmetry can therefore get a
+  different — now study-consistent — recommendation (GHZ-6 at B = 10³ on `fake_kyiv` with the frozen bundle: SV, as for the study task, instead of PEC-TW).
+- An explicit device (`--device`, the app's selector) overrides the state's backend; the layout is validated against it
+  (distinct, non-negative, in range). 1.8.0 used the state's backend.
+- The result adds `effective_device`, `requested_layout`, `physical_layout`, `symmetry`, `conversion_notes`,
+  `simulation` and `signature`. Invalid devices, layouts or symmetries are `Unsupported` (no traceback).
+- The app marks a shown recommendation out of date when the "allow simulated features" switch changes.
+
+**Configurations**
+
+- Selection configurations: `analysis`, `split_options` (per split), `mismatch`, `regimes` and `limits` are closed key
+  sets; lists must be non-empty and unique; `master_seed ≥ 0`. A configuration with a typo such as
+  `analysis.feature_set` was silently run with defaults in 1.8.0 and is now refused. All shipped configurations remain
+  valid. Descriptive keys the code does not read (`mismatch.robust`, `regimes.*`) give warnings.
+- New optional `expansion_policy: explicit` (every block states `include_default` and `variants_per_base`); without it
+  the historical expansion applies unchanged. New splits `noise`, `device-base` and `joint`.
+- Plotting configurations: an explicitly named file that is missing, or an unknown key, is an error (1.8.0 fell back to
+  defaults).
+
+**Scripts and CI**
+
+- `scripts/reproduce_v18.sh` calls the pipeline (`configs/pipelines/reproduce_v18.yaml`); `reproduce_pilot_17.sh` no
+  longer masks failures. Both can be resumed after an interruption.
+- `scripts/verify_trials.py` verifies the named study's manifest only (`--attachments` maps archives to studies).
+- Tests that need trial arrays fail instead of skipping when `QEMX_REQUIRE_TRIALS` names their study.
+- `figures --figures-out DIR` writes figures elsewhere than the run.
+
+
+# Part 000 — from 1.7.0 to 1.8.0
+
+What changes meaning (each change with its reason in `docs/selection/METHODS.md` §16 and
+`docs/ISSUE_EVIDENCE_MATRIX.md`):
+
+- **The deployed recommendation** follows policy `qemx.selection.policy/2`: candidates are walked in the model's
+  order and only a **verified-feasible** candidate is returned (shared preflight contract,
+  `qemx/selection/preflight.py`); unverified candidates are skipped and listed; the fallback is SBS-B's first verified
+  candidate. The result dictionary gains `policy`, `preflight_level`, `guard`, `preflight` (status, level, reason,
+  minima per candidate), `skipped_candidates`, `design_seeds` and `execution`; `feasibility` keeps its keys and now
+  carries the preflight status. The same experiment can therefore receive a different (verified) recommendation than
+  in 1.7.0 — by design, for the ten regression cases of the review.
+- **The 1.7.0 bundles still load** (`qemx-rec-1.7.0`, `qemx-rec-1.7.0-deployable`): their feature definitions and
+  snapshots are recognized by the recorded 1.7.0 fingerprints. A bundle whose feature definitions, protocol
+  definitions or normalization differ from the code is refused (`BundleIncompatible`); a different calibration of a
+  known device is a transfer, reported as out-of-distribution. New bundles: `qemx-rec-1.8.0` (the frozen 1.8.0
+  configuration) and `qemx-rec-1.8.0-deployable` (deployable features; the default in the UI and the CLI).
+- **Labels of new studies** use seed scheme 2 (`learning_designs: {…, seed_scheme: 2, crn: task|base}`): preparation
+  and trial streams come from stable identifiers instead of a per-study seed pool. A configuration without
+  `seed_scheme` keeps scheme 1 and reproduces 1.7.0 bitwise; its digests are unchanged. A run refuses to mix schemes.
+- **Label summaries** add `var_deploy_{sel,eval}` (the random-effects variance of one fresh deployment; finding F5);
+  `var_*` keeps its pooled meaning. Summaries of policies add `p_severe_vs_raw`, `p_severe_abs`, `q95_risk` and
+  `worst5_loss_share`. Re-run `analyze` on an existing run to obtain them; labels are not affected.
+- **JSON written by 1.8.0 is strict**: unavailable or unbounded numbers are `null` with a `"$nonfinite"` map of JSON
+  pointers; `qemx.textio.read_json` restores them. 1.7.0 files with `NaN` tokens remain readable. External tools that
+  read 1.8.0 JSON directly see `null`, never a bare `NaN`.
+- **Collection** checks every record's task id, label configuration, run id (or a recorded import) and arrays
+  digest; mismatch labels carry their run id. 1.6/1.7 records without a run id are accepted only as
+  `legacy_unbound` evidence in their own (legacy) runs.
+
+What is new:
+
+- 17 candidates (`portfolio-1.8`; `python -m qemx.selection registry --markdown`); the 1.6/1.7 eight remain
+  `portfolio-1.6` with unchanged identities. A configuration without `protocols` still uses portfolio-1.6.
+- `python -m qemx.selection registry`, `scripts/replay_confirmation.py`, `scripts/portfolio_comparison.py`,
+  `scripts/root_audit.py`, `scripts/replay_v170_confirmation.py`, `python -m qemx.selection.thesis_tables`,
+  `scripts/reproduce_v18.sh`; the four supplementary figures of `qemx/selection/plots18.py`; feature sets
+  `deployable18` and `deployable18+simulated` (the 1.7.0 sets keep their names and meaning).
+- `python -m qemx.selection hardware plan` writes to `runs/hardware_plan` by default (1.7.0 wrote into the shipped
+  `reports/selection_v170/hardware`); it still never submits.
+- `python -m qemx.selection profile` writes the 1.8.0 runtime columns and the early-rejection rows; 1.7.0
+  `runtime.csv` files still draw.
+- `analysis/design_variance.csv` covers every learning candidate of the run's portfolio (with portfolio-1.8: CDR, NIL
+  and FR); for a 1.6/1.7 run (CDR, NIL only) its content is unchanged.
+- `scripts/replay_confirmation.py --bundle-dir DIR` replays bundles from another directory (`scripts/reproduce_v18.sh`
+  builds its bundles inside the run directory and never overwrites the shipped ones).
+- The QEM Performance page lists the 1.8.0 study first; the recommender tab shows the preflight status and level of
+  every candidate, the skipped candidates and the execution note, and the capability record of each candidate.
+- Version metadata has one source: `qemx/__init__.py` (`__version__`); `pyproject.toml` reads it
+  (`[tool.setuptools.dynamic]`), and a test keeps `CITATION.cff`, the README title and the release notes in step.
+
+Nothing to do for an existing installation beyond installing the 1.8.0 lock (`requirements-lock.txt` unchanged in
+content for Python 3.12). Old run directories, bundles, notebooks and exported scripts keep working.
 
 # Part 00 — from 1.6.0 to 1.7.0
 

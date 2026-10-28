@@ -1,0 +1,386 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-24T23:50:18+00:00",
+ "identity": {
+  "stage": "confirm",
+  "labels_config": "e46f901d64d2b7f7",
+  "tasks": "b8437627f5294e8f",
+  "n_tasks": 58,
+  "split": {
+   "final_test_fraction": 0.0,
+   "salt": "qemx-1.6-final",
+   "development": "5ff53db3e8df8beb",
+   "final": "4f53cda18c2baa0c"
+  },
+  "portfolio": "d97de6fc55ac3e22",
+  "devices": {
+   "fake_fez": "4eb21db4db0cca8f",
+   "fake_fez@eng=exact": "6916f73eab2f1fb1",
+   "fake_kyiv": "bbecee3c55ae6c5f",
+   "fake_kyiv@eng=exact": "4f698c1df246ce3d",
+   "fake_torino": "4a415b23c89eb31d",
+   "fake_torino@eng=exact": "7a6f5708518ecbde"
+  }
+ },
+ "identity_digest": "8f20675be7b1652d",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "conf18",
+  "status": "planned",
+  "master_seed": 20261025,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "task"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 1901
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 1911
+      },
+      {
+       "p": 2,
+       "angle_seed": 1912
+      }
+     ],
+     "brickwork": [
+      {
+       "layers": 3,
+       "angle_seed": 1921
+      }
+     ],
+     "ising": [
+      {
+       "steps": 2,
+       "h": 0.75
+      }
+     ]
+    },
+    "inputs": [
+     "default",
+     "plus",
+     "product"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.8,
+       "basis": "Z"
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "z_mid"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 2,
+    "include_default": false
+   },
+   {
+    "widths": [
+     4
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 1.05
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     4,
+     5
+    ],
+    "families": {
+     "qft": [
+      {
+       "s": 7
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     5
+    ],
+    "families": {
+     "bv": [
+      {
+       "secret": 9
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3
+    ],
+    "families": {
+     "grover": [
+      {
+       "k": 1,
+       "marked": 1
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   }
+  ],
+  "limits": {
+   "task_seconds": 5400,
+   "memory_gb": 3
+  }
+ },
+ "manifest": [
+  "0254722b03d3f0c284db",
+  "0261aeb67640abf4c519",
+  "04abb47752256c7ff03e",
+  "0833478f22897b9a7195",
+  "0dc29dd405826c2a3b6d",
+  "0fc15aed6c07a6595534",
+  "17b3ed35c424409e800a",
+  "20895377405c437bb8e4",
+  "23a0c60a93a260eefd47",
+  "2b03a579397fcfec8d02",
+  "2c3b33c3ecc6550a4c7c",
+  "2ed368787fde1a132a20",
+  "30bd09405ae542df79bf",
+  "31abd1f4eb3837a317a3",
+  "39a8ae2c812ef94e7436",
+  "4723ae5cd09c5bc3a5b8",
+  "4795218f829a7f0df1f2",
+  "47c1725fea7f2b325c16",
+  "4d34fda6be5fcd4f1ace",
+  "53f5ac8b2bf91d82e008",
+  "59795cf7ff8131be1e3e",
+  "5c9da5e4c3e9d3492c7b",
+  "5cd9d87a71fe4881a261",
+  "662861d9915c6ba26bb9",
+  "70cdeec9b112449fde78",
+  "742098ac3df7ff01cd27",
+  "7581017b4325e08d5b86",
+  "7a86502c1130cb7fe86d",
+  "7bb9d9343155c8148151",
+  "7f230c5ab89e5883f253",
+  "81f3e840db353b9ffc1d",
+  "83757ab857070a578111",
+  "95737e5e0fe5ec3acbec",
+  "95caca1b96ff968deb4b",
+  "97bdd822183f00b4d82b",
+  "9ca2d18adea2f3bf00b0",
+  "a48134c919f454154d58",
+  "a501118adc3233a4ece9",
+  "a95246e3e9bf1dad7c78",
+  "aa459b45502ec0c607ba",
+  "ae91c1684e3d283099ab",
+  "b16ab106ebfd01bf4ac1",
+  "b39d5cd80355f3d675ad",
+  "b79384b8e92589159a8f",
+  "b909d613c2864a8d4704",
+  "beaaaae6f4452d45b201",
+  "c4a4b7fc1b38af778c21",
+  "cb5a46cc8a15f8fc2f2c",
+  "cdd812a928b28ae0b919",
+  "d06a4aeb6296402bd9f9",
+  "d0980d00d785b10e8ec8",
+  "dc642a63680cd0779b9b",
+  "e164ed491bf88c1c36ad",
+  "e453f446a41d334cbf03",
+  "ea31e76f353323c42371",
+  "f25c490a128ed5ccd69b",
+  "f549c37c9a83e4e69af6",
+  "fa06468a2fc87a7a9c1e"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-24T23:50:18+00:00",
+   "execution": {
+    "code": "dd5f959ad5a51d62",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  }
+ ],
+ "imports": []
+}

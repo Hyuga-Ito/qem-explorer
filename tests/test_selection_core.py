@@ -47,7 +47,8 @@ def test_ideal_value_agrees_with_the_method_context(ghz3):
 @pytest.mark.parametrize("B", PR.BUDGETS)
 def test_every_feasible_allocation_spends_exactly_the_budget_in_integers(ghz3, B):
     _, prep = ghz3
-    for key, pr in PR.PORTFOLIO.items():
+    for key in PR.PORTFOLIO_16:                       # the expanded portfolio: tests/test_registry.py
+        pr = PR.PORTFOLIO[key]
         a = PR.allocate(pr, prep.supplied[key], B)
         if not a.feasible:
             assert a.reason

@@ -55,9 +55,17 @@ def support() -> dict:
             rlimit = hasattr(resource, "RLIMIT_AS")
         except ImportError:                          # pragma: no cover
             rlimit = False
+    view = process_view_consistent()
+    watchdog = watchdog and view
     return dict(platform=os.name, timeout="parent-enforced wall clock (all platforms)",
+                threads_per_worker={k: os.environ.get(k, "1 (set at start)") for k in THREAD_VARIABLES},
+                parent_watch="multiprocessing parent sentinel (no PID lookup)",
+                process_view=("consistent" if view else
+                              "INCONSISTENT: psutil does not see this process as the operating system reports it "
+                              "(e.g. a PID namespace); the resident-memory watchdog and process-tree stopping are "
+                              "off, the time limit and the parent sentinel are unaffected"),
                 memory_watchdog=watchdog, child_address_space_limit=rlimit,
-                memory="%s%s" % ("resident-memory watchdog (psutil)" if watchdog else "no memory limit",
+                memory="%s%s" % ("resident-memory watchdog (psutil)" if watchdog else "no resident-memory watchdog",
                                  " + child address-space limit (RLIMIT_AS)" if rlimit else ""))
 
 
@@ -82,7 +90,58 @@ class Outcome:
     extra: dict = field(default_factory=dict)
 
 
-def _child_main(target: str, args: tuple, memory_bytes: int, conn) -> None:   # pragma: no cover - runs in the child
+def process_view_consistent() -> bool:
+    """Whether ``psutil`` sees this process as the operating system reports it to us (1.9.1; independent review F5).
+
+    In some sandboxes ``os.getpid()``/``os.getppid()`` are PIDs of a private PID namespace while ``psutil`` reads a
+    ``/proc`` of another namespace: the same number can then name no process or an unrelated one. Process inspection
+    (memory watchdog, process-tree stopping, zombie checks) is used only when this check passes; otherwise the
+    supervisor relies on mechanisms that do not depend on PID views (the parent sentinel, ``Process.terminate/kill``,
+    ``RLIMIT_AS``) and says so in ``support()``."""
+    global _VIEW
+    if _VIEW is None:
+        try:
+            import psutil
+            me = psutil.Process(os.getpid())
+            ok = True
+            if sys.platform.startswith("linux"):     # PID namespaces: /proc/self names this process in the PID view
+                ok = int(os.readlink("/proc/self")) == os.getpid()      # of /proc, which psutil reads
+            if ok and os.name == "posix":            # (macOS: no namespaces; its framework builds run the
+                ok = me.ppid() == os.getppid()       # interpreter under another path than sys.executable, so no
+            _VIEW = bool(ok)                         # path comparison; Windows: one PID view)
+        except Exception:                            # noqa: BLE001 - not visible, or access denied
+            _VIEW = False
+    return _VIEW
+
+
+_VIEW = None
+
+
+def _watch_parent(ppid: int = 0) -> None:   # pragma: no cover - runs in the child
+    """A child whose supervising parent ended (SIGKILL, a closed console) ends itself immediately instead of running on
+    and writing a record nobody supervises (1.9.0). 1.9.1 (independent review F5): liveness comes from the parent
+    *sentinel* that ``multiprocessing`` gives every child — a pipe whose write end only the parent holds (POSIX) or a
+    handle on the parent process (Windows) — which becomes ready exactly when the parent ends. It does not compare PID
+    numbers, so it is correct in PID namespaces, where 1.9.0's ``getppid``/``psutil`` check killed live workers."""
+    import multiprocessing as mp
+    parent = mp.parent_process()
+    if parent is not None:
+        def wait_for_parent():
+            parent.join()                            # blocks until the sentinel is ready: the parent has ended
+            os._exit(70)
+        threading.Thread(target=wait_for_parent, daemon=True, name="qemx-parent-watch").start()
+        return
+    if os.name == "posix" and ppid:                  # not started by multiprocessing: re-parenting, no PID lookup
+        def poll():
+            while True:
+                time.sleep(1.0)
+                if os.getppid() != ppid:
+                    os._exit(70)
+        threading.Thread(target=poll, daemon=True, name="qemx-parent-watch").start()
+
+
+def _child_main(target: str, args: tuple, memory_bytes: int, conn, ppid: int = 0) -> None:   # pragma: no cover
+    _watch_parent(int(ppid or 0))
     if memory_bytes and os.name == "posix":
         try:
             import resource
@@ -102,6 +161,8 @@ def _child_main(target: str, args: tuple, memory_bytes: int, conn) -> None:   # 
 
 
 def _tree_rss(pid: int) -> int:
+    if not process_view_consistent():                # another PID view: the number may name an unrelated process
+        return 0
     try:
         import psutil
         p = psutil.Process(pid)
@@ -117,15 +178,16 @@ def _tree_rss(pid: int) -> int:
 
 
 def _stop(proc) -> None:
-    try:
-        import psutil
-        for c in psutil.Process(proc.pid).children(recursive=True):
-            try:
-                c.kill()
-            except psutil.Error:
-                pass
-    except Exception:                                # noqa: BLE001
-        pass
+    if process_view_consistent():                    # descendants first (only when the PID view is our own)
+        try:
+            import psutil
+            for c in psutil.Process(proc.pid).children(recursive=True):
+                try:
+                    c.kill()
+                except psutil.Error:
+                    pass
+        except Exception:                            # noqa: BLE001
+            pass
     proc.terminate()
     proc.join(KILL_GRACE_SECONDS)
     if proc.is_alive():
@@ -154,22 +216,65 @@ def _isolated_main():
                 sys.modules.pop("__main__", None)
 
 
-def run_jobs(jobs, workers: int = 1, on_done=None) -> list:
+THREAD_VARIABLES = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def child_environment() -> dict:
+    """1.9.0: one numerical thread per child unless the user set these variables: several workers with all-core BLAS
+    each oversubscribe the computer, and reductions can depend on the thread count. Applied to ``os.environ`` (inherited
+    by every child at start); returns what was set."""
+    out = {}
+    for k in THREAD_VARIABLES:
+        if k not in os.environ:
+            os.environ[k] = "1"
+            out[k] = "1"
+    return out
+
+
+def run_jobs(jobs, workers: int = 1, on_done=None, admit=None, on_interrupt=None) -> list:
     """Run ``jobs`` (``Job``) in supervised child processes, at most ``workers`` at a time; returns the
-    ``Outcome`` of every job (completion order). ``on_done(outcome)`` is called as each finishes."""
+    ``Outcome`` of every job (completion order). ``on_done(outcome)`` is called as each finishes.
+
+    ``admit(running_seconds)`` (1.9.0): asked before each job starts with the summed elapsed seconds of the jobs
+    running now; when it returns False no further job starts (the running ones finish and are reported; the jobs never
+    started are not in the result) — a checkpoint-safe stop for whole-run ceilings (``resources.Ceilings``).
+    ``on_interrupt(key, seconds)`` (1.9.1): called for every job still running when the parent is interrupted (Ctrl+C,
+    SIGTERM, an error), after the job was stopped, with its elapsed seconds (resource accounting)."""
     import multiprocessing as mp
     from multiprocessing.connection import wait
     ctx = mp.get_context("spawn")
+    child_environment()
     pending = list(jobs)
     running = {}
     done = []
     workers = max(1, int(workers))
+    try:
+        return _loop(ctx, pending, running, done, workers, on_done, admit)
+    finally:                                         # 1.9.0: an interrupted parent stops its children
+        for st in list(running.values()):
+            try:
+                if st["proc"].is_alive():
+                    _stop(st["proc"])
+            except Exception:                        # noqa: BLE001
+                pass
+            if on_interrupt is not None:
+                try:
+                    on_interrupt(st["job"].key, time.monotonic() - st["t0"])
+                except Exception:                    # noqa: BLE001 - accounting must not mask the interruption
+                    pass
+
+
+def _loop(ctx, pending, running, done, workers, on_done, admit) -> list:
+    from multiprocessing.connection import wait
     while pending or running:
         while pending and len(running) < workers:
+            if admit is not None and not admit(sum(time.monotonic() - st["t0"] for st in running.values())):
+                pending = []
+                break
             job = pending.pop(0)
             r, w = ctx.Pipe(duplex=False)
-            p = ctx.Process(target=_child_main, args=(job.target, tuple(job.args), int(job.memory_bytes or 0), w),
-                            daemon=True)
+            p = ctx.Process(target=_child_main, args=(job.target, tuple(job.args), int(job.memory_bytes or 0), w,
+                                                      os.getpid()), daemon=True)
             with _isolated_main():
                 p.start()
             w.close()

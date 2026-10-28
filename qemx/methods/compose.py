@@ -262,12 +262,23 @@ class Chain(QEMMethod):
             return optimal_integer_split(w, N)[1] if np.isfinite(w).all() and w.sum() > 0 else \
                 largest_remainder_split(alloc, N)
 
-        def sampler(N, B, rng):
+        def sampler(N, B, rng, theta=None, split=None, with_failures=False):
+            """B estimates at N target shots. 1.8.0: ``theta`` — one finite calibration draw per replicate, shared
+            by every fold (inner samplers that accept it); ``split`` — the integer shots per fold of a deployable
+            allocation; ``with_failures`` — also return the primary-fit failures (as the ZNE estimator does)."""
             N = int(N)
             if N < len(rs):
-                return np.full(int(B), np.nan)
-            Ej = np.stack([np.asarray(r.sampler(int(nj), int(B), rng), float) for r, nj in zip(rs, split_of(N))], 1)
-            return extrapolate_many(rule, lams, Ej, on_fail)[0]
+                nan = np.full(int(B), np.nan)
+                return (nan, np.ones(int(B), bool)) if with_failures else nan
+            Nj = split_of(N) if split is None else [int(x) for x in split]
+            if split is not None and (len(Nj) != len(rs) or sum(Nj) != N or min(Nj) < 1):
+                raise ValueError("split: %d positive integers summing to N = %d expected" % (len(rs), N))
+            Ej = np.stack([np.asarray(r.sampler(int(nj), int(B), rng) if theta is None else
+                                      r.sampler(int(nj), int(B), rng, theta=theta), float)
+                           for r, nj in zip(rs, Nj)], 1)
+            est_, failed = extrapolate_many(rule, lams, Ej, on_fail)
+            return (est_, failed) if with_failures else est_
+        sampler.inner = rs                              # 1.8.0: the fold results, for independent references
 
         from ..stats import TARGET_BLOCK_BYTES, is_measured, moment_grid
         target_sampler, grid, contract = None, None, {}
@@ -306,7 +317,8 @@ class Chain(QEMMethod):
                          subset=subset if folding == "local" else None,
                          depths=[int(sp.depth()) for sp in specs], twoq=[int(sp.count("2q")) for sp in specs],
                          accept=[float(r.accept) for r in rs], inner_gamma=[float(r.gamma) for r in rs],
-                         on_fail=on_fail if nonlinear else None, reference_rule=rule_ref, target_moments=grid),
+                         on_fail=on_fail if nonlinear else None, reference_rule=rule_ref, target_moments=grid,
+                         split_weights=[float(x) for x in w], n_circuits=len(rs)),
             notes=notes, sampler=sampler, target_sampler=target_sampler, **contract)
 
     # ------------------------------------------------------------------ outer: CDR / NIL

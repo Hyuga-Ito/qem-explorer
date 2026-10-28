@@ -72,8 +72,12 @@ def save(reg: dict, path: str = DEFAULT_PATH) -> None:
     TX.write_json(path, reg, indent=1, sort_keys=True)
 
 
-def register(reg: dict, study: str, role: str, specs, note: str = "") -> dict:
-    """Add a study's logical circuits with a role (idempotent: a circuit/study pair is listed once)."""
+def register(reg: dict, study: str, role: str, specs, note: str = "", post_hoc_of=()) -> dict:
+    """Add a study's logical circuits with a role (idempotent: a circuit/study pair is listed once).
+
+    ``post_hoc_of`` (1.8.0): confirmation studies whose circuits this study reuses *after* their once-only evaluation
+    (e.g. an audit of their regression cases). Declared explicitly, it is recorded in the study entry; such a reuse is
+    not an overlap of that confirmation (it cannot have influenced it), but it is an overlap for every later study."""
     if role not in ROLES:
         raise ValueError("role must be one of %s" % ", ".join(ROLES))
     circ = reg.setdefault("circuits", {})
@@ -91,17 +95,23 @@ def register(reg: dict, study: str, role: str, specs, note: str = "") -> dict:
                     u["role"] = role
     reg.setdefault("studies", {})[study] = dict(role=role, logical_circuits=len(seen), note=note,
                                                 registered=str(date.today()))
+    if post_hoc_of:
+        reg["studies"][study]["post_hoc_of"] = sorted(str(x) for x in post_hoc_of)
     return reg
 
 
 def overlap(reg: dict, specs, exclude_study: str | None = None) -> dict:
     """{role: sorted logical ids} of a configuration's circuits already in the registry (other studies)."""
     out = {}
+    me = str(exclude_study).split("/")[0] if exclude_study is not None else None
+    studies = reg.get("studies", {})
     for s in specs:
         lid = logical_id(s)
         for u in reg.get("circuits", {}).get(lid, {}).get("uses", []):
-            if exclude_study is None or u["study"].split("/")[0] != str(exclude_study).split("/")[0]:
-                out.setdefault(u["role"], set()).add(lid)
+            other = u["study"].split("/")[0]
+            if me is not None and (other == me or me in studies.get(u["study"], {}).get("post_hoc_of", [])):
+                continue                     # the study itself, or a declared post-hoc reuse of its circuits
+            out.setdefault(u["role"], set()).add(lid)
     return {k: sorted(v) for k, v in out.items()}
 
 

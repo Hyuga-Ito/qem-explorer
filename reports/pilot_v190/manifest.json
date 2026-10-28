@@ -1,0 +1,1346 @@
+{
+ "schema": "qemx.selection.manifest/2",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "pilot19",
+  "status": "planned",
+  "expansion_policy": "explicit",
+  "master_seed": 20261102,
+  "R": 24,
+  "budgets": [
+   1000,
+   30000,
+   1000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 3,
+   "seed_scheme": 2,
+   "crn": "task"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     3,
+     4,
+     5
+    ],
+    "families": {
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 1911
+      },
+      {
+       "layers": 3,
+       "angle_seed": 1914
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 1912
+      },
+      {
+       "p": 2,
+       "angle_seed": 1915
+      }
+     ],
+     "ising": [
+      {
+       "steps": 2,
+       "h": 0.63
+      },
+      {
+       "steps": 1,
+       "h": 0.87
+      }
+     ],
+     "brickwork": [
+      {
+       "layers": 2,
+       "angle_seed": 1913
+      },
+      {
+       "layers": 3,
+       "angle_seed": 1916
+      }
+     ]
+    },
+    "inputs": [
+     "default",
+     "plus",
+     "product"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv",
+     "fake_fez@s=0.5",
+     "fake_fez@s=2",
+     "fake_torino@g2=2",
+     "fake_kyiv@t=2",
+     "fake_fez@ro=2"
+    ],
+    "include_default": false,
+    "variants_per_base": 2
+   },
+   {
+    "widths": [
+     3,
+     4,
+     5
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.75,
+       "basis": "Z"
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "z_mid"
+    ],
+    "layouts": [
+     "best"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino@g2=2",
+     "fake_kyiv@t=2"
+    ],
+    "include_default": false,
+    "variants_per_base": 2
+   }
+  ],
+  "limits": {
+   "task_seconds": 3600,
+   "memory_gb": 3,
+   "cpu_hours": 6,
+   "disk_gb": 2,
+   "min_free_disk_gb": 2
+  },
+  "analysis": {
+   "splits": [
+    "same-distribution",
+    "noise",
+    "device-base",
+    "joint"
+   ],
+   "split_options": {
+    "same-distribution": {
+     "k": 5
+    },
+    "noise": {
+     "k": 3
+    },
+    "device-base": {
+     "k": 3
+    },
+    "joint": {
+     "test_family": "hea",
+     "test_noise": "g2=2"
+    }
+   },
+   "feature_sets": [
+    "size_budget",
+    "deployable18",
+    "deployable18+simulated"
+   ],
+   "model_families": [
+    "ridge",
+    "enet",
+    "hgb",
+    "struct"
+   ],
+   "abstain_family": "hgb",
+   "abstain_set": "deployable18",
+   "ablation_set": "deployable18",
+   "other_split_sets": [
+    "size_budget",
+    "deployable18"
+   ],
+   "other_split_families": [
+    "ridge",
+    "hgb"
+   ],
+   "bootstrap": 500,
+   "lc_repeats": 2,
+   "extras": [
+    "design_diagnostics",
+    "learning_curve"
+   ]
+  }
+ },
+ "development": [
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1911
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "hea",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1914
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "product",
+   "observable": "default",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "product",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "product",
+   "observable": "default",
+   "device": "fake_fez@ro=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1912
+    ],
+    [
+     "p",
+     1
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "qaoa",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1915
+    ],
+    [
+     "p",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 3,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "z_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "product",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 4,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "zz_mid",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.63
+    ],
+    [
+     "steps",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_fez@s=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@ro=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ising",
+   "n": 5,
+   "params": [
+    [
+     "h",
+     0.87
+    ],
+    [
+     "steps",
+     1
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez@ro=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "z_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 3,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "default",
+   "device": "fake_torino",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "zz_mid",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_kyiv",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 4,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "default",
+   "observable": "default",
+   "device": "fake_fez@ro=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1913
+    ],
+    [
+     "layers",
+     2
+    ]
+   ],
+   "inputs": "product",
+   "observable": "z_mid",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "plus",
+   "observable": "z_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "brickwork",
+   "n": 5,
+   "params": [
+    [
+     "angle_seed",
+     1916
+    ],
+    [
+     "layers",
+     3
+    ]
+   ],
+   "inputs": "default",
+   "observable": "zz_mid",
+   "device": "fake_fez@s=0.5",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 3,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 3,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_kyiv@t=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 4,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 5,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_torino@g2=2",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  },
+  {
+   "family": "ghz",
+   "n": 5,
+   "params": [
+    [
+     "basis",
+     "Z"
+    ],
+    [
+     "theta",
+     0.75
+    ]
+   ],
+   "inputs": "default",
+   "observable": "z_mid",
+   "device": "fake_fez",
+   "layout": "best",
+   "opt_level": 1,
+   "seed": 11,
+   "truth": ""
+  }
+ ],
+ "final": [],
+ "run_identity": "ba37652708958c4f"
+}

@@ -1,0 +1,122 @@
+{
+ "schema": "qemx.selection.results/1",
+ "protocols": [
+  "RAW",
+  "RO",
+  "ZNE-L",
+  "ZNE-R",
+  "ZNE-E",
+  "PEC",
+  "CDR",
+  "NIL",
+  "RO-TREX",
+  "RO-TW",
+  "RO-DD",
+  "ZNE-L-TW",
+  "ZNE-E-B",
+  "PEC-TW",
+  "FR",
+  "SV",
+  "ZNE-L∘SV"
+ ],
+ "budgets": [
+  1000,
+  30000,
+  1000000,
+  30000000
+ ],
+ "rows": 216,
+ "tasks": 54,
+ "base_circuits": 27,
+ "design_mode": "fresh",
+ "evaluations": {
+  "same-distribution": {
+   "parts": [
+    "fold 1",
+    "fold 2",
+    "fold 3",
+    "fold 4",
+    "fold 5"
+   ],
+   "summary_csv": "summary_same-distribution.csv",
+   "choices_csv": "choices_same-distribution.csv"
+  },
+  "noise": {
+   "parts": [
+    "noise=g2=2|fold 1",
+    "noise=g2=2|fold 2",
+    "noise=g2=2|fold 3",
+    "noise=native|fold 1",
+    "noise=native|fold 2",
+    "noise=native|fold 3",
+    "noise=ro=2|fold 1",
+    "noise=ro=2|fold 2",
+    "noise=s=0.5|fold 1",
+    "noise=s=0.5|fold 2",
+    "noise=s=0.5|fold 3",
+    "noise=s=2|fold 1",
+    "noise=s=2|fold 2",
+    "noise=s=2|fold 3",
+    "noise=t=2|fold 1",
+    "noise=t=2|fold 2",
+    "noise=t=2|fold 3"
+   ],
+   "summary_csv": "summary_noise.csv",
+   "choices_csv": "choices_noise.csv"
+  },
+  "device-base": {
+   "parts": [
+    "device-base=fake_fez|fold 1",
+    "device-base=fake_fez|fold 2",
+    "device-base=fake_fez|fold 3",
+    "device-base=fake_kyiv|fold 1",
+    "device-base=fake_kyiv|fold 2",
+    "device-base=fake_kyiv|fold 3",
+    "device-base=fake_torino|fold 1",
+    "device-base=fake_torino|fold 2",
+    "device-base=fake_torino|fold 3"
+   ],
+   "summary_csv": "summary_device-base.csv",
+   "choices_csv": "choices_device-base.csv"
+  },
+  "joint": {
+   "parts": [
+    "family=hea&noise=g2=2"
+   ],
+   "summary_csv": "summary_joint.csv",
+   "choices_csv": "choices_joint.csv"
+  }
+ },
+ "identity": {
+  "analysis": "12018e4290565abe",
+  "labels": "6355aeed60864cd6",
+  "data": "11de17abb99f6350",
+  "code": "87fa45932f3380a3"
+ },
+ "data": {
+  "status": "complete",
+  "expected": 54,
+  "completed": 54,
+  "failed": {},
+  "missing": [],
+  "data_digest": "11de17abb99f63503a8422f9d6a77981024e512ae25760b9f4d7b82eb7cd3fd7"
+ },
+ "extras": {
+  "design_diagnostics": {
+   "csv": "design_diagnostics.csv",
+   "seconds": 0.46050180999918666
+  },
+  "learning_curve": {
+   "csv": "learning_curve.csv",
+   "seconds": 232.16120742899875
+  },
+  "deployed": {
+   "csv": null,
+   "seconds": 229.33610099900034
+  },
+  "nested_selective": {
+   "csv": null,
+   "seconds": 959.304231655
+  }
+ }
+}

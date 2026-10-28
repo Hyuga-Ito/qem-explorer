@@ -118,7 +118,7 @@ with tabs[0]:
 
 def legacy_recommender():
     """The 1.5 Direction-A baseline recommender (a different model, data set, candidates and budget definition),
-    kept as a clearly identified legacy pathway during the migration to the 1.7 selection recommender."""
+    kept as a clearly identified legacy pathway beside the selection recommender (1.7.0 on)."""
     if True:
         st.markdown("A **transparent baseline**: one ridge model per method predicts log₁₀ RMSE from features that are "
                     "known before running anything (circuit, observable, noise model, budget). It recommends a "
@@ -261,7 +261,7 @@ with tabs[1]:
         RV.render()
         with st.expander("Legacy 1.5 recommender (Direction A study: another model, data, candidate set and budget "
                          "definition)", icon=":material/history:"):
-            st.caption("Kept during the migration. It is **not** the 1.7 selection recommender above: it predicts "
+            st.caption("Kept during the migration. It is **not** the selection recommender above: it predicts "
                        "RMSE of the 1.5 study's method presets from the Direction A pilot, under that study's cost "
                        "policy.")
             legacy_recommender()
@@ -290,7 +290,8 @@ with tabs[4]:
     if tabs[4].open is not False:
         st.markdown("The study of budget-aware **protocol selection**: complete protocols (calibration, training, "
                     "allocation and failure handling included) compared at equal total budget on emulated "
-                    "fake-device trials, with learned and fixed selection policies. The corrected pilot of 1.7 is "
-                    "listed first; the 1.6 pilot is kept as a historical study.")
+                    "fake-device trials, with learned and fixed selection policies. The newest study (1.8.0: 17 "
+                    "candidates, the deployed policy evaluated in full) is listed first; the corrected pilot of 1.7 "
+                    "and the 1.6 pilot are kept as historical studies.")
         from ui import selection_view as SV
         ok, _ = W.guarded("Reading the selection study", SV.render, REPORTS)

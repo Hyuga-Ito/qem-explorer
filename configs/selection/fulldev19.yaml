@@ -1,0 +1,81 @@
+# Full development study of the next research stage (1.9.0; PLANNED — not executed in 1.9.0). Question: which
+# attainable information enables reliable budget-aware QEM selection beyond SBS-B, and when do missing context or
+# unstable protocols defeat it? Fake-device emulation; hardware on hold.
+#
+# Design (declared before labeling): the expanded registry (17 candidates), fresh designs with seed scheme 2 and
+# independent label halves; common-random-number group = task. Training covers calibration-supplied noise strength
+# and composition — overall scale (s = 0.5, 2), two-qubit gate errors (g2 = 2), relaxation (t = 2), readout (ro = 2)
+# and a coherent fraction (chi = 0.25) — on three base devices, so circuit, device, noise setting and preparation
+# root vary separately. Modifiers change the snapshot the user's calibration shows (no hidden execution-law
+# parameter). Held-out analyses: circuit groups (same-distribution folds over base circuits), noise setting, base
+# device, and joint family × noise. 82 new base circuits (angle seeds 192x–195x, fields 0.4x/0.7x), three variants
+# each sampled from the whole grid (no implicit default variant). Budgets from 10³ to 3·10⁷ shots: a larger budget
+# does not add independent circuits. Cost from the 1.9.0 pilot's measured rates (docs/selection/RESEARCH_PLAN_v19.md).
+schema: qemx.selection.config/1
+name: fulldev19
+status: planned
+expansion_policy: explicit
+master_seed: 20261110
+R: 60
+budgets: [1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000, 30000000]
+learning_designs: {mode: fresh, per_half: 6, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4, 5, 6]
+    families:
+      hea: [{layers: 2, angle_seed: 1921}, {layers: 3, angle_seed: 1922}, {layers: 4, angle_seed: 1923},
+            {layers: 2, angle_seed: 1924}]
+      qaoa: [{p: 1, angle_seed: 1931}, {p: 2, angle_seed: 1932}, {p: 3, angle_seed: 1933}, {p: 1, angle_seed: 1934}]
+      brickwork: [{layers: 2, angle_seed: 1941}, {layers: 3, angle_seed: 1942}, {layers: 4, angle_seed: 1943},
+                  {layers: 3, angle_seed: 1944}]
+      ising: [{steps: 1, h: 0.41}, {steps: 2, h: 0.73}, {steps: 3, h: 0.47}, {steps: 2, h: 0.29}]
+    inputs: [default, plus, product]
+    observables: [default, z_mid, zz_mid, z_all]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=0.5", "fake_torino@s=2", "fake_kyiv@g2=2",
+              "fake_fez@t=2", "fake_torino@ro=2", "fake_fez@chi=0.25"]
+    include_default: false
+    variants_per_base: 3
+  - widths: [3, 4, 5, 6]
+    families:
+      ghz: [{theta: 0.45, basis: Z}, {theta: 1.15, basis: Z}, {theta: 0.85, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=2", "fake_kyiv@t=2", "fake_torino@g2=2"]
+    include_default: false
+    variants_per_base: 3
+  - widths: [4, 5]
+    widths_by_family: {bv: [5, 6]}
+    families:
+      qft: [{s: 9}]
+      bv: [{secret: 13}]
+      grover: [{k: 1, marked: 9}]
+    inputs: [default]
+    observables: [default, z_mid, zz_mid]
+    layouts: [best, alt]
+    devices: [fake_fez, fake_torino, fake_kyiv, "fake_fez@s=2", "fake_kyiv@g2=2", "fake_torino@t=2"]
+    include_default: false
+    variants_per_base: 3
+limits: {task_seconds: 7200, memory_gb: 3, cpu_hours: 60, disk_gb: 20, min_free_disk_gb: 5}
+analysis:
+  splits: [same-distribution, noise, device-base, joint, width, budget-extrap]
+  split_options:
+    same-distribution: {k: 5}
+    noise: {k: 5}
+    device-base: {k: 5}
+    width: {min_test_n: 6}
+    budget-extrap: {max_train_B: 300000}
+  feature_sets: [size_budget, structure, lightcone, deployable18, deployable18+simulated]
+  model_families: [ridge, enet, hgb, mlp, struct]
+  abstain_family: hgb
+  abstain_set: deployable18
+  ablation_set: deployable18+simulated
+  other_split_sets: [size_budget, deployable18]
+  other_split_families: [ridge, hgb, struct]
+  bootstrap: 1000
+  lc_repeats: 3
+  extras: [ablation, learning_curve, deployed, budget_generalization, abstention, nested_selective, interval_coverage,
+           certificates, floor_sensitivity, design_diagnostics]

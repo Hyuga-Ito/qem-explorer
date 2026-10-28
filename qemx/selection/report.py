@@ -3,11 +3,23 @@
 these numbers; regenerate this file after any re-analysis."""
 from __future__ import annotations
 
-import json
 import math
 import os
 
 import numpy as np
+
+from .. import textio as TX
+
+
+def _present(path: str) -> bool:
+    """A table or file exists and is not empty (1.9.0: an analysis that found nothing writes an empty CSV, which
+    pandas cannot read; its section is then left out instead of failing the report)."""
+    if not os.path.exists(path):
+        return False
+    if os.path.isfile(path) and path.endswith(".csv"):
+        with open(path, encoding="utf-8") as f:
+            return bool(f.readline().strip())
+    return True
 
 
 def _md(df, floatfmt="%.3g") -> str:
@@ -55,7 +67,7 @@ def write(run_dir: str, out_path: str) -> str:
     f = lab[lab.feasible].copy()
     f["lg"] = np.log10(f.mse_eval + 1e-6)
     med = f.pivot_table(index="protocol", columns="B", values="lg", aggfunc="median")
-    lines += ["### Median log10 MSE by protocol and budget (evaluation half, feasible tasks)", "",
+    lines += ["### Median log10(MSE + 10⁻⁶) by protocol and budget (evaluation half, feasible tasks)", "",
               _md(med.reset_index().rename(columns={c: "%.0e" % c for c in med.columns if not isinstance(c, str)})),
               ""]
     best = f.loc[f.groupby(["task_id", "B"]).mse_eval.idxmin()]
@@ -67,7 +79,7 @@ def write(run_dir: str, out_path: str) -> str:
     lines += ["### Share of tasks on which each protocol is feasible", "",
               _md(feas.reset_index().rename(columns={c: "%.0e" % c for c in feas.columns if not isinstance(c, str)})),
               ""]
-    pooled = os.path.exists(os.path.join(a, "pooled_same-distribution.csv"))
+    pooled = _present(os.path.join(a, "pooled_same-distribution.csv"))
     s = pd.read_csv(os.path.join(a, ("pooled_%s.csv" if pooled else "summary_%s.csv") % "same-distribution"), encoding="utf-8")
     cols = ["mean_log10_risk", "ci_lo", "ci_hi", "diff_vs_sbs", "diff_lo", "diff_hi", "gap_closed", "gap_lo",
             "gap_hi", "policy_mse", "p_regret_gt_2x", "coverage"]
@@ -104,10 +116,10 @@ def write(run_dir: str, out_path: str) -> str:
             row["best_model_vs_SBS_B"] = _ci(*g.loc[top, ["diff_vs_sbsb", "diff_vs_sbsb_lo", "diff_vs_sbsb_hi"]]) \
                 if top in g.index else "—"
             rows.append(row)
-        lines += ["### Paired difference to SBS by budget (Δ mean log10 MSE; < 0 is better). Best model: `%s` "
+        lines += ["### Paired difference to SBS by budget (Δ mean log10(MSE + 10⁻⁶); < 0 is better). Best model: `%s` "
                   "(selected on these scores)" % top, "", _md(pd.DataFrame(rows)), ""]
     op = os.path.join(a, "optimism.csv")
-    if os.path.exists(op):
+    if _present(op):
         o = pd.read_csv(op, encoding="utf-8")
         ot = pd.DataFrame(dict(split=o.split, reference=o.ref, candidates=o.candidates, naive_best=o.naive_best,
                                naive_diff=o.naive_diff_vs_ref.round(3),
@@ -122,13 +134,13 @@ def write(run_dir: str, out_path: str) -> str:
     gen = []
     for kind in ("same-distribution", "family", "device", "width", "budget-extrap", "budget-interp"):
         pp = os.path.join(a, "pooled_%s.csv" % kind)
-        p = pp if os.path.exists(pp) else os.path.join(a, "summary_%s.csv" % kind)
-        if not os.path.exists(p):
+        p = pp if _present(pp) else os.path.join(a, "summary_%s.csv" % kind)
+        if not _present(p):
             continue
         g = pd.read_csv(p, encoding="utf-8")
         g = g[g.B.astype(str) == "all"]
         parts = len(set(pd.read_csv(os.path.join(a, "summary_%s.csv" % kind), encoding="utf-8").part)) \
-            if os.path.exists(os.path.join(a, "summary_%s.csv" % kind)) else 1
+            if _present(os.path.join(a, "summary_%s.csv" % kind)) else 1
         for pol in sorted(set(g.policy)):
             if pol.startswith("MODEL[") or pol in ("SBS-B", "SIZE-B", "ALL-CANDIDATE"):
                 d = g[g.policy == pol]
@@ -146,7 +158,7 @@ def write(run_dir: str, out_path: str) -> str:
         lines += ["## Generalization (all budgets; test rows of all parts of a split pooled)", "",
                   _md(pd.DataFrame(gen)), ""]
     ab_p = os.path.join(a, "ablation.csv")
-    tuned = os.path.exists(ab_p) and "tuned" in pd.read_csv(ab_p, encoding="utf-8").columns
+    tuned = _present(ab_p) and "tuned" in pd.read_csv(ab_p, encoding="utf-8").columns
     ab_title = ("Feature-group ablation (frozen configuration, every variant retrained and retuned; Δ mean log10 "
                 "regret vs all features, > 0: the group helps)" if tuned else
                 "Feature-group ablation (HGB, fixed setting; Δ vs all features, > 0: the group helps)")
@@ -155,7 +167,7 @@ def write(run_dir: str, out_path: str) -> str:
                         ("abstention", "Abstention (HGB, deployable features, fixed setting)"),
                         ("interval_coverage", "Interval coverage on held-out base circuits (nominal 0.90)")):
         p = os.path.join(a, name + ".csv")
-        if not os.path.exists(p):
+        if not _present(p):
             continue
         d = pd.read_csv(p, encoding="utf-8")
         if name == "interval_coverage":
@@ -167,7 +179,7 @@ def write(run_dir: str, out_path: str) -> str:
         lines += ["## " + title, "", _md(d), ""]
     lines += _deployed_sections(run_dir, a)
     p = os.path.join(a, "certificates.csv")
-    if os.path.exists(p):
+    if _present(p):
         c = pd.read_csv(p, encoding="utf-8")
         col = "radius" if "radius" in c.columns else "halfwidth"
         hb = c[c.method.isin(["hoeffding", "bernstein"])].groupby(["method", "B"]).agg(
@@ -180,21 +192,21 @@ def write(run_dir: str, out_path: str) -> str:
                   "regret / bound = %.3g." % (int(te.holds.sum()), len(te), float(np.nanmedian(
                       te.regret / te.bound.replace(0, np.nan)))), ""]
     mdir = os.path.join(run_dir, "mismatch")
-    if os.path.exists(os.path.join(mdir, "policies.csv")):
+    if _present(os.path.join(mdir, "policies.csv")):
         dg = pd.read_csv(os.path.join(mdir, "diagnostics.csv"), encoding="utf-8")
         po = pd.read_csv(os.path.join(mdir, "policies.csv"), encoding="utf-8")
         t1 = dg.groupby("scenario").agg(flag_rate=("flag_rate", "mean"), z_median=("z_median", "median"),
                                         echo_p_true=("p_true", "mean"), echo_p_sup=("p_sup", "mean")).reset_index()
         t2 = po.pivot_table(index="scenario", columns="policy", values="mean_log10_risk", aggfunc="mean").reset_index()
         lines += ["## Mismatch", "", "### Echo diagnostic per scenario (mean over tasks and budgets)", "", _md(t1), "",
-                  "### Mean log10 MSE per scenario and policy (diagnostic shots charged)", "", _md(t2), ""]
+                  "### Mean log10(MSE + 10⁻⁶) per scenario and policy (diagnostic shots charged)", "", _md(t2), ""]
         nc = os.path.join(mdir, "null_check.csv")
-        if os.path.exists(nc):
+        if _present(nc):
             n = pd.read_csv(nc, encoding="utf-8")
             lines += ["Simulated false-positive rate of the echo test under the finite-shot null: mean %.4f over %d "
                       "settings (α = 0.05)." % (float(n.simulated_false_positive.mean()), len(n)), ""]
     fdir = os.path.join(run_dir, "final")
-    if os.path.exists(os.path.join(fdir, "summary_final.csv")):
+    if _present(os.path.join(fdir, "summary_final.csv")):
         fs = pd.read_csv(os.path.join(fdir, "summary_final.csv"), encoding="utf-8")
         fa = fs[fs.B.astype(str) == "all"]
         tab = pd.DataFrame(dict(policy=fa.policy,
@@ -206,10 +218,10 @@ def write(run_dir: str, out_path: str) -> str:
                                 gap_closed=[_ci(*r, f="%.2f") for r in fa[["gap_closed", "gap_lo", "gap_hi"]].values],
                                 policy_MSE=fa.policy_mse, coverage=fa.coverage))
         mf = os.path.join(fdir, "metrics_final.csv")
-        if os.path.exists(mf):
+        if _present(mf):
             m_ = pd.read_csv(mf, encoding="utf-8")
             tab = _regret_columns(tab, m_[m_.B.astype(str) == "all"])
-        frz = json.load(open(os.path.join(run_dir, "freeze.json"), encoding="utf-8"))
+        frz = TX.read_json(os.path.join(run_dir, "freeze.json"))
         lines += ["## Historical final test (the 1.6.0 final test relabeled with fresh designs, evaluated once with the "
                   "frozen policy `%s`; not confirmatory)" % frz["policy"], "", _md(tab), ""]
     lines += _v170_sections(run_dir)
@@ -224,7 +236,7 @@ def _deployed_sections(run_dir: str, a: str) -> list:
     import pandas as pd
     out = []
     p = os.path.join(a, "family_benefit.csv")
-    if os.path.exists(p):
+    if _present(p):
         f = pd.read_csv(p, encoding="utf-8")
         t = pd.DataFrame(dict(family=f.family, base_circuits=f.base_circuits,
                               diff_log10_mse=[_ci(*r) for r in f[["diff_log", "diff_log_lo", "diff_log_hi"]].values],
@@ -233,7 +245,7 @@ def _deployed_sections(run_dir: str, a: str) -> list:
         out += ["## Paired benefit of the frozen configuration over SBS-B by family (all budgets; < 0 favors the "
                 "frozen configuration)", "", _md(t), ""]
     p = os.path.join(a, "selective_operating.csv")
-    if os.path.exists(p):
+    if _present(p):
         o = pd.read_csv(p, encoding="utf-8").iloc[0]
         fo = pd.read_csv(os.path.join(a, "selective_folds.csv"), encoding="utf-8")
         t = pd.DataFrame([dict(policy="model only (coverage 1)", mean_log10_mse=o.model_log_risk,
@@ -250,14 +262,14 @@ def _deployed_sections(run_dir: str, a: str) -> list:
                 % (", ".join("%s %.3g" % (r.fold, r.tau) for r in fo.itertuples()), o.accepted_log_regret,
                    o.deploy_tau), ""]
     p = os.path.join(a, "calibration.csv")
-    if os.path.exists(p):
+    if _present(p):
         c = pd.read_csv(p, encoding="utf-8")
         t = c.groupby(["kind", "nominal"]).agg(coverage=("coverage", "mean"), fold_min=("coverage", "min"),
                                                fold_max=("coverage", "max"), mean_width=("mean_width", "mean"))
         out += ["## Calibration of the frozen configuration's log-risk intervals (held out; inner-CV residuals)", "",
                 _md(t.round(3).reset_index()), ""]
     p = os.path.join(a, "learning_curve.csv")
-    if os.path.exists(p):
+    if _present(p):
         lc = pd.read_csv(p, encoding="utf-8")
         if "mean_log_regret" in lc.columns:
             t = lc.groupby("train_base_circuits").agg(model=("mean_log_regret", "mean"),
@@ -267,14 +279,14 @@ def _deployed_sections(run_dir: str, a: str) -> list:
                                                       draws=("mean_log_regret", "size"))
             out += ["## Learning curve (mean log10 regret on held-out folds)", "", _md(t.round(3).reset_index()), ""]
     p = os.path.join(a, "budget_generalization.csv")
-    if os.path.exists(p):
+    if _present(p):
         b = pd.read_csv(p, encoding="utf-8")
         t = b.pivot_table(index=["max_train_B", "policy"], columns="B", values="mean_log_regret").round(3)
         t.columns = ["%.0e" % c for c in t.columns]
         out += ["## Budget generalization (mean log10 regret by test budget; training restricted to B ≤ max_train_B)",
                 "", _md(t.reset_index()), ""]
     rc = os.path.join(run_dir, "regimes", "analysis", "regime_cells.csv")
-    if os.path.exists(rc):
+    if _present(rc):
         r = pd.read_csv(rc, encoding="utf-8")
         m = r[(r.observable == "default") & (r.layout == "best")]
         t = m.groupby(["family", "noise_scale"]).agg(
@@ -285,7 +297,7 @@ def _deployed_sections(run_dir: str, a: str) -> list:
         out += ["## Controlled regime study (decision D23; per slice and error scale, all ten budgets)", "", _md(t),
                 ""]
     nc = os.path.join(run_dir, "noisecomp", "analysis", "regime_cells.csv")
-    if os.path.exists(nc):
+    if _present(nc):
         r = pd.read_csv(nc, encoding="utf-8")
         r["noise_change"] = r.noise_change.fillna("none")
         t = r[r.B == 100000][["family", "noise_change", "lam_total", "reference", "runner_up", "unresolved",
@@ -299,7 +311,7 @@ def _deployed_sections(run_dir: str, a: str) -> list:
                                           policy_log_regret=("log_regret_policy", "mean")).round(3).reset_index()
         out += ["### All budgets, per noise change", "", _md(w), ""]
     rt = os.path.join(a, "runtime.csv")
-    if os.path.exists(rt):
+    if _present(rt):
         r = pd.read_csv(rt, encoding="utf-8")
         cols = [c for c in ("compile_s", "deployable_s", "simulated_s", "inference_s", "label_s", "prepare_s",
                             "features_s", "peak_rss_mb") if c in r.columns]
@@ -316,22 +328,22 @@ def _v170_sections(run_dir: str) -> list:
     a = os.path.join(run_dir, "analysis")
     out = []
     p = os.path.join(run_dir, "analysis_estimands", "summary.csv")
-    if os.path.exists(p):
+    if _present(p):
         e = pd.read_csv(p, encoding="utf-8")
         out += ["## 1.6.0 against corrected CDR/NIL labels (same tasks and seeds; evaluation half)", "",
                 _md(e[["protocol", "B", "tasks", "median_mse_old", "median_mse_new", "mean_mse_old", "mean_mse_new",
                        "median_se_ratio", "share_old_outside_new_interval"]].round(5)), ""]
     p = os.path.join(a, "design_variance.csv")
-    if os.path.exists(p):
+    if _present(p):
         out += ["## Learning-design variance of the labels (evaluation half)", "",
                 _md(pd.read_csv(p, encoding="utf-8").round(3)), ""]
     p = os.path.join(a, "failure_profile.csv")
-    if os.path.exists(p):
+    if _present(p):
         f = pd.read_csv(p, encoding="utf-8")
         f = f[f.B.astype(str) == "all"]
         out += ["## Failure profile (all budgets; same-distribution held-out rows)", "", _md(f.round(4)), ""]
     p = os.path.join(a, "nested_summary.csv")
-    if os.path.exists(p):
+    if _present(p):
         n = pd.read_csv(p, encoding="utf-8")
         t = pd.DataFrame(dict(policy=n.policy, coverage=n.coverage.round(3),
                               mse=["%.3g [%.3g, %.3g]" % tuple(r) for r in n[["mse", "mse_lo", "mse_hi"]].values],
@@ -346,14 +358,14 @@ def _v170_sections(run_dir: str) -> list:
                 "Outer folds' τ: %s; deployment τ = %.4g." % (", ".join("%.3g" % x for x in fo.tau),
                                                               float(op.deploy_tau)), ""]
     ds = os.path.join(run_dir, "design_study", "summary.csv")
-    if os.path.exists(ds):
+    if _present(ds):
         d = pd.read_csv(ds, encoding="utf-8")
         cols = [c for c in ("task", "variant", "B", "designs", "mse", "se_design", "median_design_loss",
                             "max_design_loss", "severe_share", "severe_contribution", "fallback_share") if c in d]
         out += ["## Design study (experiment B; design-level losses)", "", _md(d[cols].round(6)), ""]
     cdir = os.path.join(run_dir, "confirm")
     mc = os.path.join(cdir, "metrics_confirm.csv")
-    if os.path.exists(mc):
+    if _present(mc):
         m = pd.read_csv(mc, encoding="utf-8")
         m = m[m.B.astype(str) == "all"]
         t = pd.DataFrame(dict(policy=m.policy, base_circuits=m.base_circuits,

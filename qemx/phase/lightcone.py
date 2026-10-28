@@ -63,6 +63,7 @@ class LambdaReport:
     lc_2q_gates: int
     engine: str
     by_source: dict = field(default_factory=dict)
+    lam_lc_2q: float = 0.0           # 1.8.0: light-cone part from errors of multi-qubit instructions (2q gate errors)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -185,7 +186,7 @@ def calculate_lambda_lc(circuit, noise_model, observable=None, measure_map: dict
         elif ins.source == "idle" and not started.issuperset(ins.qubits):
             leading.add(i)
     S = set(support)
-    lam_lc = lam_ex = lam_tot = lam_gate = lam_idle = 0.0
+    lam_lc = lam_ex = lam_tot = lam_gate = lam_idle = lam_2q = 0.0
     n_lc = n_tot = lc_g = lc_2q = 0
     by = {}
     for i in range(len(instr) - 1, -1, -1):
@@ -223,8 +224,10 @@ def calculate_lambda_lc(circuit, noise_model, observable=None, measure_map: dict
                 lam_idle += pf_lc
             else:
                 lam_gate += pf_lc
+                if len(qs) >= 2:
+                    lam_2q += pf_lc
         if touches and len(qs) >= 2:
             S.update(qs)
     lam_ro = float(sum(ro[q] for q in support))
     return LambdaReport(lam_lc, lam_ex, lam_tot, lam_ro, lam_gate, lam_idle, n_lc, n_tot, tuple(support),
-                        tuple(sorted(S)), lc_g, lc_2q, engine, by)
+                        tuple(sorted(S)), lc_g, lc_2q, engine, by, lam_2q)

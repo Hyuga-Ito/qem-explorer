@@ -1,0 +1,44 @@
+# Plotting configuration of the 1.8.0 protocol-selection figures (runs/v18 → reports/selection_v180; versioned; read
+# by qemx.selection.plots with --plot-config). Same panel specifications as configs/selection/figures.yaml (1.7.0,
+# which stays the configuration of reports/selection_v170); only the configuration names follow the 1.8.0 feature
+# sets (deployable18, deployable18+simulated) and the bias–variance panel adds the two new readout-twirl and
+# bounded-ZNE candidates. Every choice below was fixed before the figures were drawn from the final analysis tables
+# (after the freeze, which names the 'frozen' policy); changing it changes the figures, not the analysis. Units: budgets in shots, MSE of observables normalized to ‖O‖∞ ≤ 1, regret as defined in
+# docs/selection/FIGURES.md.
+schema: qemx.selection.figures/1
+release: "1.8.0"
+version: 3                     # 1.8.0: 1.8 feature-set names; 17-candidate portfolio
+weights: base_circuit          # each independent base circuit weighs the same; its variants are averaged first
+policies:                      # Figure 1 curves (role → policy); "frozen" = the configuration in freeze.json
+  raw: RAW
+  fixed: SBS
+  budget_fixed: SBS-B
+  linear: "MODEL[ridge|deployable18+simulated]"   # ridge on the simulator-feature set of 1.8.0
+  nonlinear: frozen
+  nonlinear_abstain: frozen+abstain               # the frozen model with the validation-chosen abstention threshold
+regret_profile:
+  budgets: {low: 1000, medium: 100000, high: 10000000}
+  tolerance_min: 1.0e-8
+  tolerance_max: 1.0e-1
+families_order: [qft, ghz, ising, brickwork, grover, bv, hea, qaoa]
+regime:
+  slices: [ising, hea, qaoa]
+  min_trials: 30                # cells with fewer trials per candidate are drawn white (insufficient data)
+observable_panel: {family: ising, budget: 100000, device: fake_fez, layout: best}
+noise_panel: {family: ising, budget: 100000, layout: best, observable: default}
+noise_composition_panel: {budget: 100000, families: [ising, hea, qaoa]}
+generalization:
+  rows: [same-distribution, family, device, width]
+  columns: {reference: SBS-B, simple: SIZE-B, linear: "MODEL[ridge|deployable18]",
+            structured: "MODEL[struct|deployable18]", nonlinear: "MODEL[hgb|deployable18]"}
+budget_generalization: {policies: [SBS-B, "MODEL[ridge|deployable18]", "MODEL[struct|deployable18]",
+                                   "MODEL[hgb|deployable18]"]}
+mismatch:
+  budgets: [1000, 100000, 10000000]
+  facets:
+    coherent: {label: "coherent fraction χ", points: {none: 0.0, coherent-0.25: 0.25, coherent-0.5: 0.5}}
+    crosstalk: {label: "ZZ crosstalk angle θ (rad)", points: {none: 0.0, crosstalk-0.02: 0.02, crosstalk-0.05: 0.05}}
+    drift: {label: "error-rate drift factor s", points: {none: 1.0, drift-1.5: 1.5, drift-2: 2.0}}
+mse_targets: [1.0e-4, 1.0e-5, 1.0e-6]
+bias_variance: {protocols: [RAW, RO, ZNE-L, PEC, CDR, RO-TW, ZNE-E-B], noise_scale: 1.0}
+representative: {budget: 100000}

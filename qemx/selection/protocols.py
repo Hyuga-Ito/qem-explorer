@@ -41,6 +41,17 @@ CAL_MIN = 1                     # shots per readout-calibration circuit at least
 TRAIN_MIN = 32                  # shots per training circuit at least (learning protocols)
 
 
+DECLARED = "declared"             # a parameter resolved from the task's declared structure (symmetry checks)
+POST = {"": "none",
+        "clip-observable-range": "the estimate is projected onto the observable's eigenvalue range [min o, max o] "
+                                 "(known without the ideal value; never farther from μ, which lies in that range)"}
+
+
+class NotApplicable(ValueError):
+    """A candidate whose preconditions the task does not meet (e.g. symmetry verification without a declared
+    symmetry): infeasible for that task, with the reason — not a method failure."""
+
+
 @dataclass(frozen=True)
 class Protocol:
     key: str
@@ -49,19 +60,89 @@ class Protocol:
     params: tuple = ()
     train_fraction: float = 0.0          # learning: share of B spent on training circuits (declared)
     description: str = ""
+    twirl: str = "none"                  # 1.8.0: circuit transforms of the recipe (Pauli twirling, DD)
+    dd: str = "none"
+    post: str = ""                       # 1.8.0: declared post-processing of the estimate (POST)
+    crn_with: str = ""                   # 1.8.0: label trials share this candidate's random streams (declared common
+    #                                      random numbers, e.g. ZNE-E-B = projection of the very same ZNE-E trials)
 
-    def recipe(self):
+    def recipe(self, spec=None):
+        """The method recipe. Parameters given as DECLARED are resolved from the task ``spec`` (its declared
+        symmetry); without a spec or a declaration the candidate is NotApplicable."""
         from ..methods import Recipe
-        return Recipe.make(self.estimator, readout=self.readout, **dict(self.params))
+        prm = dict(self.params)
+        if any(v == DECLARED for v in prm.values()):
+            sym = None if spec is None else declared_symmetry(spec)
+            if sym is None:
+                raise NotApplicable("%s needs a symmetry declared by the task's construction (none declared)"
+                                    % self.key)
+            prm = {k: (sym.get(k) if v == DECLARED else v) for k, v in prm.items()}
+            prm = {k: v for k, v in prm.items() if v is not None}
+        return Recipe.make(self.estimator, twirl=self.twirl, dd=self.dd, readout=self.readout, **prm)
 
     @property
     def learning(self) -> bool:
         return self.estimator in ("learning", "nil")
 
+    @property
+    def inner(self) -> str:
+        """Chained candidates: the inner estimator ('' otherwise)."""
+        return str(dict(self.params).get("inner", "")) if self.estimator == "chain" else ""
+
+    @property
+    def outer(self) -> str:
+        return str(dict(self.params).get("outer", "")) if self.estimator == "chain" else ""
+
+    @property
+    def postselects(self) -> bool:
+        return self.estimator == "symmetry" or self.inner == "symmetry"
+
+    @property
+    def needs_split(self) -> bool:
+        return self.estimator == "zne" or self.outer == "zne"
+
     def to_json(self) -> dict:
-        return dict(schema=SCHEMA, key=self.key, estimator=self.estimator, readout=self.readout,
-                    params=[list(kv) for kv in self.params], train_fraction=self.train_fraction,
-                    description=self.description)
+        """Identity of the candidate. The 1.8.0 fields appear only when they are not the default, so the eight 1.6/1.7
+        candidates keep their exact definitions (and every digest that contains them)."""
+        d = dict(schema=SCHEMA, key=self.key, estimator=self.estimator, readout=self.readout,
+                 params=[list(kv) for kv in self.params], train_fraction=self.train_fraction,
+                 description=self.description)
+        if self.twirl != "none":
+            d["twirl"] = self.twirl
+        if self.dd != "none":
+            d["dd"] = self.dd
+        if self.post:
+            d["post"] = self.post
+        if self.crn_with:
+            d["crn_with"] = self.crn_with
+        return d
+
+
+def declared_symmetry(spec) -> dict | None:
+    """The Z-parity checks a task's *construction* guarantees (1.8.0), as symmetry-verification parameters, or None.
+    Declared from the circuit family and input alone — never found from the ideal output:
+
+    * GHZ in the Z basis with its own input: RY(θ) on q0 and a CNOT chain from |0…0⟩ give cos(θ/2)|0…0⟩ +
+      sin(θ/2)|1…1⟩, so every adjacent pair has Z_iZ_{i+1} = +1 on the measured bits, for any θ.
+
+    Other families of the study have no declared Z-parity that their measurement basis can check."""
+    sym = getattr(spec, "symmetry", None)              # a deployment task carries its declaration (DeploymentTask)
+    if isinstance(sym, dict):
+        return sym
+    if isinstance(sym, tuple) and sym:
+        q, ev, more = sym
+        return dict(qubits=tuple(q), eigenvalue=int(ev), more=str(more), symmetry_qubits=tuple(q),
+                    symmetry_eigenvalue=int(ev), symmetry_more=str(more))
+    fam = getattr(spec, "family", None)
+    p = dict(getattr(spec, "params", ()) or ())
+    if fam == "ghz" and p.get("basis") == "Z" and getattr(spec, "inputs", "default") == "default":
+        n = int(spec.n)
+        if n < 2:
+            return None
+        more = "; ".join("%d %d" % (i, i + 1) for i in range(1, n - 1))
+        return dict(qubits=(0, 1), eigenvalue=1, more=more, symmetry_qubits=(0, 1), symmetry_eigenvalue=1,
+                    symmetry_more=more)
+    return None
 
 
 def _p(**kw) -> tuple:
@@ -102,7 +183,53 @@ PORTFOLIO = {
                     "Neighbor-informed learning (Chen et al.): weight-1 Pauli neighbors at every position, "
                     "2-design training ensemble, ℓ1-bounded (≤ 2) regression without intercept, equal target split; "
                     "50 % of B on training; tensored readout correction."),
+    # ---- 1.8.0: the expanded portfolio (qemx.selection.registry documents every implemented family and option)
+    "RO-TREX": Protocol("RO-TREX", "raw", "trex", (), 0.0,
+                        "Readout correction by TREX: the measurement is twirled (random X before it, classical flip "
+                        "after; one randomization per shot), each Z string divided by its value on one twirled "
+                        "|0…0⟩ calibration circuit; calibration/target split by the supplied model."),
+    "RO-TW": Protocol("RO-TW", "raw", "tensored", (), 0.0,
+                      "Pauli twirling of the two-qubit gates (one random compilation per shot; gate errors become "
+                      "their Pauli twirl), no estimator, tensored readout correction.", twirl="2q"),
+    "RO-DD": Protocol("RO-DD", "raw", "tensored", (), 0.0,
+                      "Dynamical decoupling (XY4 in idle windows; the pulses carry their gate errors), no estimator, "
+                      "tensored readout correction.", dd="XY4"),
+    "ZNE-L-TW": Protocol("ZNE-L-TW", "zne", "tensored", _p(scales=(1.0, 3.0), folding="global", rule="linear",
+                                                           lam_est="gates"), 0.0,
+                         "ZNE-L on Pauli-twirled two-qubit gates (one random compilation per shot): global folding "
+                         "at λ = 1, 3, linear fit, tensored readout correction, supplied-model split.", twirl="2q"),
+    "ZNE-E-B": Protocol("ZNE-E-B", "zne", "tensored", _p(scales=(1.0, 3.0, 5.0), folding="global", rule="exponential",
+                                                         on_fail="linear", lam_est="gates"), 0.0,
+                        "ZNE-E (λ = 1, 3, 5, exponential fit, linear fallback) followed by a declared projection of "
+                        "the estimate onto the observable's eigenvalue range — a separately named bounded estimator "
+                        "(review finding F7); ZNE-E itself is unchanged. Labels use ZNE-E's random streams (common "
+                        "random numbers), so each ZNE-E-B trial is the projection of the paired ZNE-E trial.",
+                        post="clip-observable-range", crn_with="ZNE-E"),
+    "PEC-TW": Protocol("PEC-TW", "pec", "tensored", _p(construction="inverse", model="depolarizing", scope="all",
+                                                       shots_per_circuit=1), 0.0,
+                       "PEC of the median-rate depolarizing model on Pauli-twirled two-qubit gates (twirling makes "
+                       "the executed gate errors Pauli channels, closer to the cancelled model); one shot per sampled "
+                       "circuit; tensored readout correction.", twirl="2q"),
+    "FR": Protocol("FR", "learning", "tensored", _p(features="fr", model="ols", n_train=16, keep=0,
+                                                    strategy="adaptive"), 0.25,
+                   "Feature regression (this project's CDR extension, not NIL): OLS on ⟨O⟩, every ⟨Z_i⟩ and "
+                   "⟨Z_iZ_j⟩ of 16 near-Clifford training circuits, 25 % of B on training, tensored readout "
+                   "correction; CDR's adaptive training set and fallback."),
+    "SV": Protocol("SV", "symmetry", "tensored", _p(qubits=DECLARED, eigenvalue=DECLARED, more=DECLARED), 0.0,
+                   "Symmetry verification: post-selection on the Z-parity checks the task's construction declares "
+                   "(never inferred from its ideal output), rejected shots counted in B, a repeat with no accepted "
+                   "shot is a nonresponse; tensored readout correction. Applicable only with a declared symmetry."),
+    "ZNE-L∘SV": Protocol("ZNE-L∘SV", "chain", "tensored",
+                         _p(outer="zne", inner="symmetry", zne_scales=(1.0, 3.0), zne_folding="global",
+                            zne_rule="linear", zne_lam_est="gates", symmetry_qubits=DECLARED,
+                            symmetry_eigenvalue=DECLARED, symmetry_more=DECLARED), 0.0,
+                         "Chained: linear ZNE (λ = 1, 3, global folding) whose every folded circuit is "
+                         "symmetry-verified with the task's declared checks (the inner post-selection applies to "
+                         "each fold; its rejected shots are paid per fold); one calibration shared by every fold; "
+                         "tensored readout correction. Applicable only with a declared symmetry."),
 }
+PORTFOLIO_16 = ("RAW", "RO", "ZNE-L", "ZNE-R", "ZNE-E", "PEC", "CDR", "NIL")      # 1.6/1.7, immutable
+PORTFOLIO_18 = PORTFOLIO_16 + ("RO-TREX", "RO-TW", "RO-DD", "ZNE-L-TW", "ZNE-E-B", "PEC-TW", "FR", "SV", "ZNE-L∘SV")
 
 
 # ------------------------------------------------------------------ allocation
@@ -179,7 +306,7 @@ def allocate(protocol: Protocol, supplied, B: int, *, diagnostics: int = 0, sele
     if N < n_min:
         return bad("the target circuits need ≥ %d shots, %d left" % (n_min, N))
     split = ()
-    if protocol.estimator == "zne":
+    if protocol.needs_split:
         w = np.asarray(supplied.details.get("split_weights") or [], float)
         k = int(supplied.details.get("n_circuits") or len(w))
         if len(w) != k or k == 0:

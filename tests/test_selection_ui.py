@@ -6,7 +6,7 @@ import os
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STUDY = next((os.path.join(ROOT, "reports", n) for n in ("selection_v170", "selection_pilot")
+STUDY = next((os.path.join(ROOT, "reports", n) for n in ("selection_v180", "selection_v170", "selection_pilot")
               if os.path.exists(os.path.join(ROOT, "reports", n, "analysis", "results.json"))),
              os.path.join(ROOT, "reports", "selection_pilot"))
 try:
@@ -76,7 +76,10 @@ def test_recommend_tab_uses_the_bundle_and_marks_stale_results(tmp_path, monkeyp
     if not os.path.isdir(os.path.join(STUDY, "dev")):
         pytest.skip("no bundled selection study")
     if not _has_trial_arrays(STUDY):
-        pytest.skip("the study's per-trial arrays are not extracted (trial-data archive, reports/selection_v170)")
+        if os.path.basename(STUDY) in os.environ.get("QEMX_REQUIRE_TRIALS", ""):     # 1.9.0: trial-data workflow
+            pytest.fail("QEMX_REQUIRE_TRIALS names %s but its per-trial arrays are missing" % os.path.basename(STUDY))
+        pytest.skip("the study's per-trial arrays are not extracted (trial-data archives, %s/README.md)"
+                    % os.path.relpath(STUDY, ROOT))
     import numpy as np
     from qemx.selection import dataset as DT
     from qemx.selection import deploy as DP

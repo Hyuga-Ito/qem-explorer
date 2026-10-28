@@ -30,6 +30,17 @@ PROTOCOL_COLORS = {"RAW": "#C8C8C8", "RO": "#E69F00", "ZNE-L": "#56B4E9", "ZNE-R
                    "PEC": "#D55E00", "CDR": "#009E73", "NIL": "#CC79A7"}
 PROTOCOL_MARKERS = {"RAW": "o", "RO": "s", "ZNE-L": "D", "ZNE-R": "^", "ZNE-E": "v", "PEC": "P", "CDR": "X",
                     "NIL": "*"}
+# 1.8.0 candidates. Seventeen categories cannot all keep the ≥ 15 OKLab separation of the eight 1.6/1.7 colours
+# (unchanged above), so the candidates use a composite encoding: colour AND a unique marker, with candidate names on
+# the axes wherever the figure allows. The nine colours were chosen by a max–min search over OKLCh (lightness
+# 0.35–0.79 for contrast on white) given the fixed eight: smallest pairwise ΔE×100 over all 17 colours 10.4 (normal),
+# 7.1 protan, 6.4 deutan, 7.0 tritan (tests/test_selection_eval.py). The first 1.8.0 colours (family hues with a
+# lightness step) failed that check (4.1 normal: ZNE-R against ZNE-E-B) and were replaced before any 1.8.0 figure.
+PROTOCOL_COLORS.update({"RO-TREX": "#7B2004", "RO-TW": "#96BC79", "RO-DD": "#4C6339", "ZNE-L-TW": "#A974F7",
+                        "ZNE-E-B": "#6325A5", "PEC-TW": "#BA1D2A", "FR": "#4C323A", "SV": "#8F4D70",
+                        "ZNE-L∘SV": "#B1389B"})
+PROTOCOL_MARKERS.update({"RO-TREX": "h", "RO-TW": "<", "RO-DD": ">", "ZNE-L-TW": "d", "ZNE-E-B": "1",
+                         "PEC-TW": "p", "FR": "x", "SV": "H", "ZNE-L∘SV": "8"})
 POLICY_STYLE = {"RAW": ("#C8C8C8", "o", ":"), "SBS": ("#E69F00", "s", "--"), "SBS-B": ("#D55E00", "D", "--"),
                 "SIZE-B": ("#CC79A7", "^", "-."), "MODEL": ("#0072B2", "o", "-"),
                 "MODEL+ABSTAIN": ("#009E73", "v", "-"), "ALL-CANDIDATE": ("#000000", "", ":")}
@@ -206,7 +217,7 @@ def supp_coverage_certificates(adir, out_dir) -> dict:
         ax[2].plot([lo, hi], [lo, hi], color="#333333", lw=0.8)
     ax[2].set_xscale("log")
     ax[2].set_yscale("log")
-    ax[2].set_xlabel("2ε (selection-half error, post hoc)")
+    ax[2].set_xlabel("2ε (selection-half error,\npost hoc)")
     ax[2].set_ylabel("realized regret (floor 10$^{-9}$)")
     ax[2].set_title("(c) 2ε: a post-hoc check", loc="left", fontsize=7)
     fig.suptitle(LABEL_SIM, fontsize=6.5, color="#555555")
@@ -226,7 +237,7 @@ def supp_coverage_certificates(adir, out_dir) -> dict:
            "log10: %s. (b) Median radius t of the Hoeffding and empirical-Bernstein bounds (α = 0.05 over the K "
            "feasible protocols) on the clipped squared error (estimates projected onto [−1, 1], H = 4) — a "
            "finite-sample bound for the clipped estimator, not for the unclipped MSE that the study reports; units: "
-           "independent trials, or for CDR and NIL under fresh designs their design means (median units of the "
+           "independent trials, or for the learning candidates (CDR, NIL; FR in 1.8.0) under fresh designs their design means (median units of the "
            "chosen protocol: %s); share of informative bounds (upper bound of the chosen protocol below RAW's lower "
            "bound): %.3f. (c) Realized regret against 2ε with ε the largest selection-half error: a post-hoc check "
            "computed with the evaluation labels, not a certificate; it holds on %.3f of rows (regrets below 10⁻⁹ "

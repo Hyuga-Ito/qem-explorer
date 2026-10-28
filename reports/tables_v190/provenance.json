@@ -1,0 +1,77 @@
+{
+ "generator": "qemx.selection.tables19/1",
+ "sources": {
+  "v18": "reports/selection_v180",
+  "pilot": "reports/pilot_v190",
+  "audit_path": "reports/execution_audit_v190/execution_audit_summary.json"
+ },
+ "tables": {
+  "s1_datasets": {
+   "label": "tab:qem190-datasets",
+   "caption": "Datasets of the 1.8.0 study, the 1.9.0 pilot and the planned 1.9 studies",
+   "sources": [
+    "configs/selection/*.yaml"
+   ]
+  },
+  "s2_candidates": {
+   "label": "tab:qem190-candidates",
+   "caption": "The 17 candidate protocols: applicability and resources",
+   "sources": [
+    "qemx/selection/registry.py"
+   ]
+  },
+  "s3_primary": {
+   "label": "tab:qem190-primary",
+   "caption": "Once-only confirmation of the 1.8.0 policy by budget (full deployed policy − SBS-B)",
+   "sources": [
+    "replay/replay_<bundle>.csv",
+    "confirm/choices_confirm.csv",
+    "confirm/tasks/*.npz"
+   ]
+  },
+  "s4_execution": {
+   "label": "tab:qem190-execution",
+   "caption": "Executed (returned-design) risk against the fresh-design label: joint audit",
+   "sources": [
+    "execution_audit_summary.json"
+   ]
+  },
+  "s5_pilot": {
+   "label": "tab:qem190-pilot",
+   "caption": "The 1.9.0 pilot (exploratory): learned selection against SBS-B by split",
+   "sources": [
+    "analysis/pooled_<split>.csv",
+    "freeze.json"
+   ]
+  },
+  "s6_costs": {
+   "label": "tab:qem190-costs",
+   "caption": "Measured costs: labeling per task (pilot) and the planned development study",
+   "sources": [
+    "dev/tasks/*.json",
+    "plan --measured",
+    "configs/selection/*.yaml"
+   ]
+  }
+ },
+ "figure": "fig_v19_policy_benefit",
+ "made": [
+  "s1_datasets",
+  "s2_candidates",
+  "s3_primary",
+  "s4_execution",
+  "s5_pilot",
+  "s6_costs"
+ ],
+ "skipped": [],
+ "pdf": "tables_v19.pdf",
+ "source_sha256": {
+  "audit_path": "d1db3f27c8048a011ba056e4edabbf9abc1b03efd86cf2696baff289f7659fe8"
+ },
+ "baseline_check": {
+  "source": "refitted on the training labels selection_v180/dev",
+  "rows_checked": 580,
+  "rows": 580
+ },
+ "notes": []
+}

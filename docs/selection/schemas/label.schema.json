@@ -1,6 +1,6 @@
 {
  "$schema": "https://json-schema.org/draft/2020-12/schema",
- "$id": "qemx.selection.labels/1",
+ "$id": "qemx.selection.labels/2",
  "type": "object",
  "required": [
   "schema",
@@ -15,7 +15,10 @@
  ],
  "properties": {
   "schema": {
-   "const": "qemx.selection.labels/1"
+   "enum": [
+    "qemx.selection.labels/1",
+    "qemx.selection.labels/2"
+   ]
   },
   "task_id": {
    "type": "string",
@@ -84,7 +87,7 @@
     },
     "device": {
      "type": "string",
-     "pattern": "^fake_[a-z0-9_]+$"
+     "pattern": "^fake_[a-z0-9_]+(@[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}(,[a-z][a-z0-9]{0,3}=[A-Za-z0-9.+\\-]{1,24}){0,9})?$"
     },
     "layout": {
      "enum": [
@@ -128,7 +131,9 @@
   "status": {
    "enum": [
     "ok",
-    "error"
+    "error",
+    "timeout",
+    "memory"
    ]
   },
   "ideal": {

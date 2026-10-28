@@ -149,6 +149,7 @@ class Symmetry(QEMMethod):
                 est = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
             return (est, freqs) if with_freqs else est
 
+        sampler.direct = dict(run=rr)                # 1.8.0: the executed circuit's law, for independent references
         # budget-dependent protocol moments (qemx/stats.py): the ratio's finite-shot mean has an O(1/N) bias and a
         # repeat without any accepted shot has no estimate (policy: abstain — the moments are then conditional on
         # success and the abstention rate is reported); simulation only (a measured replay is one experiment)

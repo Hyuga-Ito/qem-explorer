@@ -127,12 +127,13 @@ def _circuit_state(c, path="circuit") -> tuple:
         obs = tpl.observable
         ob = (dict(key=obs.key, label=obs.label, tex=obs.tex, values=list(obs.values)) if isinstance(obs, Observable)
               else dict(key=obs.key[:40], label=obs.label, tex=obs.tex, pauli=obs.text))
-        sym = None
+        sym, more = None, ""
         if tpl.symmetry:
             sym = list(tpl.symmetry[0]) + [tpl.symmetry[1]]
+            more = str(tpl.symmetry[2]) if len(tpl.symmetry) > 2 and tpl.symmetry[2] else ""   # 1.9.0: was dropped
         circ = body.to_json()
         circ["template"] = dict(key=key, params=clamped)
-        return circ, ob, bool(tpl.relabel), sym, tokens
+        return circ, ob, bool(tpl.relabel), sym, tokens, more
     if "text" in c:
         try:
             n = int(c["n"])
@@ -144,7 +145,7 @@ def _circuit_state(c, path="circuit") -> tuple:
         from . import observables as OBS
         o = OBS.z(0, n)
         return spec.to_json(), dict(key=o.key, label=o.label, tex=o.tex, values=list(o.values)), False, None, \
-            ["0"] * n
+            ["0"] * n, ""
     raise ExperimentError(path, "give 'template' (with 'params') or 'n' and 'text'")
 
 
@@ -277,7 +278,7 @@ def to_state(doc: dict) -> dict:
     else:
         if "circuit" not in doc:
             raise ExperimentError("circuit", "required (or give 'state')")
-        circ, ob, relabel, sym, tokens = _circuit_state(doc["circuit"])
+        circ, ob, relabel, sym, tokens, sym_more = _circuit_state(doc["circuit"])
         n = int(circ["n"])
         inputs = _inputs_state(doc, tokens, n)
         if "observable" in doc:
@@ -289,7 +290,8 @@ def to_state(doc: dict) -> dict:
         st = dict(app="QEM Explorer", version=__version__, circuit=circ, inputs=inputs,
                   basis=doc.get("basis", "Z" * n), relabel=bool(doc.get("relabel", relabel)),
                   compile=doc.get("compile") or {}, noise=_noise_state(doc.get("noise")), observable=ob,
-                  symmetry=doc.get("symmetry", sym), symmetry_more="",
+                  symmetry=doc.get("symmetry", sym),
+                  symmetry_more=("" if "symmetry" in doc else sym_more),     # 1.9.0: a template's further checks kept
                   recipes=_methods_state(doc["methods"]) if "methods" in doc
                   else [preset(nm).to_json() for nm in DEFAULT_SET],
                   backend=doc.get("backend", "numpy"), shots=budget.get("shots", 4096),

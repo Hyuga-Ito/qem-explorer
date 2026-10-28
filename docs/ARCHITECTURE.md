@@ -97,11 +97,22 @@ qem-explorer/
 │   │                             without a renderer; never HTML), state, script
 │   ├── resources.py              Memory estimates, cooperative deadline, readable errors, secret scrubbing
 │   ├── explain.py                "Why this happens?" texts (TeX)
-│   ├── selection/                1.6.0 protocol-selection study (no Streamlit): task (𝒯 and its record), protocols
-│   │                             (complete candidates, integer ledgers), emulate (trial-level emulation, direct
-│   │                             execution), labels (two halves, per-trial data, resumable), features, dataset,
-│   │                             models, policies, evaluate (splits, bootstrap), certify, mismatch, analysis,
-│   │                             figures, report, schemas, design (configs, final-test hash), run, __main__ (CLI)
+│   ├── selection/                protocol-selection study (no Streamlit): task (𝒯 and its record), protocols
+│   │                             (complete candidates, integer ledgers; portfolio-1.6/1.8), registry (capability
+│   │                             records, method inventory), emulate (trial-level emulation, direct execution,
+│   │                             seed scheme 2), reference (independent shot-level reference, 1.8.0), labels (two
+│   │                             halves, per-trial data, resumable; deployment variance), binding (run identity,
+│   │                             per-record collection checks), preflight (the shared execution/preflight contract,
+│   │                             1.8.0), deploy (bounded-cost guard, features, bundles and their compatibility,
+│   │                             recommend), replay (full-policy evaluation, 1.8.0), features, dataset, models,
+│   │                             policies, evaluate (splits, bootstrap, tails), certify, mismatch, analysis, figures,
+│   │                             plots, plots18 (1.8.0 figures), thesis_tables (1.8.0), report, schemas, design
+│   │                             (configs, final-test hash, expansion report, semantic checks), ancestry, supervise
+│   │                             (supervised children, parent watchdog), hardware, run, __main__ (CLI); 1.9.0:
+│   │                             integrity (run-wide completion, data digest, quarantine, attempts, run lock),
+│   │                             resources (preflight, admission, monitored ceilings), pipeline (stage-aware
+│   │                             runner), formats (every YAML format and its parser), execution_audit (recommend →
+│   │                             design → execution), tables19 (1.9.0 tables and Figure 1)
 │   └── viz/                      theme, composer (collision-free columns, stacked diff, gate-only time cursor),
 │                                 states (Bloch grid, projections, density, landscapes), charts (incl. histograms,
 │                                 syndromes, logical error), analysis_charts, batch_charts, topology
@@ -110,8 +121,11 @@ qem-explorer/
 │   ├── widgets.py                Typed-number sliders, method forms, guarded execution, Markdown escaping
 │   ├── composer_dnd.py (+ composer_assets/)  Drag-and-drop composer (components v2); every edit validated in Python;
 │   │                             input preparation and basis changes drawn as locked boxes
-│   ├── selection_view.py         the QEM Performance page's "Protocol selection (1.6)" tab: bundled studies,
-│   │                             policy tables, task drill-down, figures (reads saved tables only)
+│   ├── selection_view.py         the QEM Performance page's "Protocol selection study" tab: bundled studies (1.8.0
+│   │                             first), policy tables, task drill-down, figures (reads saved tables only)
+│   ├── recommend_view.py         the "Recommend for my circuit" tab: deploy.recommend on the Playground's circuit,
+│   │                             preflight status and level per candidate, skipped candidates, execution note,
+│   │                             candidate capability records
 │   ├── results.py                The results view of a comparison (figures, analysis views, cost table, internals,
 │   │                             Download all), shared by the Playground and the IBM Quantum page
 │   ├── tooltips.py               plain(): TeX in help texts → Unicode math; install() patches every widget once
@@ -264,7 +278,7 @@ DirectorySource / MemorySource  →  Run / Tables  →  run_checks · make_figur
                                                                                              →  DirectoryFigureSink
 ```
 
-## 9. The protocol-selection pipeline (1.6.0)
+## 9. The protocol-selection pipeline (1.6.0; 1.8.0 additions at the end)
 
 `qemx.selection` is a separate, Streamlit-free pipeline; it reuses the engine's methods and devices but none of the
 Direction A records. Every stage writes files that the next one reads, so each can be rerun alone:
@@ -279,10 +293,32 @@ plots.* + figures.* (saved tables only; configs/selection/figures.yaml) → figu
 freeze → final/ (labeled and evaluated once);  mismatch.* → mismatch/ (diagnostics, policies)
 regimes: label into regimes/ → run.regime_analyze (frozen model, development threshold) → regimes/analysis/*.csv
 profile → analysis/runtime.csv
+
+1.9.0: pipeline FILE runs these stages in order (argument arrays), verifying and keeping what is done:
+  plan (resources.preflight; --tasks-csv) → label (integrity.completion; resources.Ceilings; RunLock)
+  → analyze (identity: config, labels, data, code) → freeze (+ data digest) → nested → freeze --complete
+  → bundles (RUN/bundles) → confirm (--reuse) → replay (bound population) → figures → report → tables → status
 ```
 
 Task devices may carry modifiers (`fake_fez@s=2`: every calibrated error rate × 2); the supplied snapshot and the
 execution law then share the modifier (`task.with_modifiers`), while mismatch modifiers reach only the truth runner.
+
+1.8.0 additions:
+
+```
+deploy.recommend(task, bundle) = guard (bounded cost, before compilation) → compile → features (cached by content)
+    → OOD (training support, snapshot transfer) → preflight.structural (every candidate)
+    → model order → preflight.design | preflight.allocation (lazily, in that order) → verified choice | skip
+    → margin / τ → SBS-B's first verified candidate as fallback
+replay.replay(labels, bundle) → replay/replay_<bundle>.csv|json   (the full policy, scored with evaluation halves)
+scripts/portfolio_comparison.py → portfolio/ ;  scripts/root_audit.py → audit18/ ;  reference.compare (tests)
+plots18.* → the 1.8.0 supplementary figures;  thesis_tables.build → thesis_tables/*.csv|tex|md|pdf
+```
+
+Bundles carry the feature fingerprint, the protocol definitions, the policy version and the device-snapshot
+fingerprints; `deploy.load_bundle` refuses an incompatible definition (`BundleIncompatible`) and reports a changed
+calibration as a transfer (out of distribution). Label records carry the seed scheme and their run id;
+`binding.check_records` refuses records of another run or with a wrong digest.
 
 Information classes are enforced where data cross into a model: `features.matrix` refuses oracle columns, allocations
 read only the supplied snapshot (`TaskSpec.supplied_backend`), and the truth runner (device modifiers, crosstalk,

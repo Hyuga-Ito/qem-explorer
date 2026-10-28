@@ -1,7 +1,8 @@
 # Hardware validation of the selection recommender (prepared, not executed)
 
 The protocol-selection study is a fake-device emulation study. Hardware transfer is an optional, secondary stage
-(review roadmap, stage F). QEM Explorer 1.7.0 prepares it and **submits nothing**: no job was sent for this release.
+(review roadmap, stage F). QEM Explorer 1.8.0 (like 1.7.0) prepares it and **submits nothing**: no job was sent for
+this release.
 
 ## What is prepared
 
@@ -22,8 +23,14 @@ The protocol-selection study is a fake-device emulation study. Hardware transfer
 With the shipped plan and the 1.7.0 bundle (two tasks, four blocks, B = 20 000; the bundle recommends PEC for both
 tasks, which is also SBS-B's choice, so each task has three distinct protocol runs) every job fits: 24 jobs,
 452 s reserved on the high estimate of the 540 s available. Three tasks at four blocks do not fit (28 of 36 jobs
-admitted) — the preflight says so instead of trimming silently. The plan of this release is
+admitted) — the preflight says so instead of trimming silently. That plan is
 `reports/selection_v170/hardware/hardware_plan.{json,md}` (digest `a0f34288f20a049b…`).
+
+**1.8.0.** With the default 1.8.0 bundle (`qemx-rec-1.8.0-deployable`, policy/2; same tasks, blocks and budget) the
+recommendation is PEC-TW for the Ising task (also SBS-B's choice) and PEC for the GHZ task (SBS-B: PEC-TW), so the
+GHZ task has four distinct protocol runs; every run's candidate is verified-feasible at the structural level, and all
+28 jobs fit: 524 s reserved on the high estimate of the 540 s available. The plan of this release is
+`reports/selection_v180/hardware_plan/hardware_plan.{json,md}` (digest `6015610c337d89a3…`), produced as a dry run.
 
 Correction in 1.7.0: the plan used to multiply the shots of a merged PEC circuit by the number of times the recipe
 asked for it, although the merged request already carries the shares of every occurrence; it reported PEC runs of

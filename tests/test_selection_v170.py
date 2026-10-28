@@ -64,6 +64,8 @@ def _pilot_dev() -> str:
         t = os.path.join(d, "tasks")
         if os.path.isdir(t) and any(f.endswith(".npz") for f in os.listdir(t)):
             return d
+    if "selection_v170" in os.environ.get("QEMX_REQUIRE_TRIALS", ""):        # 1.9.0: the trial-data workflow
+        pytest.fail("QEMX_REQUIRE_TRIALS names selection_v170 but its per-trial arrays are missing")
     pytest.skip("no bundled pilot labels with trial arrays (extract the trial-data archive into the repository root)")
 
 # ------------------------------------------------------------------ R1: designs
@@ -339,7 +341,8 @@ def test_every_shipped_selection_configuration_satisfies_the_schema():
     d = os.path.join(ROOT, "configs", "selection")
     n = 0
     for f in sorted(os.listdir(d)):
-        if f.endswith(".yaml") and f not in ("figures.yaml", "hardware17.yaml"):   # plotting / hardware plans
+        if f.endswith(".yaml") and f not in ("figures.yaml", "figures18.yaml", "hardware17.yaml") \
+                and not f.startswith("figure_spec"):          # plotting, hardware, figure/table specification
             cfg = DS.load(os.path.join(d, f))
             specs = DS.expand(cfg)
             assert specs, f
@@ -515,13 +518,23 @@ def test_deployment_features_equal_the_studys_and_never_simulate_the_target(monk
         seen.append(spec.name)
         return orig(self, spec, *a, **k)
     monkeypatch.setattr(MB.Runner, "run", spy)
+    # 1.8.0: the 1.8.0 study's development records (with the four 1.8.0 noise descriptors) when they are present;
+    # the 1.7.0 records hold the features defined then (the 1.8.0 descriptors did not exist)
+    d18 = os.path.join(ROOT, "reports", "selection_v180", "dev", "tasks")
+    if os.path.isdir(d18):
+        recs += [json.load(open(os.path.join(d18, f), encoding="utf-8")) for f in sorted(os.listdir(d18))
+                 if f.endswith(".json")][:4]
+    checked = set()
     for r in recs:
-        v, rep = DP.features(DP.from_spec(TK.TaskSpec.from_json(r["spec"]), 100000), names)
-        for n in names:
+        have = [n for n in names if n in r["features"]]
+        v, rep = DP.features(DP.from_spec(TK.TaskSpec.from_json(r["spec"]), 100000), have, use_cache=False)
+        for n in have:
             if n != "log10_budget":
                 assert v[n] == pytest.approx(r["features"][n], rel=1e-12, abs=1e-15), (n, r["task_id"])
+                checked.add(n)
         assert all(row["info"] == "available" for row in rep["rows"])
     assert set(seen) <= {"cal-0", "cal-1"}                                  # only the calibration circuits
+    assert len(checked) >= 20
 
 
 @pytest.mark.slow
@@ -547,10 +560,14 @@ def test_simulated_features_only_on_request_and_equal_to_the_studys():
 
 @pytest.mark.slow
 def test_structural_feasibility_matches_the_study_except_degenerate_training(tmp_path):
+    """1.8.0 (finding F1): structural feasibility never claims more than the study's allocation — every structurally
+    feasible candidate is feasible in the study; a learning candidate is not structurally feasible (it is
+    *unverified* until its design is built, qemx.selection.preflight), and the design level agrees with the study."""
     from qemx.selection import deploy as DP
+    from qemx.selection import preflight as PF
     from qemx.selection import task as TK
     d = os.path.join(_pilot_dev(), "tasks")
-    bad = []
+    bad, unverified = [], 0
     for f in sorted(os.listdir(d))[::7]:
         if not f.endswith(".json"):
             continue
@@ -561,9 +578,19 @@ def test_structural_feasibility_matches_the_study_except_degenerate_training(tmp
             for j, B in enumerate(r["budgets"]):
                 a = r["allocations"][i * len(r["budgets"]) + j]
                 ok, _ = DP.structural_feasibility(t, comp, k, B)
-                if ok != a["feasible"]:
-                    bad.append((k, a.get("reason", "")))
-    assert all(k in ("CDR", "NIL") and why == "no training circuits" for k, why in bad)
+                if ok and not a["feasible"]:
+                    bad.append((k, B, a.get("reason", "")))
+                if k in ("CDR", "NIL"):
+                    p = PF.structural(comp, k, B)
+                    assert not ok and p.status in (PF.UNVERIFIED, PF.INFEASIBLE)
+                    if p.status == PF.UNVERIFIED:
+                        unverified += 1
+                        dz = PF.design(comp, t.obs(), k, B, supplied=t.supplied_backend,
+                                       seed=int(r["master_seed"]) % (2 ** 31))
+                        assert (dz.status == PF.VERIFIED) == bool(a["feasible"]), (k, B, dz.to_json(), a)
+                elif not ok:
+                    assert not a["feasible"], (k, B)
+    assert not bad and unverified > 0
 
 
 @pytest.mark.slow
@@ -592,9 +619,10 @@ def test_bundle_round_trip_without_pickle_and_ui_equals_cli(tmp_path):
     with contextlib.redirect_stdout(buf):
         CLI.main(["recommend", "--state", str(p), "--budget", "100000", "--device", "fake_fez", "--bundle",
                   str(tmp_path / "bundle")])
-    cli = json.loads(buf.getvalue())
+    from qemx import textio as TX
+    cli = TX.loads(buf.getvalue(), strict_tokens=True)       # 1.8.0: strict JSON
     for k in ("task", "choice", "model_choice", "features", "predicted_log10_risk", "feasibility", "status"):
-        assert json.dumps(cli[k], sort_keys=True, default=str) == json.dumps(rec[k], sort_keys=True, default=str), k
+        assert TX.dumps(cli[k], sort_keys=True, default=str) == TX.dumps(rec[k], sort_keys=True, default=str), k
     # a study task and its deployment twin resolve to one compiled experiment
     spec = TK.make_spec("ising", 4, steps=2)
     t2 = DP.from_spec(spec, 1000)

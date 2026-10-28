@@ -1,0 +1,14 @@
+# 1.9.0 smoke pipeline (prospective; minutes): checks that every stage runs on this computer. Not a result.
+#   python -m qemx.selection pipeline configs/pipelines/smoke19.yaml --out runs/smoke19 --workers 2
+schema: qemx.selection.pipeline/1
+name: smoke19
+purpose: smoke
+out: runs/smoke19
+workers: 2
+development: configs/selection/smoke19.yaml
+plot_config: configs/selection/figures18.yaml
+bundles:
+  - {version: smoke19-sim, feature_set: frozen, simulation: true}
+  - {version: smoke19-deployable, feature_set: deployable18, simulation: false}
+recommend_check: {experiment: examples/experiments/qft_known_answer.yaml, budget: 100000, device: fake_fez}
+stages: [plan, label, analyze, freeze, nested, freeze-complete, bundles, recommend-check, figures, report, status]

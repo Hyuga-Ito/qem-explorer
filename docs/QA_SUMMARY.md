@@ -1,128 +1,275 @@
-# QEM Explorer 1.7.0 — verification summary
+# QEM Explorer 1.9.1 — verification summary
 
-What was run on the release, with the numbers it produced, and what was not verified. All runs are local (Ubuntu
-24.04, glibc 2.39, headless, 2 CPU cores shared between jobs). GitHub Actions itself (including its Windows and
-legacy-locale jobs) was not run for this release, and no circuit was sent to quantum hardware.
+What was run for the corrective release 1.9.1, with the numbers it produced, and what was not verified. All runs
+are local: Ubuntu 24.04, glibc 2.39, headless, two CPU cores shared between jobs, `GLIBC_TUNABLES=glibc.rtld.
+optional_static_tls=2048` and one thread per math library (as the CI does). The 1.9.0 summary follows below.
 
-Release tree: branch `v1.7.0`. The test suites of section 1 ran on the *packaged archives* of commit `cd07b53`,
-extracted into empty directories — once with the two trial-data archives extracted as well (the complete release)
-and once without them (the source archive alone). The later commits change documents, one introductory sentence of
-the QEM Performance page, and the validation metadata the `bundle` command writes into the two shipped bundles (their
-model arrays are byte-identical; each bundle's validation now describes its own configuration), with a test of it;
-the selection command-line, selection-UI, `test_selection_v170.py` and page tests ran again on the final tree in
-three Python versions (section 1).
+* **GitHub Actions was not run** (nothing was pushed, tagged or published).
+* **Native Windows was not run** (no Windows computer was available). The Windows guide's Python commands were run on
+  Linux in paths with spaces and Japanese characters; its PowerShell-only lines were not.
+* **No expensive study was run:** not fulldev19, not the reserved confirmation conf19, not the full pilot again; no
+  circuit was sent to quantum hardware.
 
-Every Linux run sets `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2048` and one thread per math library, as
-`.github/workflows/ci.yml` does (README, Linux note).
+The release candidate is commit `1871049`; the release commit differs from it only in documents (this file, the
+Windows guide's status notes, the release notes); the code files of the two source archives are byte-identical
+(checked from their inventories).
 
-## 1. Test suites
+## A. The findings: reproduced on 1.9.0, absent from 1.9.1
 
-| environment | tree | Python | Streamlit | scikit-learn | NumPy | `pytest -m "not slow"` | `pytest -m slow` (end-to-end) |
-|---|---|---|---|---|---|---|---|
-| release lock (`requirements-lock.txt`) | source + trial data | 3.12.3 | 1.66.0 | 1.8.0 | 2.4.4 | **1604 passed** | **54 passed** |
-| release lock | source archive alone | 3.12.3 | 1.66.0 | 1.8.0 | 2.4.4 | **1604 passed** | **48 passed**, 6 skipped (they need the per-trial arrays; the reason is printed) |
-| latest releases (`requirements-dev.txt`) | source + trial data | 3.12.13 | 1.66.0 | 1.9.1 | 2.5.4 | **1604 passed** | **54 passed** |
-| latest releases | source + trial data | 3.13.16 | 1.66.0 | 1.9.1 | 2.5.4 | **1604 passed** | **54 passed** |
-| latest releases | source + trial data | 3.10.20 | 1.65.0 | 1.7.2 | 2.2.6 | **1604 passed** | **54 passed** |
-| 1.5.0 lock with Streamlit 1.64.0 (page, UI, I/O, selection-tab and text-I/O tests) | source + trial data | 3.12.3 | 1.64.0 | 1.8.0 | — | **63 passed** | |
-| final tree (`5134d2d`): selection command line, selection UI, `test_selection_v170.py` and page tests, both partitions | source + trial data | 3.12.3 / 3.10.20 / 3.13.16 | | | | **46 passed** in each | |
+Probes in the private evidence archive (`probes/`), run on a worktree of the 1.9.0 release commit `615fd5d` and on
+1.9.1 with copied pilot labels or tiny generated studies:
 
-Python 3.10 now passes completely (1.6.0 had two test-only failures there). 1.7.0 adds 87 test cases (1658 in
-all), among them the selection invariants of `tests/test_selection_v170.py`, the UTF-8 tests of
-`tests/test_text_io.py` and the Playground I/O semantics of `tests/test_io_semantics_v170.py`.
-
-Failures found by the first matrix run (on commit `4a5ecbd`) and fixed before the runs above:
-
-- **A defect**: the supervisor's "spawn" children re-ran the parent's `__main__`; after a Streamlit `AppTest` (whose
-  generated script becomes `__main__`) the children re-ran that script and failed. Children now never import the
-  parent's main script (`supervise._isolated_main`; test `test_supervised_children_never_rerun_the_parents_main_script`,
-  which fails without the fix).
-- Two tests written for 1.6.0 expected its tables: the device-specification test (now with the 1.7.0 component
-  modifiers `g1`, `g2`, `t`) and the Figure 6 consistency test (now on the 1.7.0 equal-budget tables, with the same
-  check that plotted differences equal those recomputed from the policy table).
-- Two UI tests assumed the per-trial arrays in the shipped study; without them the drill-down test now checks the
-  explanatory message and the recommendation-tab test is skipped with its reason.
-
-## 2. UTF-8 text I/O and platforms
-
-| check | result |
-|---|---|
-| static checker (`scripts/check_text_io.py`: every text `open`, `read_text`/`write_text`, `csv`, `json`, `yaml`, subprocess text pipes and `pandas` text I/O name `encoding="utf-8"`; binary I/O untouched; no `errors="ignore"`) | 0 findings on the release tree |
-| runtime tests (`tests/test_text_io.py`): Japanese, Greek and mathematical text in configurations, experiment documents, state files, CSV/JSON/YAML/Markdown outputs and figure notes; non-ASCII and space-containing paths; a UTF-8 BOM in a user-edited configuration; undecodable input raises an error naming the byte position | pass in every environment of section 1 |
-| child processes with UTF-8 mode off (`PYTHONUTF8=0`) and `EncodingWarning` as an error (`-X warn_default_encoding`): project text I/O and the command line's printed UTF-8 | pass (part of the suites) |
-| the text-I/O and Playground I/O tests with a real ISO-8859-1 locale generated locally (`QEMX_LEGACY_LOCALE=en_US.ISO-8859-1`; the child's preferred encoding checked to be ISO-8859-1), on the extracted release | 46 passed |
-| Windows | **not run**: the CI job (`windows-latest`, supervised labeling, the recommender, a Unicode path) is configured, not executed |
-| Python 3.10 | the two 1.6.0 test-only failures are fixed (`tomli` fallback; the recomputed-feature tolerance) — see the 3.10 row above |
-
-## 3. Scientific and data checks
-
-| check | result |
-|---|---|
-| Corrected labels against the 1.6.0 labels of the same tasks and seeds (`scripts/compare_design_estimands.py`) | the six protocols without a training design are identical trial for trial on 120/120 development, 21/21 regime and 35/36 historical-final tasks (one ZNE-R allocation differs by one shot at a near-tie); CDR/NIL changes are reported in `RESULTS.md` §2 |
-| Design-level standard error | a simulation test recovers the true between-design SD; the trial-level SE is less than half of it there (`test_design_level_standard_error_contains_the_between_design_variance`) |
-| Nested selective evaluation | perturbing a fold's labels leaves its threshold unchanged (`test_nested_threshold_of_a_fold_never_depends_on_that_folds_labels`) |
-| Ancestry | the confirmation set shares no logical circuit with any earlier study; `confirm` refuses an overlap (tests) |
-| Run binding | incompatible resumes, stale files and a wrong freeze are refused (tests); every resume after a container restart during the pilot was recorded (`run.json`, `provenance.json`) |
-| Ledgers | every allocation spends exactly B in integers (asserted at labeling, tested per protocol and budget); the hardware plan charges every run exactly B (a test, after a correction: section 6 of `REVIEW_RESPONSE_1.7.md`, N7) |
-| Figures | all 15 figures and 6 tables of `reports/selection_v170` drawn from saved tables; `scripts/validate_figures.py`: every SVG parses, every PDF has its pages and text (`pdfinfo`, `pdftotext`), every PNG verifies, every note has its methods box, 31 plotted numbers equal the analysis tables — all checks passed; every figure was viewed after drawing |
-| Regeneration from saved tables | from a fresh extraction of the archives, the shipped corrected pilot's figures and tables were deleted and regenerated from its saved tables: 73 source-data, note and table files compared with the shipped ones, 0 differences (numbers to 1e-9 relative; notes except the recorded command line); the validator passes on the regenerated copy |
-| Emulator against an independent shot-by-shot execution | rerun on the release (fresh extraction): 2 tasks × RAW, RO, ZNE-L, ZNE-R, PEC at B = 2 000, 200 emulated against 200 directly executed experiments each — all 10 comparisons within |z| ≤ 4 for the mean (largest 2.95), variance ratios 0.85–1.21 (smallest p = 0.18). The six protocols without a training design are trial-identical to 1.6.0, whose labels were validated the same way on the snapshot and on a snapshot with every error rate × 2 |
-| Echo diagnostic's null | false-positive rate 4.8 % at α = 0.05 (exact binomial law; `mismatch/null_check.csv`) |
-| Smoke workflow (`smoke.yaml`) | 20 tasks labeled (0 errors), analysis, 11 figures drawn, the 5 that need the regime, mismatch or profile studies listed as pending; 23 min on the shared machine |
-
-## 4. Interface
-
-- Streamlit `AppTest`: the *Protocol selection study* tab lists the corrected study first, renders its policy view,
-  drill-down (with the per-trial arrays: task, circuit drawing, settings and allocation, shot ledger, trial
-  distribution, provenance; without them: an explanatory message) and figures; the *Recommend for my circuit* tab
-  recommends with a bundle exactly as `python -m qemx.selection recommend` does and marks a result out of date when
-  the budget changes (`tests/test_selection_ui.py`); the Playground's Output panel separates input state, output state
-  before measurement, measured distribution and observable (`tests/test_io_semantics_v170.py`).
-- Headless Chromium against the app served from the extracted archives: every page renders without an exception and the
-  Playground shows the 1.7.0 Output panel; the *Protocol selection study* tab selects the corrected study first and
-  renders its policy view, drill-down (shot ledger and trial distribution, the trial data being extracted) and
-  figures; *Recommend for my circuit* returns a recommendation for the default experiment (the deployable bundle:
-  PEC at B = 10⁵, with the protocol definition, the predicted risks and the feature costs). The first run of the two
-  browser scripts failed on the scripts themselves (the Playground check still looked for the 1.6.0 wording, and the
-  recommendation was read before it had finished); the corrected scripts passed against the same extracted tree
-  (screenshots in the audit material).
-
-## 5. Packaged archives
-
-Three public archives and one private one, each with a `.sha256` file:
-
-| archive | content | size |
+| probe | 1.9.0 | 1.9.1 |
 |---|---|---|
-| `qem-explorer-1.7.0.zip` | the source tree (one root folder `qem-explorer-1.7.0/`, from `git archive` of the release commit): code, configurations, tests, examples, documentation, the shipped bundles, the corrected pilot's records, tables and figures; without the per-trial arrays and without the 1.6.0 pilot's arrays and figures | ≈ 26 MB, ≈ 1 400 files |
-| `qem-explorer-1.7.0-trials-1.zip`, `-trials-2.zip` | the corrected pilot's 347 per-trial arrays (development and historical final; confirmation, regimes, noise composition, mismatch), paths relative to the repository root, verified by `reports/selection_v170/TRIALS_SHA256SUMS` | ≈ 16 MB each |
-| `qem-explorer-1.7.0-audit.zip` (private) | the review as received, patches 1.6.0 → 1.7.0 per commit, test logs, fresh-extraction logs and screenshots, run logs, the design study's halves, the 1.6.0 figures and results document, the tools used to build and check the release | — |
+| F1 shipped fulldev order, grid without the old default (copied pilot labels) | exit 2 at `freeze-complete`; nested of `hgb\|deployable+simulated`, frozen `ridge\|size_budget` | exit 0; nested of the frozen configuration; τ = 0.1079260780570268 (the review's corrected-order value) |
+| F1 the review's order (analyze → freeze → nested → freeze-complete) | exit 2 | exit 0, same τ |
+| F1 recovery of a run 1.9.0 stopped (tiny study) | — | plain rerun exit 2 ("--accept-changes", nothing moved); with `--accept-changes` exit 0; reruns exit 0; frozen policy unchanged |
+| F2 grid changed to ridge/size_budget without re-analysis | exit 0, chose `hgb\|deployable18+simulated` | exit 2 with the problems listed |
+| F3 cap between current-record seconds (1.69 s) and attempt seconds (4.81 s), with `--override-limits` | relabeled the quarantined task, exit 0 | ceiling stops before any start, exit 1 |
+| F4 `s6_costs` wall time | 4.6609 h = 9.3218 / 2 under "7 workers" | 1.3317 h = 9.3218 / 7 for a declared 8-core/7-worker computer, on any computer |
+| F5 supervised task inside `unshare --pid --fork` | worker exits 70 at once ("closed its pipe without a result") | task completes; psutil inspection disabled and reported |
 
-The source archive's staged tree is scanned before zipping (no symlinks, nested archives, office files, manuals,
-review material, pickles, ledgers, environment or key files, files over 5 MB, caches, absolute sandbox paths,
-personal names or e-mail addresses, or secret-like strings; the only matches are digests in provenance records and a
-test's fake token); file times are fixed and the file list is sorted, so the archive is reproducible from the commit.
+## B. Test suites (release-candidate code)
 
-**Fresh extraction** (`tools/fresh_check17.sh` in the audit material), all steps on the archives of commit
-`cd07b53` in an empty directory with a new virtual environment from the lock file: archive and inventory checksums;
-extraction of both trial-data archives with every array's checksum verified; installation from the lock (Python
-3.12.3); import (`qemx` 1.7.0, Streamlit 1.66.0); the static UTF-8 check (0 findings); app start-up (health check) and
-the headless browser checks of section 4; the four example documents validated and one run; the 1.5 study commands;
-the bundled 1.5 pilot report reproduced (`regimes.csv` identical); `plan` of the larger study; the shipped corrected
-pilot's figures and tables regenerated and compared (0 differences in 73 files) and validated; `recommend` with both
-bundles (with and without simulated features); `hardware plan` (same digest as the shipped plan); the emulator
-validation of section 3; the smoke workflow; the link check (0 broken). Every step passed except the first run of the
-two browser scripts, explained in section 4.
+| run | result |
+|---|---|
+| fast partition (`-m "not slow"`, `QEMX_REQUIRE_TRIALS=selection_v180,pilot_v190`, Python 3.12.3, the lock) | **1788 passed**, 0 failed, 0 skipped (12 min 48 s) |
+| slow partition (`-m slow`, same) | **64 passed**, 0 failed, 0 skipped (7 min 22 s) |
+| `tests/test_fixes_v191.py` (19 regressions, incl. slow) | passed in every run above and below |
+| Python 3.10.20 and 3.13.16: `test_fixes_v191` (incl. slow), `test_readiness_v190`, `test_pipeline_v190`, `test_text_io` | 87 passed each |
+| process tests inside a simulated PID namespace (`unshare --pid --fork`): parent kill, Ctrl+C/SIGTERM with lock release, live/dead locks, pipeline termination | passed (and by both independent agents) |
+| legacy locale `LC_ALL=en_US.ISO-8859-1` (no UTF-8 mode): `test_text_io`, `test_fixes_v191`, `test_pipeline_v190` (fast) | 27 passed, **1 failed**: `test_dry_run_uses_argument_arrays_with_unicode_and_spaces` — the operating system cannot create a directory named with Japanese characters under a Latin-1 file-system encoding (`UnicodeEncodeError` in `os.makedirs`); the same failure occurs on 1.9.0; text *contents* are read and written as UTF-8 in every test. Windows file names are Unicode, so this does not apply there |
 
-## 6. Not verified
+## C. Fresh extraction (release-candidate archive) into `…/展開 テスト/qem-explorer-1.9.1`
 
-- GitHub Actions on GitHub's runners, the Windows job, macOS.
-- Any IBM Quantum service call and any hardware result; the hardware plan is prepared and refused without the owner's
-  authorization; the study is emulation on fake devices only.
-- The larger study `full17.yaml` (resource estimate only, `RESULTS.md` §14).
-- CDR, NIL and exponential ZNE against an independent shot-by-shot implementation: the emulator validation covers
-  RAW, RO, ZNE-L, ZNE-R and PEC; the learning protocols reuse the methods' own finite-training samplers, which 1.5.1
-  validated against complete end-to-end experiments (`scripts/validate_learning_moments.py`, not rerun).
-- The finite-sample coverage of the CV-residual intervals (no guarantee); only their empirical coverage on held-out
-  circuits is reported. The split-conformal intervals have a marginal guarantee under exchangeability of circuits,
-  which the pilot's circuit sample does not establish.
-- Byte identity of PDFs across environments (not claimed).
+New virtual environment from `requirements-lock.txt` (Python 3.12.13; install 76 s), then:
+
+| step (commands of `docs/WINDOWS_FIRST_RUN.md`) | exit | time |
+|---|---|---|
+| focused fast tests (`test_text_io`, `test_readiness_v190`, `test_pipeline_v190`, `test_fixes_v191`) | 0 (76 passed, 2 skipped: need the pilot's trial arrays, not extracted here) | 72 s |
+| `test_fixes_v191.py -m slow` | 0 (6 passed) | 89 s |
+| smoke19 `check-config`, `plan --tasks-csv`, `pipeline … --workers 2`, unchanged rerun, `status` | 0, 0, 0, 0, 0 | pipeline 274 s, rerun 30 s |
+| Ctrl+C (SIGINT) 8 s into `label pilot19 --limit 4 --workers 2`, then the same command | first: KeyboardInterrupt (exit −2), two `interrupted` attempts (4.56 s, 4.57 s), lock released; resume exit 0; ledger 6 attempts, 0.025 h | 9 s + 41 s |
+| `plan pilot19 --out` that partial run | 0; "already consumed 0.03 h … projected 0.30 h" | 1 s |
+| full-study command pattern on smoke labels: `pipeline --until label`, `analyze --splits same-distribution --extras=`, `pipeline`, rerun | 0, 0, 0, 0 | — |
+| fulldev19 `check-config`, `plan --tasks-csv`, `plan --measured reports/pilot_v190/dev`, `pipeline --dry-run` | 0, 0, 0, 0 | seconds |
+| pilot19 `plan`, `pipeline --dry-run` | 0, 0 | seconds |
+
+(A first, scripted attempt to send SIGINT to a background job was ignored by design — POSIX shells start background
+jobs of a script with SIGINT ignored — so the labels finished normally; its logs are kept as
+`scripted_sigint_ignored_*`. The Ctrl+C result above comes from a driver that sends SIGINT to a foreground-style
+child, as a terminal does.)
+
+## D. Runs made with 1.9.0, continued with 1.9.1
+
+* smoke19 completed by 1.9.0, then the 1.9.1 pipeline twice without options: exit 0, 0; every stage verified and kept
+  (`[nested] kept: the freeze is completed …`); `status` 0.
+* A full-order run stopped by 1.9.0 (exit 2): see table A.
+
+## E. Historical data and figures
+
+`python -m qemx.selection.tables19 --v18 reports/selection_v180 --audit reports/execution_audit_v190 --pilot
+reports/pilot_v190`: tables s1–s5 (CSV and TeX), Figure 1's PNG and CSV, `tables_v19.tex` are byte-identical to the
+shipped files; the figure's PDF/SVG differ only in their embedded creation dates (the shipped files are kept);
+`s6_costs.*`, `tables_v19.md/.pdf` and `provenance.json` change (F4). The trial-data tests (`test_trial_data_v180`,
+`test_trial_data_pilot19`, required, not skipped) pass in the partitions above: the 1.8.0 and pilot arrays and their
+recomputed contrasts are unchanged.
+
+## F. Independent debugging
+
+Two sub-agents on separate copies — Sonnet 5.5 (`claude-sonnet-5-5`) and Fable 5.1 (`claude-fable-5-1`), identities
+as each reported — reproduced F1–F5 on 1.9.0, confirmed the fixes, recomputed 9.3218 CPU-h, 1.3317 h, the split parts
+(5/35/15/43/1/5) and fits (334 611; 51.25× the pilot's fits × rows) and the pilot ledger (3114.249 s), and found ten
+defects in the candidate (one medium in accounting, two medium in orchestration, the rest minor), all fixed with
+regressions and confirmed fixed on their re-check (`docs/ISSUE_EVIDENCE_MATRIX.md`, part 1.9.1).
+
+## G. Not verified
+
+Native Windows (Ctrl+C, Ctrl+Break, closing the window, parent death, file locking by other programs) and the CI's
+`windows-smoke` job; macOS (the PID-view check was changed for its framework builds without a Mac); the full pilot
+(re-run not needed: its stage order is the one tested on small studies, and its data are unchanged); fulldev19's
+analysis time; the streamlit application (no UI code changed in 1.9.1).
+
+# QEM Explorer 1.9.0 — verification summary
+
+What was run for 1.9.0, with the numbers it produced, and what was not verified. All runs are local: Ubuntu 24.04,
+glibc 2.39, headless, two CPU cores shared between jobs. Every Linux run sets
+`GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2048` and one thread per math library, as the CI does.
+
+* **GitHub Actions was not run** for 1.9.0 (nothing was pushed; the remote `main` is still 1.7.0).
+* **Native Windows was not run.** The Windows commands were executed on Linux, in paths with spaces and Japanese
+  characters.
+* **No circuit was sent to quantum hardware.**
+
+The 1.8.0 verification summary is in the 1.8.0 archive and in the Git history of this file.
+
+The release candidate is commit `8f4b0a0`. The release commit differs from it in two ways only (section 7):
+* this file;
+* a docstring escape in `qemx/selection/tables19.py`.
+
+## 1. The review findings: reproduced on 1.8.0, absent from 1.9.0
+
+`tools/repro_findings.py` (private audit archive) runs the same probes on the extracted 1.8.0 release and on 1.9.0:
+
+| probe | 1.8.0 (`evidence/repro_baseline.json`) | 1.9.0 (`evidence/repro_v190_final.json`) |
+|---|---|---|
+| N1 timeout, then an unchanged resume | resume exit 0, record still `timeout` | first and resume exit 1, failure reported |
+| N1b `run` after a labeling failure | exit 0, analysis ran | exit 1, analysis not run |
+| N2 caps `disk_gb`/`cpu_hours` = 10⁻¹² | labeled, exit 0 | `plan` exit 3, `label` exit 2, nothing written |
+| N3 once-only steps on a complete copy of the 1.8.0 run | `freeze` → 1 (`set -e` stops the script); `|| true` masking | `freeze --reuse`, `freeze --complete --reuse` → 0 after verification; the script is the pipeline; no masking |
+| N4 replay of a run with a deleted task | 9 rows, nothing excluded | refused (`IncompleteRun`) |
+| N4b fabricated `labels.csv` alone | accepted | refused (no validated records) |
+| N6 typo, duplicates, empty lists, negative seed, `per_half > R`, no development tasks | all accepted | all refused (schema or `design.check`) |
+| N8 explicit device vs state backend | state backend used | explicit device used |
+| R1 GHZ-6: study vs state | SV vs PEC-TW, different keys | SV and SV, same key |
+| R8 staleness and the simulation switch | not in the comparison | in `recommendation_signature`; the UI compares it |
+
+The v1.7 trial manifest failure (N5: 347 missing files) was reproduced by running the 1.8.0 job's step. Its 1.9.0
+counterpart is `test_trial_data_job_unpacks_only_the_requested_studys_attachments`, which executes the workflow's
+selection script.
+
+## 2. Test suites
+
+| tree | environment | Python | tests | result |
+|---|---|---|---|---|
+| fresh extraction of the release-candidate archive with all three trial-data archives, in `…/fresh テスト/qem-explorer-1.9.0` | new virtual environment installed from `requirements-lock.txt` (NumPy 2.4.4, SciPy 1.17.1, scikit-learn 1.8.0, Qiskit 2.5.2, Aer 0.17.2, Streamlit 1.66.0, pandas 3.0.2) | 3.12.13 | `pytest -m "not slow"` | **1 773 passed**, 0 failed, 0 skipped (26 min) |
+| same | same | 3.12.13 | `pytest -m slow` | **53 passed**, 5 skipped (the 1.7.0 study tests need the 1.7.0 trial-data archive, which belongs to that release) (10 min) |
+| source archive alone (no trial data) | release lock | 3.12.3 | trial-data, tables, metadata and 1.7.0-study tests | 45 passed, 25 skipped (each needs per-trial arrays; the reason is printed); with `QEMX_REQUIRE_TRIALS=selection_v180,pilot_v190` they **fail** (19 errors), as the trial-data CI job requires; `verify_trials.py` exits 1 |
+| development tree at the release candidate | latest releases of `requirements-dev.txt` (NumPy 2.2.6, scikit-learn 1.7.2, Streamlit 1.65.0) | 3.10.20 | 1.9.0 tests + text I/O, selection core and CLI, release metadata (8 files, not slow) | 104 passed, 5 skipped (trial data not in that tree) |
+| same | latest releases (NumPy 2.5.4, scikit-learn 1.9.1, Streamlit 1.66.0) | 3.13.16 | same | 104 passed, 5 skipped |
+| development tree with trial data | release lock | 3.12.3 | `pytest -m slow` (before the second-round fixes) and the 1.9.0 slow tests after them | 58 passed; the 5 pipeline tests passed again after the fixes (3 min 44 s) |
+
+The 1.9.0 tests added by this release:
+* `tests/test_readiness_v190.py` (48 cases);
+* `tests/test_pipeline_v190.py` (5 cases, slow: interruption and resume at every stage in a Japanese path, failure propagation, SIGTERM);
+* `tests/test_trial_data_v180.py` (16);
+* `tests/test_trial_data_pilot19.py` (3);
+* `tests/test_tables19.py` (7).
+
+`scripts/check_text_io.py`: 0 findings.
+
+**Legacy locale** (`en_US.ISO-8859-1`, generated locale: file names `iso8859-1`, text default ISO-8859-1):
+* `tests/test_text_io.py`: 13 passed;
+* `plan` and `check-config` under `-X warn_default_encoding` with the strict wrapper: exit 0;
+* `test_selection_core.py`, `test_experiment.py`, `test_tables19.py` under the wrapper: 49 passed.
+
+**Failures found by these runs and fixed before the release candidate:**
+* The 1.8.0 configuration test read the new figure specification as a study configuration. The specification is now excluded by its format.
+* The pipeline overwrote its own completion report (second independent round, F1).
+* Five rounding or wording errors were found by the fact-check (section 5).
+
+## 3. End-to-end runs (bounded; the full study was not run)
+
+| run | where | result |
+|---|---|---|
+| smoke19 pipeline, first run | `runs/smoke 19 テスト` (development tree) | all stages, 7.5 minutes on two cores; rerun with every stage verified and kept: 53 s |
+| smoke19 pipeline from the fresh extraction | `runs/スモーク テスト` (fresh environment) | `check-config` 0; pipeline exit 0 (9.5 minutes while the test suite shared the cores); rerun exit 0 in 53 s with every stage verified and kept; `status` 10/10 complete |
+| pilot19 pipeline | `runs/pilot19` | 54/54 tasks; labels 0.86 CPU-h (27 minutes, two workers), analysis 71 minutes, nested evaluation 20 minutes, bundles 57 s, portfolio 5.5 minutes, profile 1.9 minutes, figures 54 s (stage logs in the private archive); resumed after the label stage with newer code — the complete labels were verified and kept, not relabeled |
+| interruption and resume at every stage | `tests/test_pipeline_v190.py` (slow) | freeze and confirmation byte-identical after resume; an edited source table stops the pipeline (exit 2); confirm `--reuse` with another configuration or other training parts exits 2 |
+| SIGTERM of the pipeline during labeling | slow test | label command, workers and lock gone within seconds (the previous code left them running) |
+| parent killed (SIGKILL) during labeling | fast test; second independent round | the worker ends (test bound 8 s; measured 0.91 s by the independent round); an immediate resume exits 0 |
+| execution audit | `runs/execution_audit` | 480 rows, ledgers exact (0 over, 0 unspent); results in `reports/execution_audit_v190/` |
+| tables and Figure 1 | `python -m qemx.selection.tables19` | six tables (CSV, LaTeX, Markdown), a 6-page PDF without overfull boxes, Figure 1 (4 panels; viewed); SBS-B column checked against the rule refitted on the development labels: 580/580 |
+
+## 4. Scientific and data checks
+
+* **1.8.0 per-trial data** (`tests/test_trial_data_v180.py`, 16 passed with the arrays):
+  * 217 arrays match `TRIALS_SHA256SUMS`;
+  * all eight labels directories are complete and bound;
+  * the cached confirmation labels equal the tables derived from the arrays;
+  * the saved replay rows are scored with the derived labels, and the primary contrasts are recomputed to 10⁻¹²;
+  * development and confirmation circuits are disjoint;
+  * an edited SBS-B column is refused by the replay script and by the tables;
+  * an unverifiable baseline is refused.
+* **Pilot per-trial data** (`tests/test_trial_data_pilot19.py`, 3 passed):
+  * 54 arrays match `TRIALS_SHA256SUMS`;
+  * the run is complete and bound, and its data digest is the one in `freeze.json` and `completion.json`;
+  * the shipped labels table equals the table derived from the arrays.
+* **Historical identities:** all 1 989 task identities of the 19 earlier configurations are unchanged (`tests/data/expansion_ids_v180.json`). After the LaTeX escaping fix, the 1.8.0 thesis tables regenerate with identical content: all 14 table files (CSV and LaTeX) are byte-identical, and only the release label in the Markdown header and the provenance differs.
+* **Ancestry:** smoke19, pilot19, fulldev19 and conf19 are registered (146 new logical circuits). They share no circuit with any other study, and conf19 passes the confirmation check.
+* **The second review's corrections**, checked against the code and data:
+  * the symmetry loss and the inverted caption are real defects, both fixed;
+  * the 47-row caption was correct;
+  * fresh-design risk is a defined benchmark, now named as the estimand and measured against executed risk;
+  * the historical data are valid;
+  * the CI trial-data failure was confined to the optional job.
+
+## 5. Independent verification (what was actually used)
+
+* **Sonnet 5.5** (sub-agent; model `claude-sonnet-5-5` per its transcript), two debugging rounds on separate copies of the code.
+  * Round 1 reported NEW-1 … NEW-9, NEW-A and N1/N2 gaps. All are fixed, except NEW-A, which was clarified (an override admits a start; the cap still holds).
+  * Round 2 re-checked these fixes and reported 15 further items (F1–F15) and 3 suspicions:
+    * fixed with regression tests: F1–F13 and F15;
+    * F14 (the `.cmd` join script): fixed, reviewed statically only;
+    * S1 (≈ 1 s watchdog window): documented as a limitation.
+  * Both reports are in the private audit archive (`evidence/review_agents/`).
+* **Fable 5.1** (sub-agent; model `claude-fable-5-1`), an independent fact-check of the research documents against the saved data. It recomputed:
+  * every interval;
+  * the power calculation;
+  * the noise-stratified rule, reproduced exactly at +0.069 [+0.032, +0.108].
+
+  It found 10 items:
+  * a missing test file named in the matrix;
+  * an 11× (not 3×) analysis-row ratio;
+  * seven (not six) fulldev19 noise settings;
+  * a disk estimate that ignored missing arrays — a code defect, fixed with a test;
+  * an incomplete range;
+  * exactness and rounding wording;
+  * over-read learning curves;
+  * "a quarter" instead of 28 %;
+  * a stale YAML count;
+  * durations that are verifiable only from the private logs.
+
+  All were corrected; the durations are now attributed to the logs in the private archive.
+
+## 6. Interface
+
+Headless Chromium against the app started from the fresh extraction (fresh environment), *QEM Performance &
+Selection → Recommend for my circuit* (`tools/browser_recommend19.py`, screenshots in the private archive):
+
+* with the default deployable bundle, the result shows the effective device, the layouts and the declared symmetry;
+* with the frozen bundle, the result appears with no exception and no out-of-date mark;
+* switching *Allow simulated features* on marks it out of date, and switching it back removes the mark.
+
+**PASSED.** The rest of the app was not re-checked in a browser for 1.9.0, because only the recommendation view
+changed; the page-rendering tests are part of the fast suite.
+
+## 7. Packaged archives
+
+* **`qem-explorer-1.9.0.zip`** — the GitHub-ready source.
+  * One root folder `qem-explorer-1.9.0/`, built by `git archive` from the release commit (tracked files only), so run directories, locks, caches and per-trial arrays cannot enter it.
+  * Left out, as in 1.8.0: `archive/` (superseded notes and manuals) and the 1.6.0 pilot's arrays and figures.
+  * About 2 180 files, ≈ 53 MB.
+  * Scan (`packaging/` in the private archive) finds none of the following: symlinks, nested archives, office files, manuals, review inputs, credential, environment or ledger files, caches, machine paths.
+  * The only `.npz` files are the six model bundles' arrays.
+  * The personal-name scan matches only the repository URL; the secret scan matches only a fake token in a UI test.
+* **Trial-data archives.** Each study's arrays are verified against that study's `TRIALS_SHA256SUMS` before packing; extract each archive into the source root.
+  * `qem-explorer-1.9.0-trials-1.zip`: 88 development arrays of `selection_v180`.
+  * `-trials-2.zip`: 129 arrays (confirmation, regimes, noise composition, root audit).
+  * `-trials-pilot.zip`: the 54 pilot arrays.
+  * The 1.8.0 arrays are byte-identical to the 1.8.0 attachments.
+* **`qem-explorer-1.9.0-private-audit.zip`** — owner only (`README_AUDIT.md` inside).
+* **Delivery folder.**
+  * Archives over 25 MB are split into `.001`, `.002`, …;
+  * `SHA256SUMS.txt` lists every archive and part;
+  * `join_qem-explorer-1.9.0.cmd` uses Windows built-ins only;
+  * `join_verify.py` is a cross-platform alternative that was executed here;
+  * `README_DELIVERY.txt`.
+* **Release candidate → release.** Only `qemx/selection/tables19.py` changed: a `\D` in the docstring of `unicode_preamble` raised a `SyntaxWarning`; there is no behaviour change. The archive of that code was checked after extraction into a path with a space and Japanese characters, with the RC's trial data:
+  * `scripts/check_text_io.py`: 0 findings;
+  * `test_release_metadata.py`, `test_tables19.py`, `test_readiness_v190.py` (not slow), `test_trial_data_v180.py` and `test_trial_data_pilot19.py`: **78 passed**;
+  * `verify_trials.py`: 217/217 and 54/54;
+  * apart from that file, the tree is identical to the tested release candidate.
+* Every Python file of the public tree compiles without `SyntaxWarning`.
+
+## 8. Not verified
+
+* GitHub Actions for 1.9.0. It has not run because nothing was pushed, so all CI statements are local emulations of the workflow's steps.
+* Native Windows:
+  * PowerShell commands;
+  * `CTRL_BREAK_EVENT` stopping of stage commands;
+  * the `.cmd` join script, which was reviewed twice statically; the Python join script was executed with complete, missing-part, corrupted-part and existing-wrong-output deliveries.
+* The full development study fulldev19, the reserved confirmation conf19 and the historical reproduction of 1.8.0 (days of CPU). None was run, as instructed.
+* Hardware. Nothing was submitted.
+* The coherent-fraction (`chi`) task cost of fulldev19, which is unmeasured.
+* Recommendation runtime above 6 qubits.

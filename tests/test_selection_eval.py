@@ -233,10 +233,25 @@ def test_figure_profiles_count_negative_regret_within_every_tolerance(tmp_path):
 
 def test_palettes_separate_their_colors_under_color_vision_deficiency():
     from qemx.selection import figures as FG
-    for colors in (list(FG.PROTOCOL_COLORS.values()), [c for c, _, _ in FG.POLICY_STYLE.values()]):
+    from qemx.selection import protocols as PR
+    for colors in ([FG.PROTOCOL_COLORS[k] for k in PR.PORTFOLIO_16], [c for c, _, _ in FG.POLICY_STYLE.values()]):
         rep = FG.palette_report(colors)
         assert rep["normal"] >= 15                                     # full-color readers
         assert min(rep["protan"], rep["deutan"], rep["tritan"]) >= 6   # with markers as secondary encoding
+
+
+def test_the_17_candidate_palette_is_a_composite_encoding():
+    """1.8.0: all 17 candidate colours stay apart (≥ 10 normal, ≥ 6 under every simulated deficiency) and every
+    candidate has its own marker, so colour is never the only identity; the eight 1.6/1.7 colours are unchanged."""
+    from qemx.selection import figures as FG
+    from qemx.selection import protocols as PR
+    keys = list(PR.PORTFOLIO_18)
+    assert set(keys) <= set(FG.PROTOCOL_COLORS) and set(keys) <= set(FG.PROTOCOL_MARKERS)
+    rep = FG.palette_report([FG.PROTOCOL_COLORS[k] for k in keys])
+    assert rep["normal"] >= 10 and min(rep["protan"], rep["deutan"], rep["tritan"]) >= 6, rep
+    assert len({FG.PROTOCOL_MARKERS[k] for k in keys}) == len(keys)
+    assert [FG.PROTOCOL_COLORS[k] for k in PR.PORTFOLIO_16] == ["#C8C8C8", "#E69F00", "#56B4E9", "#0072B2",
+                                                                 "#003F63", "#D55E00", "#009E73", "#CC79A7"]
 
 
 def _choices_and_labels(ds, parts):

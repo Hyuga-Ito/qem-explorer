@@ -1,0 +1,38 @@
+# Smoke workflow of the expanded portfolio (1.8.0): minutes on one core. Every stage (labels with seed scheme 2,
+# analysis, freeze, bundle, recommendation, figures) on a tiny grid with all 17 candidates; its numbers are not results.
+schema: qemx.selection.config/1
+name: smoke18
+status: smoke
+master_seed: 20261024
+R: 12
+budgets: [1000, 30000, 1000000]
+learning_designs: {mode: fresh, per_half: 2, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4]
+    families:
+      ising: [{steps: 1}]
+      hea: [{layers: 1, angle_seed: 5}]
+    inputs: [default, product]
+    observables: [default, z_all]
+    layouts: [best]
+    devices: [fake_fez]
+    variants_per_base: 1
+  - widths: [3]
+    families:
+      ghz: [{theta: 0.9, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best, alt]
+    devices: [fake_fez]
+    variants_per_base: 2
+    include_default: false
+limits: {task_seconds: 900, memory_gb: 4}
+analysis:
+  splits: [same-distribution]
+  split_options: {same-distribution: {k: 3}}
+  feature_sets: [size_budget, deployable18]
+  model_families: [ridge, hgb]
+  bootstrap: 200

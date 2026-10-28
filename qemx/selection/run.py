@@ -32,10 +32,28 @@ def _label_one(spec_json, out_dir, budgets, protocols, R, seed, designs, run_id=
     return spec.task_id, status, rec.get("error", "")
 
 
-def _supervised_label(specs, target, budgets, protocols, R, seed, designs, lim, workers, progress, run_id=""):
+def _keep_failed_copy(target: str, task_id: str) -> None:
+    """Copy a failed record to ``failed_attempts/<id>.attemptN.json`` before ``--retry-failed`` relabels it — unless an
+    identical copy is already there (a retry that wrote no new record: a ceiling or an interruption; 1.9.1)."""
+    import shutil
+    src = os.path.join(target, "tasks", task_id + ".json")
+    fdir = os.path.join(target, "failed_attempts")
+    os.makedirs(fdir, exist_ok=True)
+    have = [f for f in os.listdir(fdir) if f.startswith(task_id + ".attempt")]
+    d = LB.file_digest(src)
+    if any(LB.file_digest(os.path.join(fdir, f)) == d for f in have):
+        return
+    shutil.copy2(src, os.path.join(fdir, "%s.attempt%d.json" % (task_id, len(have) + 1)))
+
+
+def _supervised_label(specs, target, budgets, protocols, R, seed, designs, lim, workers, progress, run_id="",
+                      ceilings=None, session=""):
     """Label ``specs`` into ``target`` with every task in a supervised child process (time and memory limits
     enforced by the parent, on every platform; ``supervise``). A task stopped by the supervisor gets a record with
-    status timeout, memory or error (crashed), so a resumed run retries it only when asked to."""
+    status timeout, memory or error (crashed), so a resumed run retries it only when asked to. Every attempt is
+    appended to ``target``/attempts.jsonl (1.9.0). ``ceilings`` (``resources.Ceilings``): no new task starts once a
+    whole-run ceiling is reached; tasks not started are absent from the returned list."""
+    from . import integrity as IN
     from . import supervise as SV
     cfg_d = LB.config_digest(budgets, protocols, R, seed, designs)
     mem = int(float(lim.get("memory_gb", 0) or 0) * 2 ** 30)
@@ -58,8 +76,20 @@ def _supervised_label(specs, target, budgets, protocols, R, seed, designs, lim, 
             os.makedirs(os.path.dirname(path), exist_ok=True)
             LB.write_json(path, rec)
         done.append((tid, status, o.seconds, msg or ""))
+        IN.append_attempt(target, dict(task_id=tid, status=status, seconds=round(float(o.seconds), 3),
+                                       peak_rss_bytes=int(o.peak_rss_bytes), message=(msg or "")[:500],
+                                       session=session, run_id=run_id))
+        if ceilings is not None:
+            ceilings.finished(tid, o.seconds)
         progress("%s %s %.1fs %s" % (tid, status, o.seconds, (msg or "")[:120]))
-    SV.run_jobs(jobs, workers=workers, on_done=finish)
+    def interrupted(key, seconds):                   # 1.9.1 (F3): a task stopped by Ctrl+C/SIGTERM keeps its time
+        p = os.path.join(target, "tasks", key + ".json")         # did the child write its record before the stop?
+        wrote = os.path.exists(p) and os.path.getmtime(p) >= time.time() - float(seconds) - 1.0
+        IN.append_attempt(target, dict(task_id=key, status="interrupted", seconds=round(float(seconds), 3),
+                                       peak_rss_bytes=0, message="stopped when the labeling command was interrupted",
+                                       record_written=bool(wrote), session=session, run_id=run_id))
+    SV.run_jobs(jobs, workers=workers, on_done=finish, admit=ceilings.admit if ceilings is not None else None,
+                on_interrupt=interrupted)
     return done
 
 
@@ -89,7 +119,7 @@ def record_provenance(target_dir: str, stage: str) -> dict:
     entry = dict(started=datetime.now(timezone.utc).isoformat(timespec="seconds"), provenance=PV.provenance(),
                  engine_sha256=files)
     if os.path.exists(path):
-        rec = json.load(open(path, encoding="utf-8"))
+        rec = TX.read_json(path)
         first = rec["sessions"][0].get("engine_sha256", {})
         entry["changed_since_first"] = sorted(f for f in set(first) | set(files) if first.get(f) != files.get(f))
         rec["sessions"].append(entry)
@@ -107,15 +137,44 @@ def _session_summary(done: list, seconds: float) -> dict:
                 seconds=seconds, per_task_seconds=[d[2] for d in done if d[1] == "ok"])
 
 
+def run_status(comp: dict, *, limit=None, stopped=None) -> tuple:
+    """(status, exit code) of a labeling command from the run-wide completion (1.9.0; second review N1):
+
+    * ``complete`` (0) — every manifest task has a valid label;
+    * ``partial-by-limit`` (0) — ``--limit`` was given deliberately, nothing failed or is corrupted, tasks remain;
+    * ``incomplete`` (1) — failed or corrupted records exist (this session's or retained from an earlier one), or
+      tasks remain without ``--limit`` (e.g. a ceiling stopped the run).
+    A partial run is never reported as complete; analysis of it needs ``--allow-partial``."""
+    if comp["complete"]:
+        return "complete", 0
+    if comp["n_failed"] or comp["corrupted"]:
+        return "incomplete", 1
+    if limit is not None and not stopped:
+        return "partial-by-limit", 0
+    return "incomplete", 1
+
+
 def label(cfg: dict, out_dir: str, *, workers: int = 1, final: bool = False, limit: int | None = None,
-          progress=print, subdir: str | None = None, accept_changes: bool = False, retry_failed: bool = False) -> dict:
+          progress=print, subdir: str | None = None, accept_changes: bool = False, retry_failed: bool = False,
+          quarantine_corrupted: bool = False, override_limits: str | None = None) -> dict:
     """Label the development tasks (or, with ``final``, the final-test tasks into ``out_dir``/final; with
     ``subdir``, a separate study such as the controlled regimes into ``out_dir``/``subdir``).
 
     The labels directory is bound to this run (``binding.bind``: configuration, task manifest, split, portfolio,
     device snapshots, code and environment); an incompatible resume is refused before anything runs. Tasks already
-    labeled are skipped; tasks recorded as error, timeout or memory are retried only with ``retry_failed``."""
+    labeled are skipped (checked in this process, without starting a child); tasks recorded as error, timeout or
+    memory are retried only with ``retry_failed`` (the failed record is kept in attempts.jsonl and under
+    failed_attempts/). Corrupted records stop the command unless ``quarantine_corrupted`` moves them aside (listed in
+    run.json) to be relabeled.
+
+    1.9.0 (second review N1, N2): a resource preflight runs first (``resources``); a configured cap that the known
+    estimate exceeds refuses the run unless ``override_limits`` gives a reason (recorded); whole-run ceilings are
+    monitored while labeling. The summary reports this session *and* the whole run (``run``: ``integrity.completion``)
+    with ``status`` complete | partial-by-limit | incomplete and the command's ``exit_code``."""
+    from datetime import datetime, timezone
     from . import binding as BD
+    from . import integrity as IN
+    from . import resources as RS
     from . import supervise as SV
     specs = DS.expand(cfg)
     dev, fin = DS.final_test(specs, float(cfg.get("final_test_fraction", 0.0)))
@@ -123,43 +182,72 @@ def label(cfg: dict, out_dir: str, *, workers: int = 1, final: bool = False, lim
     todo = fin if final else dev
     target = os.path.join(out_dir, stage)
     sup = SV.support()
-    run = BD.bind(target, cfg, todo, dev, fin, stage, accept_changes=accept_changes, support=sup)
-    if limit is not None:
-        todo = todo[: int(limit)]
-    os.makedirs(os.path.join(target, "tasks"), exist_ok=True)
-    budgets = [int(b) for b in cfg.get("budgets", PR.BUDGETS)]
-    protocols = list(cfg.get("protocols", list(PR.PORTFOLIO)))
-    R, seed = int(cfg.get("R", 200)), int(cfg.get("master_seed", 20261019))
-    lim = cfg.get("limits", {})
-    manifest = dict(schema="qemx.selection.manifest/2", config=cfg, development=[s.to_json() for s in dev],
-                    final=[s.task_id for s in fin], run_identity=run["identity_digest"])
-    mpath = os.path.join(target if subdir else out_dir, "manifest.json")
-    if os.path.exists(mpath):
-        old = TX.read_json(mpath)
-        if DS.label_part(old.get("config") or {}) != DS.label_part(cfg) \
-                or [d for d in old.get("development", [])] != manifest["development"] \
-                or old.get("final") != manifest["final"]:
-            raise BD.IncompatibleRun("%s describes another configuration or task split; use a new output directory"
-                                     % mpath)
-    else:
-        LB.write_json(mpath, manifest)
-    designs = cfg.get("learning_designs", 1)
-    record_provenance(target, stage)
-    if not retry_failed:
-        skip = set()
-        for s in todo:
-            p = os.path.join(target, "tasks", s.task_id + ".json")
-            if os.path.exists(p):
-                r = LB.load_record(target, s.task_id)
-                if r.get("status") in ("error", "timeout", "memory") and \
-                        r.get("config_digest") == run["identity"]["labels_config"]:
-                    skip.add(s.task_id)
-        todo = [s for s in todo if s.task_id not in skip]
-    t0 = time.perf_counter()
-    done = _supervised_label(todo, target, budgets, protocols, R, seed, designs, lim, workers, progress,
-                             run_id=run["identity_digest"])
-    summary = dict(_session_summary(done, time.perf_counter() - t0), supervision=sup, stage=stage)
-    LB.write_json(os.path.join(target, "label_summary.json"), summary)
+    pre = RS.preflight(cfg, target if os.path.isdir(target) else None, workers=workers, final=final, subdir=subdir)
+    adm = RS.admission(pre, override_limits)            # raises AdmissionRefused before anything is written
+    with IN.RunLock(target, "label"):
+        run = BD.bind(target, cfg, todo, dev, fin, stage, accept_changes=accept_changes, support=sup)
+        session = run["sessions"][-1]["started"]
+        if override_limits or adm["unknown"]:
+            rec_ = BD.load(target)
+            rec_["sessions"][-1]["admission"] = dict(adm, preflight_caps=pre["caps"])
+            TX.write_json(os.path.join(target, "run.json"), rec_, indent=1, default=str, atomic=True)
+        os.makedirs(os.path.join(target, "tasks"), exist_ok=True)
+        budgets = [int(b) for b in cfg.get("budgets", PR.BUDGETS)]
+        protocols = list(cfg.get("protocols", list(PR.PORTFOLIO_16)))
+        R, seed = int(cfg.get("R", 200)), int(cfg.get("master_seed", 20261019))
+        lim = cfg.get("limits", {})
+        manifest = dict(schema="qemx.selection.manifest/2", config=cfg, development=[s.to_json() for s in dev],
+                        final=[s.task_id for s in fin], run_identity=run["identity_digest"])
+        mpath = os.path.join(target if subdir else out_dir, "manifest.json")
+        if os.path.exists(mpath):
+            old = TX.read_json(mpath)
+            if DS.label_part(old.get("config") or {}) != DS.label_part(cfg) \
+                    or [d for d in old.get("development", [])] != manifest["development"] \
+                    or old.get("final") != manifest["final"]:
+                raise BD.IncompatibleRun("%s describes another configuration or task split; use a new output "
+                                         "directory" % mpath)
+        else:
+            LB.write_json(mpath, manifest)
+        designs = cfg.get("learning_designs", 1)
+        record_provenance(target, stage)
+        before = IN.completion(target)
+        if before["corrupted"]:
+            if not quarantine_corrupted:
+                raise IN.CorruptedRun("%s has %d corrupted record(s): %s. Nothing was labeled. Inspect them, or move "
+                                      "them aside and relabel with --quarantine-corrupted." % (
+                                          target, len(before["corrupted"]), "; ".join(
+                                              "%s (%s)" % (c["task_id"], c["why"]) for c in before["corrupted"][:5])))
+            IN.quarantine(target, [c["task_id"] for c in before["corrupted"]],
+                          "corrupted: " + "; ".join("%s (%s)" % (c["task_id"], c["why"]) for c in before["corrupted"]))
+            before = IN.completion(target)
+        done_ok = set(before["completed_ids"])
+        failed_ids = {t for v in before["failed"].values() for t in v}
+        if limit is not None:
+            todo = todo[: int(limit)]
+        skipped = [s for s in todo if s.task_id in done_ok]
+        retained = [s for s in todo if s.task_id in failed_ids and not retry_failed]
+        keep = {s.task_id for s in retained} | done_ok
+        work = [s for s in todo if s.task_id not in keep]
+        if retry_failed:
+            for s in work:
+                if s.task_id in failed_ids:                  # keep the failed attempt's record (audit trail)
+                    IN.keep_in_ledger(target, s.task_id, "replaced by a retry")      # 1.9.1 (F3)
+                    _keep_failed_copy(target, s.task_id)
+        ceil = RS.Ceilings(cfg, target, IN.consumed_seconds(target)["total_seconds"])     # 1.9.1 (F3): persistent
+        t0 = time.perf_counter()
+        done = _supervised_label(work, target, budgets, protocols, R, seed, designs, lim, workers, progress,
+                                 run_id=run["identity_digest"], ceilings=ceil, session=session)
+        sess = _session_summary(done + [(s.task_id, "skipped", 0.0, "") for s in skipped], time.perf_counter() - t0)
+        after = IN.completion(target)
+        status, code = run_status(after, limit=limit, stopped=ceil.stopped)
+        summary = dict(sess, retained_failures=[s.task_id for s in retained], not_started=len(work) - len(done),
+                       stopped=ceil.stopped, limit=limit, status=status, exit_code=code,
+                       run={k: v for k, v in after.items() if k != "completed_ids"}, admission=adm,
+                       preflight=dict(cpu=pre["cpu"], wall=pre["wall"], disk=pre["disk"], memory=pre["memory"],
+                                      caps=pre["caps"]),
+                       supervision=sup, stage=stage,
+                       finished=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        LB.write_json(os.path.join(target, "label_summary.json"), summary)
     return summary
 
 
@@ -174,7 +262,7 @@ def measured_rates(labels_dir: str) -> list:
             continue
         if ".tmp" in f:
             continue
-        rec = json.load(open(os.path.join(tdir, f), encoding="utf-8"))
+        rec = TX.read_json(os.path.join(tdir, f))
         if rec.get("status") != "ok":
             continue
         ps = rec.get("prepare_seconds") or 0.0
@@ -184,7 +272,7 @@ def measured_rates(labels_dir: str) -> list:
         rows.append(dict(n=int(rec["spec"]["n"]), prepare=prep, per_trial=max(float(rec["seconds"]) - prep, 0.0)
                          / trials, designs=rec.get("learning_designs", 1), seconds=float(rec["seconds"]),
                          json_bytes=os.path.getsize(os.path.join(tdir, f)),
-                         npz_bytes_per_trial=os.path.getsize(npz) / trials if os.path.exists(npz) else 0.0))
+                         npz_bytes_per_trial=os.path.getsize(npz) / trials if os.path.exists(npz) else None))
     return rows
 
 
@@ -220,34 +308,29 @@ def estimate(cfg: dict, measured: list | None = None) -> dict:
                disk_mb=float(len(specs) * (2 * P * nB * R * 8 + 2 * P * nB * len(("a", "b", "c", "d")) * R) / 1e6
                              / 3.0))
     if measured:
+        from .resources import rate_function
         ns = sorted({m["n"] for m in measured})
-        med = {n: (float(np.median([m["prepare"] for m in measured if m["n"] == n])),
-                   float(np.median([m["per_trial"] for m in measured if m["n"] == n]))) for n in ns}
-
-        def rate(n):
-            if n in med:
-                return med[n]
-            if len(ns) < 2:
-                return med[ns[-1]]
-            vals = []
-            for k in (0, 1):
-                y = np.log([max(med[m][k], 1e-9) for m in ns])
-                b, a = np.polyfit(ns, y, 1)
-                vals.append(max(float(np.exp(a + b * n)), med[ns[-1]][k]) if n > ns[-1] else med[ns[0]][k])
-            return tuple(vals)
+        rate = rate_function(measured)
         cpu = sum(rate(s.n)[0] + rate(s.n)[1] * 2 * R * nB * P for s in specs)
         jb = float(np.median([m["json_bytes"] for m in measured]))
-        tb = float(np.median([m["npz_bytes_per_trial"] for m in measured]))
-        out.update(disk_mb=float(len(specs) * (jb + tb * 2 * R * nB * P) / 1e6))
+        sizes = [m["npz_bytes_per_trial"] for m in measured if m["npz_bytes_per_trial"] is not None]
+        if sizes:                                    # 1.9.0: records without their arrays tell nothing about size
+            tb = float(np.median(sizes))
+            out.update(disk_mb=float(len(specs) * (jb + tb * 2 * R * nB * P) / 1e6))
         out.update(cpu_hours=float(cpu / 3600.0), measured_tasks=len(measured), measured_widths=ns,
                    extrapolated_widths=sorted({s.n for s in specs} - set(ns)),
                    designs_measured=sorted({str(m["designs"]) for m in measured}),
                    designs_target=str(plan.to_json()))
+    else:
+        out.update(cpu_hours=None, cpu_status="unknown (no measured rates; plan --measured DIR, or label a few tasks "
+                                            "first and plan --out the run)")
     lim = cfg.get("limits", {})
     caps = {}
-    if out.get("cpu_hours") is not None and lim.get("cpu_hours"):
-        caps["cpu_hours"] = dict(cap=float(lim["cpu_hours"]), within=bool(out["cpu_hours"] <= float(lim["cpu_hours"])))
-    if lim.get("disk_gb"):
+    if lim.get("cpu_hours") is not None:            # 1.9.0: a cap is never reported as met when its estimate is unknown
+        caps["cpu_hours"] = dict(cap=float(lim["cpu_hours"]),
+                                 within=None if out.get("cpu_hours") is None
+                                 else bool(out["cpu_hours"] <= float(lim["cpu_hours"])))
+    if lim.get("disk_gb") is not None:
         caps["disk_gb"] = dict(cap=float(lim["disk_gb"]), within=bool(out["disk_mb"] / 1e3 <= float(lim["disk_gb"])))
     out["caps"] = caps
     out["registry_overlap"] = {k: len(v) for k, v in AY.overlap(AY.load(), specs, exclude_study=cfg.get("name"))
@@ -262,7 +345,7 @@ def family_benefit(ch, lab, run_dir: str, reps: int = 1000, seed: int = 0) -> li
     from . import evaluate as EV
     per = EV._per_policy_from_choices(ch, lab)
     frz = os.path.join(run_dir, "freeze.json")
-    prop = json.load(open(frz, encoding="utf-8"))["policy"] if os.path.exists(frz) else None
+    prop = TX.read_json(frz)["policy"] if os.path.exists(frz) else None
     if prop not in per:
         cands = [p for p in per if p.startswith("MODEL[")]
         if not cands:
@@ -282,15 +365,104 @@ def family_benefit(ch, lab, run_dir: str, reps: int = 1000, seed: int = 0) -> li
     return out
 
 
-def deployed_configuration(out_dir: str, a: dict) -> tuple:
+FROZEN_EXTRAS = ("deployed", "selective", "nested_selective")      # evaluate one model configuration: the frozen one
+
+
+def deployed_configuration(out_dir: str, a: dict):
     """(family, feature set) of the recommender analyzed as deployed: the frozen configuration when the run has a
-    ``freeze.json`` (decision D25), else ``analysis.deployed_family`` / ``deployed_set``."""
+    ``freeze.json`` (decision D25); before a freeze, the configuration the analysis section declares explicitly
+    (``analysis.deployed_family`` *and* ``deployed_set``); otherwise None — the configuration is not known yet.
+
+    1.9.1 (independent review F1): 1.9.0 fell back to ``hgb|deployable+simulated`` before a freeze, a configuration
+    outside the 1.9 studies' grids, so an initial analysis with these extras evaluated a model that could never be
+    frozen and the pipeline later reused those tables."""
     frz = os.path.join(out_dir, "freeze.json")
     if os.path.exists(frz):
-        pol = json.load(open(frz, encoding="utf-8"))["policy"]
+        pol = TX.read_json(frz)["policy"]
         fam, sname = pol[len("MODEL["):-1].split("|")
         return fam, sname
-    return a.get("deployed_family", "hgb"), a.get("deployed_set", "deployable+simulated")
+    if a.get("deployed_family") and a.get("deployed_set"):
+        return a["deployed_family"], a["deployed_set"]
+    return None
+
+
+def deployed_configuration_or_default(out_dir: str, a: dict) -> tuple:
+    """The frozen or declared configuration (``deployed_configuration``), else 1.9.0's default
+    (``analysis.deployed_family`` or hgb, ``analysis.deployed_set`` or deployable+simulated). For analyses that only need
+    *a* fitted recommender and are not the frozen-configuration evaluation — the controlled regime study and the
+    runtime profile (their 1.9.0 behaviour, kept; independent debugging of 1.9.1)."""
+    conf = deployed_configuration(out_dir, a)
+    return conf if conf is not None else (a.get("deployed_family", "hgb"), a.get("deployed_set", "deployable+simulated"))
+
+
+def frozen_extras_settings(a: dict) -> dict:
+    """The evaluation settings the deployed/selective/nested tables depend on (beyond the configuration and data)."""
+    return dict(k=int(a.get("split_options", {}).get("same-distribution", {}).get("k", 5)),
+                nested_inner_k=int(a.get("nested_inner_k", 4)), bootstrap=int(a.get("bootstrap", 1000)),
+                selective_bootstrap=int(a.get("selective_bootstrap", 400)))
+
+
+def frozen_extras_binding(out_dir: str, a: dict, data_digest: str | None) -> dict:
+    """What the tables of ``FROZEN_EXTRAS`` are bound to (1.9.1; F1): the evaluated configuration and where it came
+    from, the development data, the evaluation settings and the engine code."""
+    from . import binding as BD
+    conf = deployed_configuration(out_dir, a)
+    frz = os.path.join(out_dir, "freeze.json")
+    return dict(configuration="MODEL[%s|%s]" % conf if conf else None,
+                source="freeze" if os.path.exists(frz) else "declared (analysis.deployed_family/deployed_set)",
+                data=data_digest, settings=DS.freeze_digest(frozen_extras_settings(a))[:16], code=BD.code_digest())
+
+
+LEGACY_NO_BINDING = "record no binding"                          # suffix of a pre-1.9.1 table problem
+
+
+def nested_reuse_problems(out_dir: str, cfg: dict, required=("deployed", "nested_selective")) -> list:
+    """Why the existing deployed/nested tables of ``out_dir`` cannot be reused for the frozen configuration (1.9.1;
+    independent review F1): an empty list means they evaluate exactly the frozen configuration, on the frozen
+    development data, with the configured evaluation settings and the current code (or a recorded, accepted code
+    change). File existence alone is never enough. ``required``: the tables that must exist (``freeze --complete``
+    needs only ``nested_selective``, as before 1.9.1; any other frozen-configuration table present is checked too).
+    Problems ending in ``LEGACY_NO_BINDING`` concern tables made before 1.9.1, which record no binding."""
+    from . import binding as BD
+    adir = os.path.join(out_dir, "analysis")
+    fz = os.path.join(out_dir, "freeze.json")
+    if not os.path.exists(fz):
+        return ["the run is not frozen"]
+    frz = TX.read_json(fz)
+    rj = os.path.join(adir, "results.json")
+    res = TX.read_json(rj) if os.path.exists(rj) else {}
+    probs = []
+    for name in ("deployed", "nested_selective"):
+        e = (res.get("extras") or {}).get(name)
+        if not e:
+            if name in required:
+                probs.append("no %s analysis yet" % name)
+            continue
+        b = e.get("binding")
+        if not b:
+            probs.append("the %s tables were made before 1.9.1 and %s" % (name, LEGACY_NO_BINDING))
+            continue
+        if b.get("configuration") != frz["policy"]:
+            probs.append("the %s tables evaluate %s, the frozen configuration is %s" % (name, b.get("configuration"),
+                                                                                       frz["policy"]))
+        if frz.get("dev_data_digest") and b.get("data") != frz["dev_data_digest"]:
+            probs.append("the %s tables were made on other development data" % name)
+        if b.get("settings") != DS.freeze_digest(frozen_extras_settings(cfg.get("analysis", {})))[:16]:
+            probs.append("the %s tables were made with other evaluation settings (k, nested_inner_k, bootstrap)"
+                         % name)
+        code_ok = b.get("code") == BD.code_digest() or any(
+            c.get("now") == BD.code_digest() for c in res.get("code_changes", []) or [])
+        if not code_ok:
+            probs.append("the %s tables were made by other code" % name)
+    op = os.path.join(adir, "nested_operating.csv")
+    if os.path.exists(op):
+        import pandas as pd
+        conf = str(pd.read_csv(op, encoding="utf-8").configuration.iloc[0])
+        if conf != frz["policy"]:
+            probs.append("nested_operating.csv evaluates %s, the frozen configuration is %s" % (conf, frz["policy"]))
+    else:
+        probs.append("nested_operating.csv is missing")
+    return sorted(set(probs))
 
 
 def _deployed_tables(ds, out_dir, adir, a, k):
@@ -343,9 +515,14 @@ def _selective_tables(adir, a, rows=None):
     return None
 
 
-def pool(adir: str, reps: int = 1000, seed: int = 0) -> dict:
+def pool(adir: str, reps: int = 1000, seed: int = 0, only=None) -> dict:
     """From the saved tables only: the out-of-fold pooled summary of every split (``pooled_<split>.csv``) and the
-    bias-corrected estimate of the best model configuration per split (``optimism.csv``)."""
+    bias-corrected estimate of the best model configuration per split (``optimism.csv``).
+
+    ``only`` (1.9.1): re-pool just these splits and leave every other pooled table — in particular the one a freeze
+    was chosen on — byte for byte as it is (an extras-only analysis, such as the nested stage after a freeze, pools
+    nothing; ``optimism.csv`` keeps the other splits' rows; the final evaluation is re-summarized only when ``only`` is
+    None)."""
     import pandas as pd
     from . import evaluate as EV
     lab = pd.read_csv(os.path.join(adir, "labels.csv"), encoding="utf-8")
@@ -354,6 +531,8 @@ def pool(adir: str, reps: int = 1000, seed: int = 0) -> dict:
         if not (f.startswith("choices_") and f.endswith(".csv")):
             continue
         kind = f[len("choices_"):-4]
+        if only is not None and kind not in only:
+            continue
         ch = pd.read_csv(os.path.join(adir, f), encoding="utf-8")
         if ch.empty:
             continue
@@ -372,7 +551,15 @@ def pool(adir: str, reps: int = 1000, seed: int = 0) -> dict:
                     opt.append(dict(split=kind, **EV.bbc_cv(ch, lab, reps=reps, seed=seed, ref=ref)))
         done.append(kind)
     if opt:
-        pd.DataFrame(opt).to_csv(os.path.join(adir, "optimism.csv"), index=False, encoding="utf-8")
+        op = os.path.join(adir, "optimism.csv")
+        new = pd.DataFrame(opt)
+        if only is not None and os.path.exists(op):              # keep the rows of the splits not re-pooled
+            old = pd.read_csv(op, encoding="utf-8")
+            if "split" in old.columns:
+                new = pd.concat([old[~old.split.isin(done)], new], ignore_index=True)
+        new.to_csv(op, index=False, encoding="utf-8")
+    if only is not None:
+        return dict(pooled=done, optimism=len(opt))
     fdir = os.path.join(os.path.dirname(os.path.normpath(adir)), "final")
     fch = os.path.join(fdir, "choices_final.csv")
     if os.path.exists(fch):                      # the once-only final evaluation's saved rows, re-summarized
@@ -385,24 +572,110 @@ def pool(adir: str, reps: int = 1000, seed: int = 0) -> dict:
     return dict(pooled=done, optimism=len(opt))
 
 
-def analyze(out_dir: str, cfg: dict, only_splits=None, only_extras=None) -> dict:
+class StaleAnalysis(RuntimeError):
+    """An analysis directory produced from another analysis configuration, other labels, other data or other code."""
+
+
+def analysis_identity(cfg: dict, comp: dict) -> dict:
+    """What an analysis directory's tables depend on (1.9.0; second review, analysis outputs): the analysis section,
+    the label-determining configuration, the evaluated data content (``integrity.completion`` data digest) and the
+    engine code. Tables of different identities are never merged into one directory."""
+    from . import binding as BD
+    return dict(analysis=DS.freeze_digest(cfg.get("analysis", {}))[:16],
+                labels=DS.freeze_digest(DS.label_part(cfg))[:16], data=(comp.get("data_digest") or "")[:16],
+                code=BD.code_digest())
+
+
+def _check_analysis_identity(adir: str, ident: dict, reset: bool, accept_code: bool = False) -> dict | None:
+    """None when the directory is new or has the same identity; archives it when ``reset``; else StaleAnalysis. A 1.8.0
+    directory without a recorded identity is reported (``legacy``) and adopted.
+
+    Only a *code* difference (same analysis section, labels and data) can be accepted explicitly (``accept_code``,
+    ``--accept-changes``): the new tables are then added beside the old ones and the change is recorded in results.json
+    (``code_changes``), as labeling records accepted code changes. A frozen run's analysis is never archived by
+    ``reset``: the freeze is bound to its tables (1.9.0, independent verification)."""
+    p = os.path.join(adir, "results.json")
+    if not os.path.exists(p):
+        return None
+    old = TX.read_json(p).get("identity")
+    if old is None:
+        return dict(legacy=True)
+    diff = sorted(k for k in ident if old.get(k) != ident[k])
+    if not diff:
+        return None
+    if diff == ["code"] and accept_code:
+        return dict(accepted_code_change=dict(recorded=old.get("code"), now=ident["code"]))
+    frozen = os.path.exists(os.path.join(os.path.dirname(os.path.normpath(adir)), "freeze.json"))
+    if not reset or frozen:
+        hint = ("this run is frozen on these tables: a frozen decision is never re-analyzed in place — %s"
+                % ("accept the code change explicitly (--accept-changes; recorded) to add analyses, or analyze "
+                   "a copy of the labels in a new run directory" if diff == ["code"] else
+                   "analyze a copy of the labels in a new run directory")) if frozen else (
+            "Analyze into a new run directory, or archive these tables with --reset-analysis%s." %
+            (" (or, for a code change only, add to them with --accept-changes, recorded)" if diff == ["code"] else ""))
+        raise StaleAnalysis("%s holds tables of another %s (recorded %s, now %s); merging them would mix results. %s"
+                            % (adir, "/".join(diff), {k: old.get(k) for k in diff}, {k: ident[k] for k in diff}, hint))
+    from datetime import datetime, timezone
+    dst = adir.rstrip("/\\") + ".superseded-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    os.replace(adir, dst)
+    os.makedirs(adir, exist_ok=True)
+    return dict(archived=os.path.basename(dst), differed=diff)
+
+
+def analyze(out_dir: str, cfg: dict, only_splits=None, only_extras=None, allow_partial: bool = False,
+            reset: bool = False, accept_changes: bool = False) -> dict:
     """Every evaluation the configuration asks for, from the saved trials of ``out_dir``/dev. Writes
     ``analysis/results.json`` (merged with what other analysis processes wrote) and CSV tables. The same-distribution
     split compares every model family × feature set; the other splits compare the families and feature sets listed
-    in ``analysis.other_split_families`` / ``other_split_sets`` (compute)."""
+    in ``analysis.other_split_families`` / ``other_split_sets`` (compute).
+
+    1.9.0 (second review N1, analysis outputs): the development labels must be complete unless ``allow_partial``
+    (then results.json says ``data.status = partial`` with the missing and failed tasks, and a freeze refuses it); the
+    directory's identity (``analysis_identity``) must match an existing analysis there, or ``reset`` archives it."""
     import pandas as pd
     from . import evaluate as EV
     from . import features as FE
     from . import policies as PO
     from . import binding as BD
-    ds, collection = BD.collect(os.path.join(out_dir, "dev"))
+    from . import integrity as IN
+    ddir = os.path.join(out_dir, "dev")
+    comp = IN.completion(ddir)
+    if comp["corrupted"]:
+        raise IN.CorruptedRun("%s: %s" % (ddir, IN.describe(comp)))
+    if not comp["complete"] and not allow_partial:
+        raise IN.IncompleteRun("the development labels are not complete (%s). Finish labeling, or analyze the "
+                               "labeled part explicitly with --allow-partial (exploratory; a freeze refuses it)."
+                               % IN.describe(comp))
+    if comp["completed"] == 0:
+        raise IN.IncompleteRun("no development task is labeled yet (%s): nothing to analyze" % IN.describe(comp))
     a = cfg.get("analysis", {})
+    adir = os.path.join(out_dir, "analysis")
+    ident = analysis_identity(cfg, comp)
+    with IN.RunLock(out_dir, "analyze"):
+        note = _check_analysis_identity(adir, ident, reset, accept_code=accept_changes)
+        ds, collection = BD.collect(ddir)
+        return _analyze(out_dir, cfg, a, ds, collection, comp, ident, note, adir, only_splits, only_extras)
+
+
+def _analyze(out_dir, cfg, a, ds, collection, comp, ident, note, adir, only_splits, only_extras) -> dict:
+    import pandas as pd
+    from . import evaluate as EV
+    from . import features as FE
+    from . import policies as PO
     sets = {k: FE.SETS[k] for k in a.get("feature_sets", ["size_budget", "lightcone", "deployable"])}
     fams = tuple(a.get("model_families", ["ridge", "enet", "hgb", "mlp"]))
     res = dict(schema="qemx.selection.results/1", protocols=ds.protocols, budgets=ds.budgets, rows=len(ds.rows),
                tasks=len(set(ds.col("task_id").tolist())), base_circuits=len(set(ds.groups.tolist())),
-               design_mode=ds.design_mode, evaluations={})
-    adir = os.path.join(out_dir, "analysis")
+               design_mode=ds.design_mode, evaluations={}, identity=ident,
+               data=dict(status="complete" if comp["complete"] else "partial", expected=comp["expected"],
+                         completed=comp["completed"], failed=comp["failed"], missing=comp["missing"],
+                         data_digest=comp["data_digest"]))
+    if note:
+        res["identity_note"] = note
+        if note.get("accepted_code_change"):
+            prev = TX.read_json(os.path.join(adir, "results.json"))
+            res["identity"] = prev.get("identity", ident)            # the tables' original identity is kept
+            res["code_changes"] = list(prev.get("code_changes", [])) + [note["accepted_code_change"]]
     os.makedirs(adir, exist_ok=True)
     LB.write_json(os.path.join(adir, "collection.json"), dict(collection, rows=len(ds.rows),
                                                               design_mode=ds.design_mode))
@@ -410,17 +683,22 @@ def analyze(out_dir: str, cfg: dict, only_splits=None, only_extras=None) -> dict
 
     def checkpoint():                          # 1.7.0: written after every split and extra (survives interruptions)
         if os.path.exists(old_res):
-            prev_ = json.load(open(old_res, encoding="utf-8"))
+            prev_ = TX.read_json(old_res)
             res["evaluations"] = dict(prev_.get("evaluations", {}), **res["evaluations"])
             res["extras"] = dict(prev_.get("extras", {}), **res.get("extras", {}))
         LB._write_json(old_res, res)
     if os.path.exists(old_res):
-        prev = json.load(open(old_res, encoding="utf-8"))
+        prev = TX.read_json(old_res)
         res["evaluations"].update(prev.get("evaluations", {}))
         res["extras"] = prev.get("extras", {})
+        for key in ("stale_nested", "deferred_extras"):     # 1.9.1: the audit trail survives a re-analysis
+            if prev.get(key):
+                res[key] = prev[key]
+    evaluated = []
     for kind in a.get("splits", ["same-distribution"]):
         if only_splits is not None and kind not in only_splits:
             continue
+        evaluated.append(kind)
         kw = dict(a.get("split_options", {}).get(kind, {}))
         parts = EV.splits(ds, kind, **kw)
         summ, rows = [], []
@@ -467,30 +745,45 @@ def analyze(out_dir: str, cfg: dict, only_splits=None, only_extras=None) -> dict
     for name in names:
         if name not in extra:
             raise ValueError("unknown analysis %r (choose from %s)" % (name, ", ".join(extra)))
+        if name in FROZEN_EXTRAS and deployed_configuration(out_dir, a) is None:
+            # 1.9.1 (independent review F1): deferred until the model configuration is frozen
+            half = (" (analysis.deployed_family and deployed_set are used only together; only one is declared)"
+                    if bool(a.get("deployed_family")) != bool(a.get("deployed_set")) else "")
+            res.setdefault("deferred_extras", {})[name] = (
+                "needs the frozen configuration: run after `freeze` (pipeline stage 'nested', or analyze --splits= "
+                "--extras deployed,nested_selective)" + half)
+            print("deferred: %s evaluates the frozen configuration, which is not known before `freeze`%s" % (name, half))
+            checkpoint()
+            continue
         t0 = time.perf_counter()
         tab = extra[name]()
         if tab is not None:                                   # None: the analysis wrote its own tables
             pd.DataFrame(tab).to_csv(os.path.join(adir, "%s.csv" % name), index=False, encoding="utf-8")
         res.setdefault("extras", {})[name] = dict(csv="%s.csv" % name if tab is not None else None,
                                                   seconds=time.perf_counter() - t0)
+        if name in FROZEN_EXTRAS:
+            res["extras"][name]["binding"] = frozen_extras_binding(out_dir, a, comp["data_digest"])
+            (res.get("deferred_extras") or {}).pop(name, None)
         checkpoint()
     fails = []
-    lab = LB.summarize(os.path.join(out_dir, "dev"), failures=fails)
-    lab = lab[lab.task_id.isin(set(ds.col("task_id").tolist()))]          # the run's manifest only
+    lab = LB.summarize(os.path.join(out_dir, "dev"), failures=fails, task_ids=sorted(set(ds.col("task_id").tolist()))
+                       + sorted({f["task_id"] for f in ds.failures}))       # the run's manifest only
     lab.to_csv(os.path.join(adir, "labels.csv"), index=False, encoding="utf-8")
     pd.DataFrame(fails, columns=["task_id", "status", "error_kind", "error"]).to_csv(
         os.path.join(adir, "label_failures.csv"), index=False, encoding="utf-8")
     if ds.design_mode == "fresh" or "CDR" in ds.protocols:
         pd.DataFrame(AN.design_variance(lab)).to_csv(os.path.join(adir, "design_variance.csv"), index=False,
                                                      encoding="utf-8")
-    pool(adir, reps=int(a.get("bootstrap", 1000)))
+    # 1.9.1: re-pool only the splits evaluated now (all declared ones when no --splits was given); the pooled table a
+    # freeze was chosen on is never rewritten by an extras-only analysis such as the nested stage
+    pool(adir, reps=int(a.get("bootstrap", 1000)), only=None if only_splits is None else evaluated)
     tf = {}
     for r in ds.rows:
         tf[r["task_id"]] = dict(task_id=r["task_id"], base_id=r["base_id"], family=r["family"], device=r["device"],
                                 observable=r["observable"], inputs=r["inputs"], layout=r["layout"], **r["feats"])
     pd.DataFrame(list(tf.values())).to_csv(os.path.join(adir, "task_features.csv"), index=False, encoding="utf-8")
     if os.path.exists(old_res):                         # merge with what another analysis process wrote meanwhile
-        prev = json.load(open(old_res, encoding="utf-8"))
+        prev = TX.read_json(old_res)
         res["evaluations"] = dict(prev.get("evaluations", {}), **res["evaluations"])
         res["extras"] = dict(prev.get("extras", {}), **res.get("extras", {}))
     LB._write_json(old_res, res)
@@ -533,29 +826,58 @@ def mismatch_specs(cfg: dict) -> list:
     return out
 
 
-def mismatch_label(cfg: dict, out_dir: str, *, workers: int = 1, progress=print, accept_changes: bool = False) -> dict:
-    """Label every (scenario, task) with the budget grid extended by the diagnostic-reduced budgets."""
+def mismatch_label(cfg: dict, out_dir: str, *, workers: int = 1, progress=print, accept_changes: bool = False,
+                   retry_failed: bool = False, override_limits: str | None = None) -> dict:
+    """Label every (scenario, task) with the budget grid extended by the diagnostic-reduced budgets. 1.9.0: the same
+    resource admission, monitored ceilings, retained failures and ``retry_failed`` as ``label``."""
     m = cfg["mismatch"]
     budgets = mismatch_budgets(cfg["budgets"], m.get("diag_fraction", 0.02), m.get("diag_min", 200))
     target = os.path.join(out_dir, "mismatch")
     os.makedirs(os.path.join(target, "tasks"), exist_ok=True)
-    protocols = list(cfg.get("protocols", list(PR.PORTFOLIO)))
+    protocols = list(cfg.get("protocols", list(PR.PORTFOLIO_16)))
     R, seed = int(cfg.get("R", 200)), int(cfg.get("master_seed", 20261019))
     lim = cfg.get("limits", {})
     pairs = mismatch_specs(cfg)
     from . import binding as BD
+    from . import resources as RS
     from . import supervise as SV
     specs = [s for _, s in pairs]
-    BD.bind(target, dict(cfg, budgets=budgets), specs, specs, [], "mismatch", accept_changes=accept_changes,
-            support=SV.support())
-    LB._write_json(os.path.join(target, "scenarios.json"), [dict(scenario=n, task_id=s.task_id, truth=s.truth,
-                                                                 base_task=s.base_id) for n, s in pairs])
-    record_provenance(target, "mismatch")
-    t0 = time.perf_counter()
-    done = _supervised_label([s for _, s in pairs], target, budgets, protocols, R, seed,
-                             cfg.get("learning_designs", 1), lim, workers, progress)
-    summary = dict(_session_summary(done, time.perf_counter() - t0), budgets=budgets)
-    LB._write_json(os.path.join(target, "label_summary.json"), summary)
+    pre = RS.preflight(dict(cfg, budgets=budgets), target if os.path.isdir(os.path.join(target, "tasks")) else None,
+                       workers=workers, specs=specs)
+    adm = RS.admission(pre, override_limits)
+    from . import integrity as IN
+    with IN.RunLock(target, "mismatch label"):
+        run = BD.bind(target, dict(cfg, budgets=budgets), specs, specs, [], "mismatch", accept_changes=accept_changes,
+                      support=SV.support())
+        LB._write_json(os.path.join(target, "scenarios.json"), [dict(scenario=n, task_id=s.task_id, truth=s.truth,
+                                                                     base_task=s.base_id) for n, s in pairs])
+        record_provenance(target, "mismatch")
+        from . import integrity as IN
+        before = IN.completion(target)
+        if before["corrupted"]:
+            raise IN.CorruptedRun("%s has %d corrupted record(s); nothing was labeled" % (target, len(before["corrupted"])))
+        done_ok = set(before["completed_ids"])
+        failed = {t for v in before["failed"].values() for t in v}
+        work = [s for _, s in pairs if s.task_id not in done_ok and (retry_failed or s.task_id not in failed)]
+        if retry_failed:
+            for s in work:
+                if s.task_id in failed:                  # keep the failed attempt's record (audit trail)
+                    IN.keep_in_ledger(target, s.task_id, "replaced by a retry")      # 1.9.1 (F3)
+                    _keep_failed_copy(target, s.task_id)
+        ceil = RS.Ceilings(dict(cfg, budgets=budgets), target, IN.consumed_seconds(target)["total_seconds"])
+        t0 = time.perf_counter()
+        done = _supervised_label(work, target, budgets, protocols, R, seed,
+                                 cfg.get("learning_designs", 1), lim, workers, progress,
+                                 run_id=run["identity_digest"],      # 1.8.0 (finding F3): 1.7.0 left run_id empty here
+                                 session=run["sessions"][-1]["started"], ceilings=ceil)
+        skipped = [(t, "skipped", 0.0, "") for t in sorted(done_ok)]
+        after = IN.completion(target)
+        status, code = run_status(after, stopped=ceil.stopped)
+        summary = dict(_session_summary(done + skipped, time.perf_counter() - t0), budgets=budgets,
+                       retained_failures=sorted(failed - {s.task_id for s in work}), status=status, exit_code=code,
+                       stopped=ceil.stopped, admission=adm, not_started=len(work) - len(done),
+                       run={k: v for k, v in after.items() if k != "completed_ids"})
+        LB._write_json(os.path.join(target, "label_summary.json"), summary)
     return summary
 
 
@@ -821,7 +1143,7 @@ def regime_analyze(cfg: dict, run_dir: str, sub: str = "regimes", train_parts=("
             dev = d_ if dev is None else DT.concat(dev, d_)
     held = {r["base_id"] for r in ds.rows}
     train = np.array([i for i, r in enumerate(dev.rows) if r["base_id"] not in held])
-    fam, sname = deployed_configuration(run_dir, a)
+    fam, sname = deployed_configuration_or_default(run_dir, a)
     pol = PO.Model(fam, FE.SETS[sname], sname).fit(dev, train)
     fb = PO.SBSBudget().fit(dev, train)
     tau, tau_src = -math.inf, "none (every recommendation accepted)"
@@ -938,20 +1260,71 @@ def _peak_rss_mb() -> float:
         return psutil.Process().memory_info().rss / (1024.0 * 1024.0)
 
 
+def deployment_bundle_of(run_dir: str, prefer_deployable: bool = True) -> str | None:
+    """Path of a bundle trained from this run (its freeze's development identity), preferring one whose features need
+    no simulation; None when the run has no freeze or no bundle was built from it. 1.9.0: the run's own bundles
+    (``run_dir``/bundles, where ``bundle`` writes by default) are searched before the shipped ones."""
+    from . import deploy as DP
+    frz = os.path.join(run_dir, "freeze.json")
+    if not os.path.exists(frz):
+        return None
+    ident = TX.read_json(frz).get("dev_identity")
+    for base in (os.path.join(run_dir, "bundles"), DP.BUNDLE_DIR):
+        if not os.path.isdir(base):
+            continue
+        found = []
+        for name in sorted(os.listdir(base)):
+            bj = os.path.join(base, name, "bundle.json")
+            if not os.path.exists(bj):
+                continue
+            m = TX.read_json(bj)
+            if ident and (m.get("training") or {}).get("freeze", {}).get("dev_identity") == ident:
+                sim = "simulated" in str(m.get("feature_set", ""))
+                found.append((sim if prefer_deployable else not sim, name))
+        if found:
+            return os.path.join(base, sorted(found)[0][1])
+    return None
+
+
+REJECTION_WIDTHS = (12, 24, 40)
+
+
+def wide_chain_task(n: int, budget: int = 100000, device: str = "fake_fez"):
+    """A deployment task as the Playground or an experiment document would send it: a GHZ-type chain (one RY, a CX
+    ladder) on the device's calibration-best chain, observable Z on the middle qubit given as a compact Pauli term (no
+    dense 2^n vector) — the probe of the early-rejection timing."""
+    from ..phase.families import best_chain
+    from . import deploy as DP
+    ops = (("ry", (0,), (1.0,), "gate", ""),) + tuple(("cx", (i, i + 1), (), "gate", "") for i in range(n - 1))
+    return DP.DeploymentTask(n, ops, tuple("0" * n), "Z" * n, False, ("z_mid", "Z on the middle bit", ()), device,
+                             budget, initial_layout=tuple(best_chain(device, n)), obs_terms=(((n // 2,), 1.0),))
+
+
 def profile(run_dir: str, widths=(3, 4, 5, 6, 7), family: str = "ising", params: dict | None = None,
-            repeats: int = 3) -> list:
+            repeats: int = 3, bundle: str | None = None, rejection: bool = True) -> list:
     """Classical cost of one recommendation at deployment against circuit width, through the deployment path the
-    Playground and ``recommend`` use (1.7.0, review of supp_runtime: components separated):
+    Playground and ``recommend`` use (1.7.0, review of supp_runtime: components separated; 1.8.0: the full upstream
+    path and early rejection, finding F2):
 
     * ``compile_s`` — compilation for the device;
-    * ``deployable_s`` — the deployable features (structure, observable, light cone, calibration-derived noise sums,
-      the cheap protocol overheads): no simulation of the circuit;
+    * ``deployable_s`` — the deployable features of the run's deployable set (structure, observable, light cone,
+      calibration-derived noise sums with factorized calibration, the cheap protocol overheads): no simulation of the
+      circuit; timed without the feature cache (1.8.0), so every repeat recomputes;
     * ``simulated_s`` — the simulator-only augmentation (supplied-model per-shot variances and signal by exact
       density-matrix simulation of the snapshot, ideal-state entropies), exponential in width;
     * ``inference_s`` — the frozen recommender's prediction from the feature vector;
+    * ``preflight_structural_s`` — the structural preflight of every candidate of the portfolio (1.8.0);
+    * ``preflight_design_s`` — the design-level preflight of the learning candidates (training design built with its
+      deployment seed, ideal training values by state vector) (1.8.0);
+    * ``recommend_s`` — the whole ``deploy.recommend`` call with the run's deployable bundle (guard, compile, features,
+      OOD, preflight in the model's order, margin rule, fallback), when that bundle exists (1.8.0);
     * ``label_s`` — for comparison, benchmark-label generation: the median wall time of labeling one development task
       of that width (every protocol, every budget, both halves; from the labels' records), a cost of building the
       study, not of a recommendation.
+
+    With ``rejection``, rows with ``kind = "rejection"`` time the recommendation of wide GHZ-type chains
+    (``wide_chain_task``; 12, 24, 40 qubits, outside every training width): the bounded path must answer
+    (out-of-distribution fallback or an unsupported-input error) without a dense state of the circuit.
 
     Timed in this process after a warm-up of the libraries; ``peak_rss_mb`` is the process's peak resident memory
     (``rss_kind`` says how it was measured)."""
@@ -959,8 +1332,10 @@ def profile(run_dir: str, widths=(3, 4, 5, 6, 7), family: str = "ising", params:
     from . import deploy as DP
     from . import features as FE
     from . import policies as PO
+    from . import preflight as PF
+    from . import protocols as PR
     a = {}
-    fam, sname = deployed_configuration(run_dir, a)
+    fam, sname = deployed_configuration_or_default(run_dir, a)
     dev = DT.build(os.path.join(run_dir, "dev"))
     pol = PO.Model(fam, FE.SETS[sname], sname).fit(dev, np.arange(len(dev.rows)))
     lab_s = {}
@@ -969,8 +1344,14 @@ def profile(run_dir: str, widths=(3, 4, 5, 6, 7), family: str = "ising", params:
         if rec.get("status") == "ok" and rec.get("seconds") is not None:
             lab_s.setdefault(int(rec["spec"]["n"]), []).append(float(rec["seconds"]))
     params = dict(params or {"steps": 2})
-    dep_names = [n for n in FE.SETS["deployable"]]
-    sim_names = [n for n in FE.SETS["deployable+simulated"] if FE.BY_NAME[n].info == "simulated"]
+    dep_set = "deployable18" if "deployable18" in FE.SETS and "18" in sname else "deployable"
+    sim_set = dep_set + "+simulated"
+    dep_names = [n for n in FE.SETS[dep_set]]
+    sim_names = [n for n in FE.SETS[sim_set] if FE.BY_NAME[n].info == "simulated"]
+    keys = [k for k in dev.protocols if k in PR.PORTFOLIO]
+    learning = [k for k in keys if PR.PORTFOLIO[k].learning]
+    bpath = bundle or deployment_bundle_of(run_dir)
+    bnd = DP.load_bundle(bpath) if bpath else None
     try:
         import resource  # noqa: F401
         rss_kind = "peak (resource)"
@@ -984,20 +1365,52 @@ def profile(run_dir: str, widths=(3, 4, 5, 6, 7), family: str = "ising", params:
             t0 = time.perf_counter()
             comp = task.compile()
             t1 = time.perf_counter()
-            v1, r1 = DP.features(task, dep_names, compiled=comp)
+            v1, r1 = DP.features(task, dep_names, compiled=comp, use_cache=False)
             t2 = time.perf_counter()
-            v2, r2 = DP.features(task, sim_names, allow_simulation=True, compiled=comp)
+            v2, r2 = DP.features(task, sim_names, allow_simulation=True, compiled=comp, use_cache=False)
             t3 = time.perf_counter()
             row = dict(v1, **v2)
             x = np.array([[row.get(k, np.nan) for k in pol.features]], float)
             t4 = time.perf_counter()
             pol.rm.predict(x)
             t5 = time.perf_counter()
+            for k in keys:
+                PF.structural(comp, k, task.budget, symmetry=task.symmetry)
+            t6 = time.perf_counter()
+            obs = task.obs()
+            for k in learning:
+                PF.design(comp, obs, k, task.budget, supplied=task.supplied_backend, seed=DP.design_seed(task, k),
+                          symmetry=task.symmetry)
+            t7 = time.perf_counter()
+            rec_s, rec_status = math.nan, ""
+            if bnd is not None:
+                DP._FEATURE_CACHE.clear()
+                t8 = time.perf_counter()
+                rr = DP.recommend(task, bnd)
+                rec_s, rec_status = time.perf_counter() - t8, rr["status"]
             ls = lab_s.get(int(n))
-            out.append(dict(family=family, n=int(n), repeat=rep, compile_s=t1 - t0, deployable_s=t2 - t1,
-                            simulated_s=t3 - t2, inference_s=t5 - t4,
+            out.append(dict(kind="width", family=family, n=int(n), repeat=rep, compile_s=t1 - t0,
+                            deployable_s=t2 - t1, simulated_s=t3 - t2, inference_s=t5 - t4,
+                            preflight_structural_s=t6 - t5, preflight_design_s=t7 - t6,
+                            preflight_candidates=len(keys), preflight_learning=len(learning),
+                            recommend_s=rec_s, recommend_status=rec_status,
+                            bundle=os.path.basename(bpath) if bpath else "",
                             label_s=float(np.median(ls)) if ls else math.nan, label_tasks=len(ls or []),
                             peak_rss_mb=_peak_rss_mb(), rss_kind=rss_kind,
-                            configuration="MODEL[%s|%s]" % (fam, sname)))
+                            configuration="MODEL[%s|%s]" % (fam, sname), feature_set_timed=dep_set))
+    if rejection and bnd is not None:
+        for n in REJECTION_WIDTHS:
+            DP._FEATURE_CACHE.clear()
+            t0 = time.perf_counter()
+            try:
+                rr = DP.recommend(wide_chain_task(int(n)), bnd)
+                status, note = rr["status"], "; ".join(rr.get("ood", []))[:200]
+            except DP.Unsupported as e:
+                status, note = "unsupported", str(e)[:200]
+            out.append(dict(kind="rejection", family="ghz-chain", n=int(n), repeat=0,
+                            recommend_s=time.perf_counter() - t0,
+                            recommend_status=status, note=note, bundle=os.path.basename(bpath),
+                            peak_rss_mb=_peak_rss_mb(), rss_kind=rss_kind,
+                            configuration=bnd.meta["configuration"]))
     return out
 

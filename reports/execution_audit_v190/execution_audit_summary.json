@@ -1,0 +1,111 @@
+{
+ "rows": 480,
+ "base_circuits": 8,
+ "roots": [
+  "1",
+  "2",
+  "3",
+  "4",
+  "api"
+ ],
+ "budgets": [
+  10000,
+  300000,
+  10000000
+ ],
+ "trials_per_row": 600,
+ "metric": "base-circuit mean of log10(R + 1e-6); R executed = risk of the returned verified design (conditional on it), R fresh = the labels' fresh-design average risk",
+ "policies": {
+  "POLICY|qemx-rec-1.8.0": {
+   "rows": 120,
+   "executed": {
+    "rows": 120,
+    "mean_log10": -4.88126850052188,
+    "diff_vs_sbsb": -0.24760645764592684,
+    "lo": -0.3130583320566231,
+    "hi": -0.17772178994986515,
+    "arithmetic_mse": 0.00011423165330724456
+   },
+   "fresh": {
+    "rows": 120,
+    "mean_log10": -4.873786132675868,
+    "diff_vs_sbsb": -0.2233910478859718,
+    "lo": -0.28908683843995975,
+    "hi": -0.15628339373609082,
+    "arithmetic_mse": 0.00011495354466792493
+   },
+   "executed_minus_fresh_contrast": {
+    "rows": 120,
+    "diff": -0.024215409759955005,
+    "lo": -0.04748055937315887,
+    "hi": 0.00023365723798922519
+   }
+  },
+  "POLICY|qemx-rec-1.8.0-deployable": {
+   "rows": 120,
+   "executed": {
+    "rows": 120,
+    "mean_log10": -4.750881732358855,
+    "diff_vs_sbsb": -0.11721968948290205,
+    "lo": -0.22401753729997845,
+    "hi": 0.013412886843823756,
+    "arithmetic_mse": 0.0004952964431967794
+   },
+   "fresh": {
+    "rows": 120,
+    "mean_log10": -4.772401295816542,
+    "diff_vs_sbsb": -0.12200621102664636,
+    "lo": -0.19871360473788632,
+    "hi": -0.04140187053639894,
+    "arithmetic_mse": 0.0003995748690682594
+   },
+   "executed_minus_fresh_contrast": {
+    "rows": 120,
+    "diff": 0.0047865215437443015,
+    "lo": -0.03559570337011033,
+    "hi": 0.06148884373205062
+   }
+  },
+  "RAW": {
+   "rows": 120,
+   "executed": {
+    "rows": 120,
+    "mean_log10": -3.604962452998725,
+    "diff_vs_sbsb": 1.0286995898772275,
+    "lo": 0.3732042846225475,
+    "hi": 1.776570258734625,
+    "arithmetic_mse": 0.002683647745222122
+   },
+   "fresh": {
+    "rows": 120,
+    "mean_log10": -3.610351108599356,
+    "diff_vs_sbsb": 1.04004397619054,
+    "lo": 0.3972140785271783,
+    "hi": 1.797459277964345,
+    "arithmetic_mse": 0.002679038058609372
+   },
+   "executed_minus_fresh_contrast": {
+    "rows": 120,
+    "diff": -0.011344386313312404,
+    "lo": -0.029648728298569887,
+    "hi": 0.0047878369608191996
+   }
+  }
+ },
+ "learning_rows": {
+  "rows": 10,
+  "median_log10_ratio": -0.00877934874219255,
+  "q10": -0.10928596712190722,
+  "q90": 0.037291592157729044,
+  "note": "log10 of executed (returned-design) over fresh-design risk, learning candidates only"
+ },
+ "ledger": {
+  "rows": 480,
+  "over_budget": 0,
+  "unspent_rows": 0,
+  "max_unspent_share": 0.0
+ },
+ "fresh_labels": "mean over the four preparation roots of reports/selection_v180/audit18",
+ "status": "exploratory audit (inspected tasks)",
+ "command": "python scripts/execution_audit.py --out runs/execution_audit --trials 600 --roots api,1,2,3,4"
+}

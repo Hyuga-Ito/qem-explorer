@@ -1,0 +1,500 @@
+{
+ "schema": "qemx.selection.run/1",
+ "created": "2026-10-24T10:14:06+00:00",
+ "identity": {
+  "stage": "dev",
+  "labels_config": "657d9f39bc9f89bb",
+  "tasks": "6b1a68fe16e36c33",
+  "n_tasks": 88,
+  "split": {
+   "final_test_fraction": 0.0,
+   "salt": "qemx-1.6-final",
+   "development": "3b648a6fdd97b4da",
+   "final": "4f53cda18c2baa0c"
+  },
+  "portfolio": "d97de6fc55ac3e22",
+  "devices": {
+   "fake_fez": "4eb21db4db0cca8f",
+   "fake_fez@eng=exact": "6916f73eab2f1fb1",
+   "fake_kyiv": "bbecee3c55ae6c5f",
+   "fake_kyiv@eng=exact": "4f698c1df246ce3d",
+   "fake_torino": "4a415b23c89eb31d",
+   "fake_torino@eng=exact": "7a6f5708518ecbde"
+  }
+ },
+ "identity_digest": "c79080634108324e",
+ "config": {
+  "schema": "qemx.selection.config/1",
+  "name": "dev18",
+  "status": "planned",
+  "master_seed": 20261024,
+  "R": 60,
+  "budgets": [
+   1000,
+   3000,
+   10000,
+   30000,
+   100000,
+   300000,
+   1000000,
+   3000000,
+   10000000,
+   30000000
+  ],
+  "learning_designs": {
+   "mode": "fresh",
+   "per_half": 6,
+   "seed_scheme": 2,
+   "crn": "task"
+  },
+  "protocols": [
+   "RAW",
+   "RO",
+   "ZNE-L",
+   "ZNE-R",
+   "ZNE-E",
+   "PEC",
+   "CDR",
+   "NIL",
+   "RO-TREX",
+   "RO-TW",
+   "RO-DD",
+   "ZNE-L-TW",
+   "ZNE-E-B",
+   "PEC-TW",
+   "FR",
+   "SV",
+   "ZNE-L∘SV"
+  ],
+  "final_test_fraction": 0.0,
+  "tasks": [
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "hea": [
+      {
+       "layers": 2,
+       "angle_seed": 1801
+      },
+      {
+       "layers": 3,
+       "angle_seed": 1802
+      }
+     ],
+     "qaoa": [
+      {
+       "p": 1,
+       "angle_seed": 1811
+      },
+      {
+       "p": 2,
+       "angle_seed": 1812
+      }
+     ],
+     "brickwork": [
+      {
+       "layers": 2,
+       "angle_seed": 1821
+      }
+     ],
+     "ising": [
+      {
+       "steps": 1,
+       "h": 0.9
+      },
+      {
+       "steps": 3,
+       "h": 0.55
+      }
+     ]
+    },
+    "inputs": [
+     "default",
+     "plus",
+     "product"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.5,
+       "basis": "Z"
+      },
+      {
+       "theta": 1.2,
+       "basis": "Z"
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "z_mid"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 2,
+    "include_default": false
+   },
+   {
+    "widths": [
+     3,
+     5
+    ],
+    "families": {
+     "ghz": [
+      {
+       "theta": 0.95
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     4,
+     5
+    ],
+    "families": {
+     "qft": [
+      {
+       "s": 5
+      }
+     ],
+     "bv": [
+      {
+       "secret": 6
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   },
+   {
+    "widths": [
+     3,
+     4
+    ],
+    "families": {
+     "grover": [
+      {
+       "k": 1,
+       "marked": 6
+      }
+     ]
+    },
+    "inputs": [
+     "default"
+    ],
+    "observables": [
+     "default",
+     "z_mid",
+     "zz_mid",
+     "z_all"
+    ],
+    "layouts": [
+     "best",
+     "alt"
+    ],
+    "devices": [
+     "fake_fez",
+     "fake_torino",
+     "fake_kyiv"
+    ],
+    "variants_per_base": 1
+   }
+  ],
+  "limits": {
+   "task_seconds": 5400,
+   "memory_gb": 3
+  },
+  "analysis": {
+   "splits": [
+    "same-distribution",
+    "family",
+    "device",
+    "width",
+    "budget-extrap",
+    "budget-interp"
+   ],
+   "split_options": {
+    "same-distribution": {
+     "k": 5
+    },
+    "width": {
+     "min_test_n": 6
+    },
+    "budget-extrap": {
+     "max_train_B": 300000
+    },
+    "device": {
+     "test_device": "fake_kyiv"
+    }
+   },
+   "feature_sets": [
+    "size_budget",
+    "structure",
+    "lightcone",
+    "deployable",
+    "deployable18",
+    "deployable18+simulated"
+   ],
+   "model_families": [
+    "ridge",
+    "enet",
+    "hgb",
+    "mlp",
+    "struct"
+   ],
+   "abstain_family": "hgb",
+   "abstain_set": "deployable18",
+   "ablation_set": "deployable18",
+   "bootstrap": 1000,
+   "lc_repeats": 3,
+   "other_split_sets": [
+    "size_budget",
+    "deployable18"
+   ],
+   "other_split_families": [
+    "ridge",
+    "hgb",
+    "struct"
+   ],
+   "extras": [
+    "ablation",
+    "learning_curve",
+    "deployed",
+    "budget_generalization",
+    "abstention",
+    "nested_selective",
+    "interval_coverage",
+    "certificates",
+    "floor_sensitivity",
+    "design_diagnostics"
+   ]
+  }
+ },
+ "manifest": [
+  "0468d8a6383716b1bf6a",
+  "0492788834cea1cc0f08",
+  "07414c6fe8139b203b60",
+  "0743678a2c806361fea6",
+  "0a9caf01f8c0d29af29f",
+  "0f8b2ce3a9d77af2a673",
+  "15fb6be4c08948341d5c",
+  "1618bebb174c119fe148",
+  "169c5a5bb67ccfdf6556",
+  "17b340a373de082a3cbb",
+  "1b913c68530dbcd7907e",
+  "21f343d97b034624ba26",
+  "2668778caf10f2d366ed",
+  "27e2b8c58dd7182f364f",
+  "281ec8fcb5e2b369113b",
+  "28a6df9490fc3bccea1d",
+  "2e1c95b54dc4effd0ed1",
+  "2efbb43d2bc4bc51d9e1",
+  "33be493d5bb6db8bcd31",
+  "39af9a8fb3ff235f192e",
+  "3ac6aff9d8ac54f30f54",
+  "3b433fe0849a5b685395",
+  "465da4e7a235773482fc",
+  "4f6adbc5f3158f33b30e",
+  "4fc0d2aeb90a74840c2a",
+  "54a2c2179a7182c385a8",
+  "57f496e7a48be6250075",
+  "5bff2d0bb30372ce32e7",
+  "5f8ed740f211b1e4486b",
+  "60b99c86ccd926418a2c",
+  "61124d5ff44bb7211e2b",
+  "61b6c043db1fd8a279c0",
+  "63c312c2e1ab88db0498",
+  "65f33d94142e8aa3674c",
+  "680610809c4aa9601f38",
+  "68f008b051a28e2aa00b",
+  "6d3c97177fb6f2d94fbc",
+  "6d40c76cbab8e2ef99b8",
+  "6e53f6ba5d38c11b9778",
+  "73db5513bf949ea5aa7b",
+  "7413bda1669128159a30",
+  "7acae1a4cd4cb7e94a8d",
+  "7b7ff1d329c5933224d5",
+  "82d075bd64dc32e7a025",
+  "8482405561b4e5ad1a10",
+  "871eab6381635ab825ba",
+  "8a0b6ab633d63626a0f4",
+  "8a72df7ff9be08d97e62",
+  "8c2042fa6387a78a75ea",
+  "8e957c4e66375cfb0fc5",
+  "8f713c9f1b81c999f176",
+  "9790e526bbe2f3ff52b6",
+  "987959bce27db4bfab71",
+  "99c6ef29202ef31cc304",
+  "9fdcff544d98c06a6022",
+  "a557864a73c7adab3af7",
+  "a5e14a74539393710c8f",
+  "aea25929fca24e4a3f36",
+  "ba0322dd42f9cdb02357",
+  "bf2494b450dfd77d7a39",
+  "bf531bec93f21b7b79da",
+  "c2f337fad6379329423c",
+  "c4b8b7bdaac2493aeb26",
+  "c5027d419d4d63633154",
+  "c657a632d2518221b8c0",
+  "c7a8ac0af34f2f5db64d",
+  "c7b8be19c6aef1264c1c",
+  "c7fa6ca1cd422db4d14a",
+  "cbdddb55bf16ef71c0df",
+  "d06ab9207f3854a4009a",
+  "d12a43deed387ab14c2d",
+  "d19b83ef2f67d35c90b0",
+  "d6566ac8938106dcf0be",
+  "d72cc15ba414cab6a728",
+  "da3ed1d1643370dc0c15",
+  "daa5a84fcadfc838b521",
+  "dea21d1f44207601a450",
+  "df14e0f698d454b811ba",
+  "e387bcef929bb2e4fdaa",
+  "e7ea20f5bca7e2c4ee2e",
+  "eb998363afe0e2fe806c",
+  "ec18f2aacbf436d82a42",
+  "ed1dac5b7e140849d425",
+  "f4b6a0f89ea93a8be676",
+  "f888f6b924eb4f022495",
+  "f96b1fa0b6461490b30a",
+  "ff17b754d2dd7361e64c",
+  "ff84dc113242f63e27b8"
+ ],
+ "sessions": [
+  {
+   "started": "2026-10-24T10:14:06+00:00",
+   "execution": {
+    "code": "7bc0441cccf05e4b",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   }
+  },
+  {
+   "started": "2026-10-24T20:04:37+00:00",
+   "execution": {
+    "code": "15ef0320bc89a689",
+    "environment": {
+     "python": "3.12.3",
+     "implementation": "CPython",
+     "platform": "linux",
+     "machine": "x86_64",
+     "packages": {
+      "numpy": "2.4.4",
+      "scipy": "1.17.1",
+      "qiskit": "2.5.2",
+      "qiskit-aer": "0.17.2",
+      "qiskit-ibm-runtime": "0.50.0",
+      "scikit-learn": "1.8.0",
+      "pandas": "3.0.2"
+     }
+    }
+   },
+   "supervision": {
+    "platform": "posix",
+    "timeout": "parent-enforced wall clock (all platforms)",
+    "memory_watchdog": true,
+    "child_address_space_limit": true,
+    "memory": "resident-memory watchdog (psutil) + child address-space limit (RLIMIT_AS)"
+   },
+   "accepted_changes": [
+    "code"
+   ]
+  }
+ ],
+ "imports": []
+}

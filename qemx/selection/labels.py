@@ -123,7 +123,7 @@ def label_task(spec: TK.TaskSpec, out_dir: str, budgets=PR.BUDGETS, protocols=No
     """Label one task (both halves, every budget and protocol); returns its record. Resumable. ``designs``: the
     learning protocols' design plan (``emulate.DesignPlan`` or its configuration value). ``run_id``: the run this
     record belongs to (``run.json``)."""
-    protocols = list(protocols or PR.PORTFOLIO)
+    protocols = list(protocols or PR.PORTFOLIO_16)
     plan = EM.DesignPlan.from_config(designs)
     cfg = config_digest(budgets, protocols, R, master_seed, designs)
     tid = spec.task_id
@@ -142,7 +142,8 @@ def label_task(spec: TK.TaskSpec, out_dir: str, budgets=PR.BUDGETS, protocols=No
                budgets=[int(b) for b in budgets], protocols=protocols, R=int(R), master_seed=int(master_seed),
                learning_designs=plan.to_json(), design_plan=dict(mode=plan.mode, count=plan.count,
                                                                  per_half=plan.per_half),
-               estimand=plan.estimand, run_id=str(run_id))
+               estimand=plan.estimand, run_id=str(run_id), seed_scheme=int(plan.seed_scheme),
+               crn_group=("" if plan.seed_scheme == 1 else (spec.task_id if plan.crn == "task" else spec.base_id)))
     try:
         built = TK.build(spec)
     except Exception as e:                           # noqa: BLE001 - a task that cannot be built is recorded
@@ -172,7 +173,8 @@ def label_task(spec: TK.TaskSpec, out_dir: str, budgets=PR.BUDGETS, protocols=No
         for j, B in enumerate(budgets):
             a_json = None
             for half in (0, 1):
-                tr = EM.trials(prep, k, int(B), int(R), rng_for(master_seed, tid, B, k, half), half=half)
+                stream = PR.PORTFOLIO[k].crn_with or k          # 1.8.0: declared common random numbers
+                tr = EM.trials(prep, k, int(B), int(R), rng_for(master_seed, tid, B, stream, half), half=half)
                 est[half, i, j] = tr.estimates
                 for f, name in enumerate(EM.FLAGS):
                     flags[half, i, j, f] = tr.flags[name]
@@ -288,6 +290,9 @@ def task_ids(out_dir: str) -> list:
         else []
 
 
+_list_task_ids = task_ids                                # for functions with a ``task_ids`` parameter
+
+
 # ------------------------------------------------------------------ risk summaries of one (task, protocol, budget)
 def design_stats(loss: np.ndarray, design: np.ndarray) -> dict:
     """Design-aware summary of one half's per-trial losses. ``design`` gives each trial's design index (NO_DESIGN:
@@ -323,6 +328,49 @@ def design_stats(loss: np.ndarray, design: np.ndarray) -> dict:
     return dict(se_trial=se_t, se_design=se_d, var_between=vb, var_within=vw, designs=int(K))
 
 
+def deployment_variance(err: np.ndarray, design: np.ndarray) -> dict:
+    """Variance of *one* fresh deployment's estimate from trials grouped by design (1.8.0; review finding F5).
+
+    The pooled sample variance s² = var(ddof=1) over all K·m trials is not that quantity: under the random-effects
+    model X_ki = μ + A_k + E_ki (Var A = σ_D², Var E = σ_W²) its expectation is σ_W² + m(K−1)/(Km−1)·σ_D² (balanced
+    groups), not σ_D² + σ_W². This returns
+
+    * ``var_deploy`` = σ̂_W² + σ̂_D²: the one-way ANOVA (method-of-moments) estimates, unbiased for unbalanced groups
+      too (m0 = (n − Σn_k²/n)/(K−1)), with σ̂_D² truncated at 0 (the usual nonnegative convention; the truncation
+      adds a small positive bias when σ_D² is near 0, reported by ``truncated``);
+    * ``var_pooled``: the descriptive pooled variance (kept, labeled as such);
+    * ``between_coef``: m0(K−1)/(n−1), the coefficient of σ_D² in E[s²] (m(K−1)/(Km−1) when balanced).
+
+    Without designs (NO_DESIGN: independent trials) var_deploy = var_pooled. More designs in a benchmark estimate
+    these better; they do not reduce one deployment's variance unless the deployed protocol itself averages over
+    designs and pays for them."""
+    e = np.asarray(err, float)
+    d = np.asarray(design)
+    n = len(e)
+    if n < 2:
+        return dict(var_deploy=math.nan, var_pooled=math.nan, var_within=math.nan, var_between=math.nan,
+                    between_coef=math.nan, designs=0, truncated=False)
+    pooled = float(e.var(ddof=1))
+    if np.all(d == EM.NO_DESIGN):
+        return dict(var_deploy=pooled, var_pooled=pooled, var_within=pooled, var_between=0.0, between_coef=0.0,
+                    designs=0, truncated=False)
+    ks = np.unique(d)
+    K = len(ks)
+    nk = np.array([np.sum(d == k) for k in ks], float)
+    mk = np.array([e[d == k].mean() for k in ks])
+    grand = float(e.mean())
+    if K < 2 or n <= K:
+        return dict(var_deploy=math.nan, var_pooled=pooled, var_within=math.nan, var_between=math.nan,
+                    between_coef=math.nan, designs=int(K), truncated=False)
+    msw = float(sum(((e[d == k] - m) ** 2).sum() for k, m in zip(ks, mk))) / (n - K)
+    msb = float(np.sum(nk * (mk - grand) ** 2)) / (K - 1)
+    m0 = (n - float(np.sum(nk ** 2)) / n) / (K - 1)
+    raw = (msb - msw) / m0
+    vb = max(0.0, raw)
+    return dict(var_deploy=msw + vb, var_pooled=pooled, var_within=msw, var_between=vb,
+                between_coef=float(m0 * (K - 1) / (n - 1)), designs=int(K), truncated=bool(raw < 0))
+
+
 def risk_se(se: dict, plan: dict, learning: bool) -> float:
     """The standard error that matches the record's estimand: design-level for learning protocols under fresh
     designs (the fresh-design risk), trial-level otherwise (independent trials; for 1.6.0's fixed designs the risk
@@ -338,16 +386,17 @@ def plan_of(rec: dict) -> dict:
                                           per_half=0)
 
 
-def summarize(out_dir: str, failures: list | None = None):
+def summarize(out_dir: str, failures: list | None = None, task_ids=None):
     """One row per (task, protocol, budget): status, feasibility, ledger, costs, and the risk labels of both halves —
     MSE, bias, variance, the standard error of the MSE matching the estimand (``se_mse``) with its trial-level and
     design-level versions, the between/within-design variance components, the clipped-estimate MSE (estimate
     projected onto [−1, 1], for the bounded-loss certificates), every flag's rate, and the union failure rate
     ``fail_any`` (share of trials with at least one flag; flags overlap, so their rates must not be summed).
-    Records without labels are listed in ``failures`` (if given), never silently dropped."""
+    Records without labels are listed in ``failures`` (if given), never silently dropped. ``task_ids`` (1.9.0): only
+    these tasks (a run's manifest), never other task files of the directory."""
     import pandas as pd
     rows = []
-    for tid in task_ids(out_dir):
+    for tid in (sorted(task_ids) if task_ids is not None else _list_task_ids(out_dir)):
         rec = load_record(out_dir, tid)
         if rec.get("status") != "ok":
             if failures is not None:
@@ -373,7 +422,7 @@ def summarize(out_dir: str, failures: list | None = None):
                 for h, tag in ((0, "sel"), (1, "eval")):
                     x = est[h, i, j]
                     if not a["feasible"]:
-                        row.update({"%s_%s" % (m, tag): math.nan for m in ("mse", "bias", "var", "se_mse",
+                        row.update({"%s_%s" % (m, tag): math.nan for m in ("mse", "bias", "var", "var_deploy", "se_mse",
                                                                           "se_mse_trial", "se_mse_design",
                                                                           "var_between_design", "var_within_design",
                                                                           "mse_clip", "fail_any", "flags_per_trial")})
@@ -383,8 +432,10 @@ def summarize(out_dir: str, failures: list | None = None):
                     ec = np.clip(np.where(np.isfinite(x), x, 0.0), -1, 1) - mu
                     l = e ** 2
                     ds_ = design_stats(l, design[h, i, j])
+                    dv = deployment_variance(e, design[h, i, j])
                     row.update({"mse_" + tag: float(l.mean()), "bias_" + tag: float(e.mean()),
-                                "var_" + tag: float(e.var(ddof=1)),
+                                "var_" + tag: float(e.var(ddof=1)),       # pooled, descriptive (see var_deploy)
+                                "var_deploy_" + tag: dv["var_deploy"],     # 1.8.0: one fresh deployment (F5)
                                 "se_mse_" + tag: float(risk_se(ds_, plan, learning)),
                                 "se_mse_trial_" + tag: ds_["se_trial"], "se_mse_design_" + tag: ds_["se_design"],
                                 "var_between_design_" + tag: ds_["var_between"],

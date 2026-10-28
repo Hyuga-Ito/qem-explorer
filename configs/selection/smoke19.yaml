@@ -1,0 +1,49 @@
+# Smoke workflow of 1.9.0 (minutes on two cores): every stage of the current pipeline — resource preflight, labels
+# with the expanded portfolio (17 candidates, seed scheme 2, fresh designs), calibration-supplied noise diversity in
+# training (snapshot error scale, two-qubit errors, relaxation), analysis with a held-out-noise split, freeze, nested
+# selective evaluation, bundles in the run directory, a recommendation, figures and tables. Its numbers are not results.
+# expansion_policy: explicit — every block states include_default and variants_per_base (no implicit default variant).
+schema: qemx.selection.config/1
+name: smoke19
+status: smoke
+expansion_policy: explicit
+master_seed: 20261101
+R: 12
+budgets: [1000, 100000, 10000000]
+learning_designs: {mode: fresh, per_half: 2, seed_scheme: 2, crn: task}
+protocols: [RAW, RO, ZNE-L, ZNE-R, ZNE-E, PEC, CDR, NIL, RO-TREX, RO-TW, RO-DD, ZNE-L-TW, ZNE-E-B, PEC-TW, FR, SV,
+            "ZNE-L∘SV"]
+final_test_fraction: 0.0
+tasks:
+  - widths: [3, 4]
+    families:
+      ising: [{steps: 1, h: 0.61}]
+      hea: [{layers: 1, angle_seed: 1901}]
+    inputs: [default, plus]
+    observables: [default, z_mid]
+    layouts: [best]
+    devices: [fake_fez, "fake_fez@s=2", "fake_torino@g2=2"]
+    include_default: true
+    variants_per_base: 1
+  - widths: [3]
+    families:
+      ghz: [{theta: 0.7, basis: Z}]
+    inputs: [default]
+    observables: [z_mid]
+    layouts: [best]
+    devices: [fake_fez, "fake_kyiv@t=2"]
+    include_default: false
+    variants_per_base: all
+limits: {task_seconds: 900, memory_gb: 3, cpu_hours: 2, disk_gb: 1, min_free_disk_gb: 1}
+analysis:
+  splits: [same-distribution, noise]
+  split_options: {same-distribution: {k: 3}, noise: {k: 2}}
+  feature_sets: [size_budget, deployable18, deployable18+simulated]
+  model_families: [ridge, hgb]
+  abstain_family: hgb
+  abstain_set: deployable18
+  ablation_set: deployable18
+  other_split_sets: [deployable18]
+  other_split_families: [ridge]
+  bootstrap: 200
+  extras: [design_diagnostics]

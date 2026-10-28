@@ -10,6 +10,7 @@
       "args": ["run", "app.py", "--server.port", "8501", "--client.showErrorDetails", "full"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" },
       "justMyCode": true
     },
     {
@@ -19,7 +20,8 @@
       "module": "pytest",
       "args": ["-q", "-m", "not slow", "tests"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" }
     },
     {
       "name": "Tests (all, incl. app and export)",
@@ -28,7 +30,8 @@
       "module": "pytest",
       "args": ["-q", "tests"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" }
     },
     {
       "name": "Exported script: open file, Qiskit Aer",
@@ -37,7 +40,8 @@
       "program": "${file}",
       "args": ["--aer"],
       "cwd": "${fileDirname}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" }
     },
     {
       "name": "Exported script: open file, exact NumPy",
@@ -46,7 +50,8 @@
       "program": "${file}",
       "args": ["--numpy"],
       "cwd": "${fileDirname}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "env": { "GLIBC_TUNABLES": "glibc.rtld.optional_static_tls=2048" }
     }
   ]
 }

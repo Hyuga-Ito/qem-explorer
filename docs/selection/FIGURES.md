@@ -1,7 +1,9 @@
-# Figures and tables — protocol-selection study (1.7.0)
+# Figures and tables — protocol-selection study (1.7.0 specifications; 1.8.0 additions)
 
-Every figure and table of the study is drawn by `python -m qemx.selection figures CONFIG --out RUN` from the saved
-tables of a run directory only: nothing is simulated, fitted or relabeled while plotting. The figure code is
+The six main figures and nine supplementary figures below keep their 1.7.0 panel specifications in 1.8.0; the 1.8.0
+additions (four supplementary figures, the extended runtime figure, the thesis tables) are described in
+[1.8.0 additions](#180-additions) at the end. Every figure and table of the study is drawn by
+`python -m qemx.selection figures CONFIG --out RUN` from the saved tables of a run directory only: nothing is simulated, fitted or relabeled while plotting. The figure code is
 `qemx/selection/plots.py` (the six main figures, the supplementary figures, the tables) and
 `qemx/selection/figures.py` (palettes, saving convention, certificates figure).
 
@@ -63,6 +65,14 @@ vision and simulated protan/deutan/tritan vision, Machado et al. 2009), and kept
 * **Protocols** (categorical, Okabe–Ito based; same colour in every figure): RAW #C8C8C8, RO #E69F00,
   ZNE-L #56B4E9, ZNE-R #0072B2, ZNE-E #003F63, PEC #D55E00, CDR #009E73, NIL #CC79A7, each with its own marker.
   Smallest ΔE: 15.3 normal, 9.6 protan, 7.6 deutan (CDR–NIL; always with distinct markers), 8.5 tritan.
+* **1.8.0 candidates** (composite encoding: colour **and** a unique marker; names on the axes wherever possible):
+  RO-TREX #7B2004, RO-TW #96BC79, RO-DD #4C6339, ZNE-L-TW #A974F7, ZNE-E-B #6325A5, PEC-TW #BA1D2A, FR #4C323A,
+  SV #8F4D70, ZNE-L∘SV #B1389B, from a max–min search over OKLCh (lightness 0.35–0.79) given the eight colours above,
+  which are unchanged. Seventeen colours cannot keep the ≥ 15 normal-vision separation: over all 17 the smallest
+  ΔE × 100 is 10.4 normal, 7.1 protan, 6.4 deutan, 7.0 tritan, hence the markers; the eight 1.6/1.7 colours keep
+  their own check (≥ 15 normal). The first 1.8.0 assignment (family hues with a lightness step) failed the check
+  (4.1, ZNE-R against ZNE-E-B) and was replaced before any 1.8.0 figure was drawn. In the regime maps, whose cells
+  are coloured by candidate, the legend lists only the candidates that occur.
 * **Policies in Figure 1**: RAW gray dotted, SBS orange dashed, SBS-B vermilion dashed, linear recommender sky
   blue, nonlinear recommender blue, nonlinear + abstention green dash-dot (ΔE ≥ 15.3 normal, ≥ 8.5 under every
   simulated deficiency); line style and marker differ for every policy.
@@ -132,3 +142,84 @@ The 1.6.0 figures are historical material: they stay in the repository under `re
 Consistency tests (`tests/test_selection_eval.py`, `tests/test_selection_cli.py`, `tests/test_selection_v170.py`) and
 the validator check that the plotted numbers equal those recomputed from the tables, that every SVG parses and every
 PDF has its pages and text, and that the palettes keep their colour-vision separations.
+
+## 1.8.0 additions
+
+The 1.8.0 study (`reports/selection_v180/`, run `runs/v18`) is drawn with the same code and the plotting
+configuration `configs/selection/figures18.yaml` (version 3: only the configuration names follow the 1.8.0 feature
+sets `deployable18` and `deployable18+simulated`, and the bias–variance panel adds RO-TW and ZNE-E-B). The 1.7.0
+configuration `configs/selection/figures.yaml` stays the configuration of `reports/selection_v170/`.
+
+```bash
+python -m qemx.selection figures configs/selection/dev18.yaml --out reports/selection_v180 \
+    --plot-config configs/selection/figures18.yaml
+python -m qemx.selection.thesis_tables --run reports/selection_v180 --out reports/selection_v180/thesis_tables
+python scripts/validate_figures.py reports/selection_v180
+```
+
+### New supplementary figures (`qemx/selection/plots18.py`)
+
+| figure | question | content | inputs |
+|---|---|---|---|
+| `supp_deployment_policy` | What does the deployed application do on new circuits, and how does its full-policy result compare with the model component? | **A** outcome of every `deploy.recommend` call on the confirmation set, per bundle: top-ranked candidate accepted, accepted after the preflight skipped unverified/infeasible candidates, SBS-B fallback (margin below τ, out of distribution, no prediction), unsupported input; rows, base circuits and median classical seconds per call. **B** paired difference to SBS-B (mean over base circuits of log10(MSE + 10⁻⁶), 95 % bootstrap over base circuits) of the full policy of each bundle beside the model component of the same configuration and the fixed baselines. **C** per-row log10 risk ratio to SBS-B by outcome. **D** candidates chosen by the full policy and the model component. **E** share of the final candidate's evaluation trials with a method fallback or failure flag, by outcome | `replay/replay_<bundle>.csv/.json`, `replay/replay_summary.json`, `confirm/choices_confirm.csv`, `confirm/labels.csv`, `confirm/metrics_confirm.csv` |
+| `supp_portfolio_expansion` | Do more candidates help, and is the benefit from the candidates or from learning to select them? | **A** paired contrasts (out-of-fold development): SBS-B and the selection-half reference with 17 against 8 candidates; learned selection (Ridge, HGB) against SBS-B within each portfolio; the total. **B** slope chart of each policy's mean with the two portfolios. **C** share of rows on which each 1.8 policy chose each candidate. **D** severe degradation against RAW per policy and portfolio | `portfolio/portfolio_contrasts.csv`, `portfolio/portfolio_policies.csv`, `portfolio/portfolio_comparison.json` |
+| `supp_root_audit` | Are the labels, the rankings and the execution contract stable across independent preparation roots? | **A** between-root variance of each label over its mean squared label SE (1 = honest SE), per candidate and budget. **B** distinct winners of a (task, budget) over four roots, and the log regret of one root's winner under another root's labels. **C** agreement of the design-level preflight with each root's allocation | `audit18/analysis/label_stability.csv`, `ranking_stability.csv`, `contract.csv`, `audit_summary.json` |
+| `supp_tails` | How heavy are each candidate's loss tails, and do single training designs carry them? | **A** median, 90 % quantile and maximum of log10(R_k/R_RAW) per candidate at three budgets. **B** base-circuit-weighted rate of severe degradation (R_k > 10 R_RAW; declared before the 1.8.0 results) per candidate and budget ("–" = not feasible). **C** share of a candidate's loss carried by its worst 5 % of base circuits. **D** the largest single training design's share of a learning label's summed design loss (dotted: 1/K) | `analysis/labels.csv`, `analysis/design_diagnostics.csv` |
+
+Each candidate in `supp_tails` and in the thesis table of tails is shown on its **own feasible subset**: these are
+descriptions of a candidate's tail, not a ranking (rankings use paired comparisons on common rows).
+
+`supp_runtime` (1.7.0 figure) gains, when `analysis/runtime.csv` has the 1.8.0 columns, the structural preflight of
+every candidate, the design-level preflight of the learning candidates and the whole `recommend()` call (panel A),
+and a panel B with the early-rejection probes (GHZ-type chains of 12, 24 and 40 qubits outside every training
+width: seconds of the whole call, status, peak memory). The features are timed without the 1.8.0 feature cache.
+
+Outcome colours (`plots18.OUTCOMES`, fixed order, never by rank) are Okabe–Ito hues and a dark neutral; smallest
+pairwise OKLab ΔE × 100: 15.6 normal, 9.6 protan and deutan, 8.5 tritan (`tests/test_plots18.py`). Candidates keep
+the protocol palette; the nine 1.8.0 candidates have the colours chosen by the max–min search described under
+"Palettes" above, always with their own marker, and are marked `*` in candidate axes.
+
+### Legibility with 17 candidates (1.8.0 review of every figure)
+
+Every figure of `reports/selection_v180/` was inspected after drawing; the specifications are unchanged, the layouts
+adapt to the larger portfolio:
+
+* Figure 2 counts the candidates of each slice from its labels and marks where a candidate of the slice is
+  infeasible; Figure 3 B puts the protocol legend outside the axes when there are more than eight candidates, and the
+  text of hatched (unresolved) cells in panel D sits on a light box; Figure 4 C styles the budget-extrapolation lines
+  by model family, so the 1.7.0 and 1.8.0 configuration names draw alike; Figure 5 C centres the MSE annotations.
+* `supp_prediction_quality` draws a facet for **every** candidate (6 columns for 17; 1.7.0 kept 4 × 2) with shared
+  axes; `supp_target_precision` grows with the number of candidates and writes one "not reached (point | upper)" line
+  when neither bound is reached; `supp_representative` sets its axis to the candidates whose 99th-percentile error is
+  within 10× the panel's median (and the choice) and counts the trials beyond it with arrows;
+  `supp_design_variability` includes FR (1.8.0's third learning candidate; `analysis/design_variance.csv` now covers
+  every learning candidate); `supp_coverage_certificates`, `supp_runtime` and `supp_root_audit` keep their labels inside
+  the figure.
+* `supp_deployment_policy` D shows the model component's choices also for a bundle whose configuration was not a
+  confirmation comparator (computed from the bundle's own predictions over the label-feasible candidates, as the
+  replay scores it); its interpretation counts the rows where the component's candidate was left unverified by the
+  deployed preflight.
+
+### Thesis tables (`qemx/selection/thesis_tables.py`)
+
+One generator writes, for each table, the numbers (`<table>.csv`), an includeable LaTeX fragment (`<table>.tex`,
+`booktabs`, label `tab:qem180-*`), the same strings in Markdown (`thesis_tables.md`), a standalone wrapper
+(`qem180_thesis_tables.tex`, compiled to `qem180_thesis_tables.pdf` when `pdflatex` exists) and `provenance.json`
+(generator version, the source tables with their sha256). Tables: executed studies; candidates with feasible
+denominators and the shot ledger; the once-only confirmation with the full deployed policy of both bundles beside the
+model components; development out-of-fold; representative per-budget MSEs with feasible denominators (descriptive);
+tails, fallbacks and failures; classical costs and early rejection; original against expanded portfolio. A table whose
+source is missing is not written and is listed under "Not generated".
+
+### Validation
+
+`scripts/validate_figures.py` additionally checks, when present: the full-policy differences of
+`supp_deployment_policy` against `replay/replay_<bundle>.json`; the contrasts of `supp_portfolio_expansion` against
+`portfolio/portfolio_contrasts.csv`; the severe-degradation rates of `supp_tails` recomputed from
+`analysis/labels.csv`; thesis table 3 against `confirm/metrics_confirm.csv` and table 7 against the portfolio
+contrasts.
+
+Figure 6 (mismatch diagnostics) needs a mismatch study of the run; 1.8.0 did not repeat the 1.7.0 mismatch study
+(its question and code path are unchanged; see `docs/RESEARCH_FINDINGS_AND_NEXT_STEPS.md`), so in
+`reports/selection_v180/` it is listed in `figures/PENDING.md` and the 1.7.0 figure in `reports/selection_v170/figures/`
+remains the evidence, with the 1.6/1.7 portfolio.

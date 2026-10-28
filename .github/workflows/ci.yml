@@ -1,5 +1,19 @@
 name: tests
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      trials_tag:
+        description: "Release tag whose trial-data attachments to test (optional job 'trial-data'; empty = skip)"
+        required: false
+        default: ""
+      trials_study:
+        description: "The study those attachments hold (reports/TRIAL_ATTACHMENTS.json); only its manifest is checked"
+        required: false
+        default: "selection_v180"
+        type: choice
+        options: ["selection_v180", "pilot_v190", "selection_v170"]
 env:
   OMP_NUM_THREADS: "1"
   OPENBLAS_NUM_THREADS: "1"
@@ -9,117 +23,261 @@ env:
   # one, so the second import fails with "cannot allocate memory in static TLS block". Reserve more (glibc only;
   # ignored on Windows and macOS). No package or code change is involved.
   GLIBC_TUNABLES: glibc.rtld.optional_static_tls=2048
+  PYTHONFAULTHANDLER: "1"
+# Notes (1.8.0, docs/CI_FAILURE_ANALYSIS.md):
+# * Every job prints its CPU, NumPy SIMD dispatch and BLAS core first: GitHub-hosted runners with one label use
+#   different CPUs, and floating-point last bits depend on them (the 1.7.0 lam_lc failure).
+# * Independent test steps run even after an earlier one failed (`if: ${{ !cancelled() }}`), so one failure does not
+#   hide the next; the job still fails. JUnit reports are uploaded when a job fails.
+# * No credentials, no QPU access, no network beyond package installation (and the optional trial-data download).
+# * 1.9.0: the Windows job also checks completion exit codes, the pipeline with a non-ASCII path, and runs the
+#   readiness regressions (timeouts, resume, corrupted arrays, ceilings, parity) with real supervised processes.
 jobs:
   # The release lock (requirements-lock.txt): the exact environment the release was tested with, full suite.
   locked:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements-lock.txt
       - run: pip install -r requirements-lock.txt
+      - name: Runner (CPU, NumPy SIMD dispatch, BLAS)
+        run: python scripts/ci_runner_info.py
       - name: Engine and method tests (locked)
-        run: pytest -q -m "not slow" -rfEs
+        run: pytest -q -m "not slow" -rfEs --junitxml="$RUNNER_TEMP/junit/locked-fast.xml"
       - name: End-to-end, pages and interactions (locked)
-        run: pytest -q -m slow -rfEs
-      - name: Shipped figures parse and match their tables
+        if: ${{ !cancelled() }}
+        run: pytest -q -m slow -rfEs --junitxml="$RUNNER_TEMP/junit/locked-slow.xml"
+      - name: Floating-point portability (the other NumPy SIMD path on the CPU-sensitive tests)
+        if: ${{ !cancelled() }}
         run: |
+          DIS="$(python scripts/ci_runner_info.py --avx512-disable)"
+          if [ -n "$DIS" ]; then
+            echo "this runner dispatches AVX-512; rerunning with NPY_DISABLE_CPU_FEATURES=\"$DIS\" (the AVX2 path)"
+            NPY_DISABLE_CPU_FEATURES="$DIS" pytest -q -rfEs tests/test_rec_context.py tests/test_features_v151.py tests/test_lightcone_v180.py
+          else
+            echo "no AVX-512 on this runner: the AVX2 path already ran in the suite above"
+          fi
+      - name: Shipped figures parse and match their tables
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get update
           sudo apt-get install -y poppler-utils
           python scripts/validate_figures.py reports/selection_v170
+          python scripts/validate_figures.py reports/selection_v180
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: junit-locked
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
 
   # The newest releases inside the supported ranges (requirements.txt) on the oldest and newest supported Pythons and
   # on 3.12: catches upstream changes early.
   latest:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install --upgrade -r requirements-dev.txt
+      - name: Runner (CPU, NumPy SIMD dispatch, BLAS) and resolved versions
+        run: |
+          python scripts/ci_runner_info.py
+          pip freeze
       - name: Engine and method tests (latest)
-        run: pytest -q -m "not slow" -rfEs
+        run: pytest -q -m "not slow" -rfEs --junitxml="$RUNNER_TEMP/junit/latest-fast.xml"
       - name: End-to-end, pages and interactions (latest)
-        run: pytest -q -m slow -rfEs
+        if: ${{ !cancelled() }}
+        run: pytest -q -m slow -rfEs --junitxml="$RUNNER_TEMP/junit/latest-slow.xml"
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: junit-latest-${{ matrix.python-version }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
 
   # The oldest supported Streamlit (requirements.txt, ui.nav.MIN_STREAMLIT) over the lock: pages and interactions.
   oldest-streamlit:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements-lock.txt
       - run: |
           pip install -r requirements-lock.txt
           pip install streamlit==1.64.0
       - name: Pages and interactions (Streamlit 1.64.0)
         run: pytest -q -rfEs tests/test_research_pages.py tests/test_research_interactions.py tests/test_ui.py
 
-  # A legacy (non-UTF-8) default encoding on Linux: the situation of a Windows machine without UTF-8 mode. Every
-  # project text file must still be read and written as UTF-8 (tests/test_text_io.py), and the selection and
-  # experiment command lines must run with EncodingWarning (PEP 597) turned into an error for project code.
+  # A legacy (non-UTF-8) default encoding on Linux. Two different things are checked (1.8.0):
+  # * file *contents*: every project text file is read and written as UTF-8 although the locale's encoding is
+  #   ISO-8859-1 (tests/test_text_io.py, run under that locale; its file names use characters ISO-8859-1 can encode,
+  #   because on Linux the locale also sets the file-name encoding);
+  # * the actual Windows situation, UTF-8 file names with a legacy *text* default: test_text_io's
+  #   test_unicode_file_names_with_a_legacy_text_encoding starts a child under C.UTF-8 and switches only LC_CTYPE.
+  # The workflows run with EncodingWarning (PEP 597) as an error for project code (scripts/strict_encoding.py; the
+  # plain -W form would also turn third-party warnings, e.g. from dill, into errors).
   text-encoding:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "0"
       QEMX_LEGACY_LOCALE: en_US.ISO-8859-1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements-lock.txt
       - run: pip install -r requirements-lock.txt
       - name: Static check (every project text open/read/write names its encoding)
         run: python scripts/check_text_io.py
       - name: Install a legacy locale
         run: sudo localedef -i en_US -f ISO-8859-1 en_US.ISO-8859-1
       - name: Text I/O tests under ISO-8859-1
-        run: LC_ALL=en_US.ISO-8859-1 pytest -q -rfEs tests/test_text_io.py
-      - name: Selection and experiment workflows under ISO-8859-1, EncodingWarning as error
+        run: |
+          LC_ALL=en_US.ISO-8859-1 python -c "import sys, locale; e = (sys.getfilesystemencoding(), locale.getencoding()); print('file names:', e[0], ' text default:', e[1]); assert 'utf' not in e[1].lower()"
+          LC_ALL=en_US.ISO-8859-1 pytest -q -rfEs tests/test_text_io.py
+      - name: Selection and experiment workflows under ISO-8859-1, EncodingWarning as error for project code
+        if: ${{ !cancelled() }}
         run: |
           export LC_ALL=en_US.ISO-8859-1
-          python -X warn_default_encoding -W "error::EncodingWarning" -m qemx.selection plan configs/selection/smoke.yaml
-          python -X warn_default_encoding -W "error::EncodingWarning" -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
-          python -X warn_default_encoding -W "error::EncodingWarning" -m pytest -q -rfEs -m "not slow" tests/test_selection_core.py tests/test_experiment.py
+          python -X warn_default_encoding scripts/strict_encoding.py -m qemx.selection plan configs/selection/smoke.yaml
+          python -X warn_default_encoding scripts/strict_encoding.py -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
+          python -X warn_default_encoding scripts/strict_encoding.py -m pytest -q -rfEs -m "not slow" tests/test_selection_core.py tests/test_experiment.py
 
   # The intended local workflow on Windows (default code page cp1252, UTF-8 mode off): install the lock, validate
   # and plan an experiment, label a few selection tasks through the supervised child processes (time limit enforced
   # by the parent; no SIGALRM on Windows), analyze them, and run a smoke subset including the text-I/O tests.
+  # PowerShell does not stop a multi-line step when a native command fails unless told to: every step sets
+  # $PSNativeCommandUseErrorActionPreference so that each command's exit code counts, not only the last one's.
   windows-smoke:
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       PYTHONUTF8: "0"
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements-lock.txt
       - run: pip install -r requirements-lock.txt
+      - name: Runner (CPU, NumPy SIMD dispatch, BLAS; file-name and text encodings)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python scripts/ci_runner_info.py
+          python -c "import sys, locale; print('file names:', sys.getfilesystemencoding(), ' text default:', locale.getencoding())"
       - name: Experiment CLI (validate and plan, no simulation)
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m qemx.experiment validate examples/experiments/qft_known_answer.yaml
           python -m qemx.experiment plan examples/experiments/qft_known_answer.yaml
-      - name: Selection workflow (supervised labeling, analysis)
+      - name: Selection workflow (supervised labeling, completion, analysis)
         run: |
-          python -m qemx.selection plan configs/selection/smoke.yaml
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m qemx.selection check-config configs/selection/smoke19.yaml configs/pipelines/smoke19.yaml
+          python -m qemx.selection plan configs/selection/smoke.yaml --tasks-csv runs/smoke_tasks.csv
           python -m qemx.selection label configs/selection/smoke.yaml --out runs/smoke --limit 4 --workers 2
           python -m qemx.selection label configs/selection/smoke.yaml --out runs/smoke --limit 4
-          python -m qemx.selection analyze configs/selection/smoke.yaml --out runs/smoke --splits same-distribution --extras ""
+          python -m qemx.selection analyze configs/selection/smoke.yaml --out runs/smoke --splits same-distribution --extras "" --allow-partial
+          # 1.9.0: an incomplete run must return 1 (not 0), also on an unchanged resume
+          $PSNativeCommandUseErrorActionPreference = $false
+          python -m qemx.selection status --out runs/smoke
+          if ($LASTEXITCODE -ne 1) { throw "status of a partial run must exit 1, got $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+      - name: Pipeline into a path with spaces and Japanese characters (dry run, then plan and two labels)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m qemx.selection pipeline configs/pipelines/smoke19.yaml --out "runs/パイプライン test" --dry-run
+          python -m qemx.selection pipeline configs/pipelines/smoke19.yaml --out "runs/パイプライン test" --only plan
+          python -m qemx.selection label configs/selection/smoke19.yaml --out "runs/パイプライン test" --limit 2 --workers 2
       - name: Recommender (shipped bundle, deployable features, no simulation) and a Unicode path
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m qemx.selection recommend --experiment examples/experiments/qft_known_answer.yaml --budget 100000 --device fake_fez
           python scripts/check_text_io.py
           python -c "import pathlib, shutil; d = pathlib.Path('runs') / 'ユニコード Ωμ ∑'; d.mkdir(parents=True, exist_ok=True); shutil.copy('examples/experiments/qft_known_answer.yaml', d / '実験.yaml')"
           python -m qemx.experiment validate "runs/ユニコード Ωμ ∑/実験.yaml"
       - name: Smoke tests
-        run: pytest -q -m "not slow" tests/test_text_io.py tests/test_selection_core.py tests/test_methods.py tests/test_experiment.py tests/test_campaign.py tests/test_spending.py tests/test_research_interactions.py tests/test_pilot_reproduction.py
+        if: ${{ !cancelled() }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          pytest -q -m "not slow" -rfEs tests/test_text_io.py tests/test_selection_core.py tests/test_methods.py tests/test_experiment.py tests/test_campaign.py tests/test_spending.py tests/test_research_interactions.py tests/test_pilot_reproduction.py tests/test_rec_context.py tests/test_registry.py tests/test_preflight.py tests/test_readiness_v190.py tests/test_pipeline_v190.py
+
+  # Optional, manual: the tests that need a study's per-trial arrays (attached to a GitHub release, not stored in the
+  # repository). Run from the Actions tab with the tag whose attachments to use and the study they hold. 1.9.0 (second
+  # review N5): 1.8.0 checked every manifest it found, so a v1.8 attachment set failed on the v1.7 manifest (347 files
+  # that were never attached); now each attachment is mapped to its study (reports/TRIAL_ATTACHMENTS.json), exactly
+  # that study's manifest is verified (missing or changed files fail), and its tests run with QEMX_REQUIRE_TRIALS set,
+  # so missing arrays are a failure, not a skip. Historical studies use their own release's attachments. Uses the
+  # workflow's own read-only token, no owner credential.
+  trial-data:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.trials_tag != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+      - run: pip install -r requirements-lock.txt
+      - name: Download the attachments, check they belong to the requested study, verify its manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.trials_tag }}
+          STUDY: ${{ inputs.trials_study }}
+        run: |
+          gh release download "$TAG" --pattern '*-trials-*.zip' --dir "$RUNNER_TEMP/trials"
+          python - "$STUDY" "$RUNNER_TEMP/trials" > "$RUNNER_TEMP/mine.txt" <<'PY'
+          import json, os, sys
+          study, d = "reports/" + sys.argv[1], sys.argv[2]
+          m = json.load(open("reports/TRIAL_ATTACHMENTS.json", encoding="utf-8"))["attachments"]
+          names = sorted(os.listdir(d))
+          unknown = [n for n in names if n not in m]
+          if unknown:
+              sys.exit("attachments %s are not in reports/TRIAL_ATTACHMENTS.json" % unknown)
+          mine = [n for n in names if m[n]["study"] == study]
+          if not mine:
+              sys.exit("no attachment of release %s holds %s (found: %s)" % (os.environ.get("TAG"), study, names))
+          print("\n".join(mine))
+          print("attachments %s hold %s; others ignored: %s" % (mine, study, sorted(set(names) - set(mine))),
+                file=sys.stderr)
+          PY
+          while read -r z; do unzip -q -o "$RUNNER_TEMP/trials/$z"; done < "$RUNNER_TEMP/mine.txt"
+          python scripts/verify_trials.py "reports/$STUDY"
+      - name: Tests that use this study's per-trial arrays (missing arrays fail)
+        env:
+          QEMX_REQUIRE_TRIALS: ${{ inputs.trials_study }}
+        run: |
+          if [ "${{ inputs.trials_study }}" = "selection_v180" ]; then
+            pytest -q -rfEs tests/test_trial_data_v180.py tests/test_selection_ui.py
+          elif [ "${{ inputs.trials_study }}" = "pilot_v190" ]; then
+            pytest -q -rfEs tests/test_trial_data_pilot19.py tests/test_tables19.py
+          else
+            pytest -q -rfEs tests/test_selection_v170.py
+          fi
